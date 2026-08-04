@@ -30,6 +30,7 @@ class vtkVertexGlyphFilter;
 class vtkShrinkFilter;
 class vtkOutlineFilter;
 class vtkAxesActor;
+class vtkOrientationMarkerWidget;
 class vtkThreshold;
 class vtkPlane;
 class vtkCutter;
@@ -241,6 +242,7 @@ signals:
   vtkSmartPointer<vtkPolyDataMapper> outline_mapper_;
   vtkSmartPointer<vtkActor> outline_actor_;
   vtkSmartPointer<vtkAxesActor> axes_actor_;
+  vtkSmartPointer<vtkOrientationMarkerWidget> axes_marker_;
   vtkSmartPointer<vtkCellPicker> picker_;
   vtkSmartPointer<vtkCallbackCommand> pick_callback_;
   vtkSmartPointer<vtkWarpVector> warp_filter_;

@@ -47,6 +47,8 @@
 #include <vtkMeshQuality.h>
 #include <vtkOutlineFilter.h>
 #include <vtkAxesActor.h>
+#include <vtkOrientationMarkerWidget.h>
+#include <vtkTextProperty.h>
 #include <vtkWarpVector.h>
 #include <vtkPlane.h>
 #include <vtkCutter.h>
@@ -81,6 +83,26 @@ namespace gmp {
 
 #ifdef GMP_ENABLE_VTK_VIEWER
 namespace {
+
+// 统一约束色标条尺寸，避免大窗口下标题/标签过大占据视口。
+// 必须先关闭 VTK 默认的约束字体模式，否则它会自动放大字体填满色标条，
+// 覆盖这里显式设置的字号与像素上限。
+void style_scalar_bar(vtkScalarBarActor* bar) {
+  if (!bar) {
+    return;
+  }
+  bar->SetUnconstrainedFontSize(1);
+  bar->SetMaximumWidthInPixels(120);
+  bar->SetMaximumHeightInPixels(380);
+  bar->SetNumberOfLabels(5);
+  bar->SetBarRatio(0.35);
+  if (auto* title = bar->GetTitleTextProperty()) {
+    title->SetFontSize(12);
+  }
+  if (auto* label = bar->GetLabelTextProperty()) {
+    label->SetFontSize(11);
+  }
+}
 
 struct VectorStats {
   bool has_data = false;
@@ -663,7 +685,7 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
     apply_view_preset(view_combo_ ? view_combo_->currentData().toInt() : 0);
   });
   show_axes_ = new QCheckBox("Axes");
-  show_axes_->setChecked(false);
+  show_axes_->setChecked(true);
   connect(show_axes_, &QCheckBox::toggled, this,
           [this](bool) { update_scene_extras(); });
   show_outline_ = new QCheckBox("Outline");
@@ -1041,6 +1063,7 @@ void VtkViewer::set_exodus_file(const QString& path) {
   }
   if (!scalar_bar_) {
     scalar_bar_ = vtkSmartPointer<vtkScalarBarActor>::New();
+    style_scalar_bar(scalar_bar_);
   }
   mapper_->SetLookupTable(lut_);
   geom_->SetInputConnection(reader_->GetOutputPort());
@@ -1101,6 +1124,7 @@ void VtkViewer::set_mesh_file(const QString& path) {
     lut_->Build();
     mapper_->SetLookupTable(lut_);
     scalar_bar_ = vtkSmartPointer<vtkScalarBarActor>::New();
+    style_scalar_bar(scalar_bar_);
   }
   if (!mesh_geom_) {
     mesh_geom_ = vtkSmartPointer<vtkDataSetSurfaceFilter>::New();
@@ -1736,6 +1760,18 @@ void VtkViewer::init_vtk() {
       }
     });
     interactor->AddObserver(vtkCommand::LeftButtonPressEvent, pick_callback_);
+  }
+
+  // 左下角 XYZ 方向指示（vtkOrientationMarkerWidget），由 View 页签 Axes 开关控制
+  if (interactor && !axes_marker_) {
+    axes_actor_ = vtkSmartPointer<vtkAxesActor>::New();
+    axes_actor_->SetPickable(0);
+    axes_marker_ = vtkSmartPointer<vtkOrientationMarkerWidget>::New();
+    axes_marker_->SetOrientationMarker(axes_actor_);
+    axes_marker_->SetInteractor(interactor);
+    axes_marker_->SetViewport(0.0, 0.0, 0.15, 0.15);
+    axes_marker_->InteractiveOff();
+    axes_marker_->SetEnabled(show_axes_ && show_axes_->isChecked() ? 1 : 0);
   }
 #endif
 }
@@ -2818,7 +2854,10 @@ void VtkViewer::update_mesh_controls() {
   }
 
   if (mesh_entity_) {
-    const int current = mesh_entity_->currentData().toInt();
+    // 首次填充时 currentData() 为无效 QVariant，toInt() 会返回 0，
+    // 进而 findData(0) 命中首个实体导致误加实体过滤器；必须显式判无效。
+    const QVariant current_data = mesh_entity_->currentData();
+    const int current = current_data.isValid() ? current_data.toInt() : -1;
     mesh_entity_->blockSignals(true);
     mesh_entity_->clear();
     mesh_entity_->addItem("All", -1);
@@ -2836,7 +2875,8 @@ void VtkViewer::update_mesh_controls() {
   }
 
   if (mesh_type_) {
-    const int current = mesh_type_->currentData().toInt();
+    const QVariant current_data = mesh_type_->currentData();
+    const int current = current_data.isValid() ? current_data.toInt() : -1;
     mesh_type_->blockSignals(true);
     mesh_type_->clear();
     mesh_type_->addItem("All", -1);
@@ -3604,22 +3644,8 @@ void VtkViewer::update_scene_extras() {
       data = geom_->GetOutput();
     }
   }
-  if (show_axes_) {
-    if (!axes_actor_) {
-      axes_actor_ = vtkSmartPointer<vtkAxesActor>::New();
-      axes_actor_->SetPickable(0);
-      renderer_->AddActor(axes_actor_);
-    }
-    if (data) {
-      double bounds[6] = {0, 0, 0, 0, 0, 0};
-      data->GetBounds(bounds);
-      const double dx = bounds[1] - bounds[0];
-      const double dy = bounds[3] - bounds[2];
-      const double dz = bounds[5] - bounds[4];
-      const double len = std::max({dx, dy, dz, 1.0});
-      axes_actor_->SetTotalLength(len * 0.2, len * 0.2, len * 0.2);
-    }
-    axes_actor_->SetVisibility(show_axes_->isChecked() ? 1 : 0);
+  if (show_axes_ && axes_marker_) {
+    axes_marker_->SetEnabled(show_axes_->isChecked() ? 1 : 0);
   }
 
   if (show_outline_) {
