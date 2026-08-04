@@ -29,6 +29,10 @@ class MainWindow : public QMainWindow {
  public:
  explicit MainWindow(QWidget* parent = nullptr);
 
+ // 文档截图巡览：依次切换各模块页与中栏页签，抓取窗口截图保存到 dir 后退出。
+ // 由 main.cpp 在设置 GMP_SCREENSHOT_DIR 环境变量时触发。
+ void run_screenshot_tour(const QString& dir);
+
  private:
   void build_menu();
   void build_toolbar();

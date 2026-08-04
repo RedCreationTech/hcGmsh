@@ -43,6 +43,8 @@
 #include <QLabel>
 #include <QTextStream>
 #include <QDateTime>
+#include <QTimer>
+#include <memory>
 #include <functional>
 #include <vector>
 
@@ -3792,6 +3794,80 @@ void MainWindow::export_debug_bundle() {
   statusBar()->showMessage("Debug bundle exported.", 3000);
   QMessageBox::information(this, "Export Debug Bundle",
                            "Bundle created at:\n" + bundle_dir);
+}
+
+void MainWindow::run_screenshot_tour(const QString& dir) {
+  QDir().mkpath(dir);
+  load_demo_diffusion(false);  // 载入演示模型，让各页面截图有实际内容
+  // 可选：GMP_TOUR_MESH=<msh路径> 时先把网格载入视口，便于验证视口显示效果
+  const QByteArray tour_mesh = qgetenv("GMP_TOUR_MESH");
+  if (!tour_mesh.isEmpty() && viewer_) {
+    const QString mesh_path = QString::fromLocal8Bit(tour_mesh);
+    // 延迟到窗口完全显示、VTK 初始化就绪后再加载，避免初始化顺序干扰
+    QTimer::singleShot(4000, this, [this, mesh_path]() {
+      if (viewer_) {
+        viewer_->set_mesh_file(mesh_path);
+      }
+    });
+    // 直接用 VTK 离屏渲染导出一张视口图（绕过 Qt grab 的时机问题）
+    QTimer::singleShot(6000, this, [this, dir]() {
+      if (viewer_) {
+        viewer_->save_screenshot(dir + "/vtk_viewport.png");
+      }
+    });
+  }
+
+  QList<QPair<QString, std::function<void()>>> steps;
+  const QStringList modules = {"Part",     "Property", "Material",
+                               "Section",  "Assembly", "Step",
+                               "Interaction", "Load",   "Mesh",
+                               "Job",      "Visualization", "Results"};
+  for (int i = 0; i < modules.size() && i < module_tabs_->count(); ++i) {
+    steps.append({QString("module_%1_%2")
+                      .arg(i, 2, 10, QLatin1Char('0'))
+                      .arg(modules[i]),
+                  [this, i]() { module_tabs_->setCurrentIndex(i); }});
+  }
+  // viewer_ 作为 QTabWidget 的页，其直接父对象是内部 QStackedWidget，需向上找 QTabWidget
+  QTabWidget* center_tabs = nullptr;
+  for (QWidget* p = viewer_ ? viewer_->parentWidget() : nullptr; p;
+       p = p->parentWidget()) {
+    if ((center_tabs = qobject_cast<QTabWidget*>(p))) {
+      break;
+    }
+  }
+  if (center_tabs) {
+    const QStringList pages = {"Viewport", "Plot", "Table"};
+    const int vis_index = modules.indexOf("Visualization");
+    for (int i = 0; i < pages.size() && i < center_tabs->count(); ++i) {
+      steps.append({QString("center_%1").arg(pages[i]),
+                    [this, center_tabs, i, vis_index]() {
+                      module_tabs_->setCurrentIndex(vis_index);
+                      center_tabs->setCurrentIndex(i);
+                    }});
+    }
+  }
+
+  auto state = std::make_shared<int>(-1);
+  auto* timer = new QTimer(this);
+  connect(timer, &QTimer::timeout, this,
+          [this, timer, state, steps, dir]() mutable {
+            ++(*state);
+            if (*state >= steps.size()) {
+              timer->stop();
+              QApplication::quit();
+              return;
+            }
+            qInfo("[tour] step %d -> %s", *state,
+                  qPrintable(steps[*state].first));
+            steps[*state].second();
+            const QString file = dir + "/" + steps[*state].first + ".png";
+            QTimer::singleShot(500, this, [this, file]() {
+              const bool ok = grab().save(file);
+              qInfo("[tour] saved %s ok=%d", qPrintable(file), ok);
+            });
+          });
+  timer->start(1500);
 }
 
 }  // namespace gmp
