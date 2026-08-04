@@ -12,6 +12,7 @@
 
 #include <QGuiApplication>
 #include <QComboBox>
+#include <QPointer>
 #include <QSize>
 #include <QTimer>
 #include <QWidget>
@@ -20,39 +21,58 @@ namespace gmp {
 
 namespace {
 
+// 可重入保护：进入过滤器处理段时置位，退出时复位
+struct ReentryGuard {
+  bool& flag;
+  explicit ReentryGuard(bool& f) : flag(f) { flag = true; }
+  ~ReentryGuard() { flag = false; }
+};
+
 class ComboPopupFixer : public QObject {
  public:
   explicit ComboPopupFixer(QComboBox* combo) : QObject(combo), combo_(combo) {
     if (combo_) {
+      // 安装前 setView() 已被调用，此处直接缓存现有视图指针。
+      // 注意：绝不能在事件过滤器中调用 combo->view()，
+      // 它会惰性创建弹窗容器，创建过程投递的事件会重入本过滤器，
+      // 在 ComboBox 析构/容器创建路径上形成无限递归（栈溢出崩溃）。
+      view_ = qobject_cast<QAbstractItemView*>(combo_->view());
       combo_->installEventFilter(this);
     }
   }
 
   void ensure_filter() {
-    if (!combo_ || !combo_->view()) {
+    if (!view_) {
       return;
     }
-    if (auto* popup = combo_->view()->window()) {
+    if (auto* popup = view_->window()) {
       popup->installEventFilter(this);
-    } else if (auto* view = combo_->view()) {
-      view->installEventFilter(this);
+    } else {
+      view_->installEventFilter(this);
     }
   }
 
  protected:
   bool eventFilter(QObject* obj, QEvent* event) override {
-    if (!combo_) {
-      return QObject::eventFilter(obj, event);
-    }
-    if (!combo_->view()) {
+    if (!combo_ || in_filter_) {
       return QObject::eventFilter(obj, event);
     }
 
     const QEvent::Type t = event->type();
+    // 析构/删除路径上的事件直接放行，不做任何 view 访问
+    if (t == QEvent::ChildRemoved || t == QEvent::DeferredDelete ||
+        t == QEvent::Destroy) {
+      return QObject::eventFilter(obj, event);
+    }
+    if (!view_) {
+      return QObject::eventFilter(obj, event);
+    }
+
     if (t == QEvent::Show || t == QEvent::ShowToParent ||
         t == QEvent::MouseButtonPress || t == QEvent::MouseButtonRelease ||
         t == QEvent::Move || t == QEvent::Resize || t == QEvent::FocusIn) {
-      QWidget* view = combo_->view();
+      ReentryGuard guard(in_filter_);
+      QWidget* view = view_;
       QWidget* popup = view ? view->window() : nullptr;
       if (obj == combo_ || obj == view || obj == popup) {
         QTimer::singleShot(0, this, [this]() { apply_popup_geometry(0); });
@@ -63,10 +83,10 @@ class ComboPopupFixer : public QObject {
 
  private:
   void apply_popup_geometry(int attempt) {
-    if (!combo_ || !combo_->view()) {
+    if (!combo_ || !view_) {
       return;
     }
-    QWidget* popup = combo_->view()->window();
+    QWidget* popup = view_->window();
     if (!popup) {
       return;
     }
@@ -80,7 +100,7 @@ class ComboPopupFixer : public QObject {
     }
 
     int width = combo_->width();
-    if (auto* view = combo_->view()) {
+    if (auto* view = view_.data()) {
       const int margin = 24;
       int hint_width = view->sizeHintForColumn(0);
       if (hint_width < 0) {
@@ -115,7 +135,7 @@ class ComboPopupFixer : public QObject {
 
     int popup_row_h = 16;
     int popup_rows = 1;
-    if (auto* view = combo_->view()) {
+    if (auto* view = view_.data()) {
       const int row_hint = view->sizeHintForRow(0);
       if (row_hint > 0) {
         popup_row_h = row_hint;
@@ -156,7 +176,7 @@ class ComboPopupFixer : public QObject {
       }
       popup->setMinimumSize(popup_w, popup_h);
       popup->setMaximumSize(popup_w, popup_h);
-      if (auto* view = combo_->view()) {
+      if (auto* view = view_.data()) {
         view->setMinimumWidth(popup_w);
       }
     } else {
@@ -166,13 +186,15 @@ class ComboPopupFixer : public QObject {
       }
       popup->setMinimumSize(popup_w, popup_h);
       popup->setMaximumSize(popup_w, popup_h);
-      if (auto* view = combo_->view()) {
+      if (auto* view = view_.data()) {
         view->setMinimumWidth(popup_w);
       }
     }
   }
 
-  QComboBox* combo_ = nullptr;
+  QPointer<QComboBox> combo_;
+  QPointer<QAbstractItemView> view_;
+  bool in_filter_ = false;
 };
 
 }  // namespace

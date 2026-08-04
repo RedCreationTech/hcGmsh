@@ -1257,7 +1257,9 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
                   template_descriptions_.value(key, "No description.");
               template_preview_->setPlainText(desc);
             });
-    template_preview_->setPlainText("Applies defaults for the selected type.");
+    if (template_preview_) {
+      template_preview_->setPlainText("Applies defaults for the selected type.");
+    }
   }
 
   auto set_row_visible = [this](const QString& key, bool visible) {
@@ -1444,6 +1446,11 @@ void PropertyEditor::clear_form() {
   template_presets_.clear();
   template_combo_ = nullptr;
   apply_template_btn_ = nullptr;
+  // template_tabs_ / template_preview_ 曾作为 form_layout_ 的行被添加，
+  // 下面的 deleteLater 会销毁它们，必须同步置空，否则下次
+  // build_form_for_kind 会踩着悬垂指针调用 setPlainText 崩溃。
+  template_tabs_ = nullptr;
+  template_preview_ = nullptr;
   while (form_layout_->count() > 0) {
     QLayoutItem* item = form_layout_->takeAt(0);
     if (!item) {
