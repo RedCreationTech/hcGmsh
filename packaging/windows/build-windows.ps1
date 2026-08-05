@@ -13,7 +13,7 @@
 #      然后:
 #        build-windows.ps1 -VcpkgRoot C:\vcpkg
 #
-# 前置条件: Visual Studio 2022 (含"使用 C++ 的桌面开发"工作负载) + CMake
+# 前置条件: Visual Studio 2022+ (含"使用 C++ 的桌面开发"工作负载) + CMake
 # 产出: dist-windows\ (免安装目录) + gmp_ise-windows-x64.zip
 
 [CmdletBinding()]
@@ -35,7 +35,7 @@ if (-not $CondaPrefix -and -not $VcpkgRoot) {
 
 $cmakeArgs = @(
   "-S", $RepoRoot, "-B", (Join-Path $RepoRoot $BuildDir),
-  "-G", "Visual Studio 17 2022", "-A", "x64",
+  # 不写死生成器: GitHub runner 已预装更新的 VS (如 VS18), 让 CMake 自动探测
   "-DGMP_ENABLE_GMSH_GUI=ON",
   "-DGMP_ENABLE_VTK_VIEWER=ON"
 )
