@@ -32,6 +32,11 @@ endif()
 
 if(GMP_ENABLE_GMSH_GUI)
   find_package(gmsh CONFIG REQUIRED)
+  if(TARGET gmsh::shared)
+    # conda-forge 的 gmsh 包在 INTERFACE_LINK_LIBRARIES 中残留了构建机绝对路径
+    # (D:/bld/.../*.lib), 链接共享库无需传递依赖, 直接清空规避
+    set_target_properties(gmsh::shared PROPERTIES INTERFACE_LINK_LIBRARIES "")
+  endif()
 endif()
 
 add_executable(gmp_ise

@@ -56,6 +56,14 @@ if ($CondaPrefix) {
   $gmshCmake = Join-Path $libPrefix "share\gmsh"
   if (Test-Path (Join-Path $gmshCmake "gmshConfig.cmake")) {
     $cmakeArgs += "-Dgmsh_DIR=$gmshCmake"
+    # conda 包的 gmshTargets-release.cmake 把 DLL 记录在 lib/gmsh.dll,
+    # 实际在 bin/gmsh.dll, 配置前修正, 否则 find_package 校验直接 FATAL
+    $gmshTargetsRel = Join-Path $gmshCmake "gmshTargets-release.cmake"
+    if (Test-Path $gmshTargetsRel) {
+      (Get-Content $gmshTargetsRel -Raw) -replace '/lib/gmsh\.dll"', '/bin/gmsh.dll"' |
+        Set-Content $gmshTargetsRel -NoNewline
+      Write-Host "==> patched gmshTargets-release.cmake (dll path)"
+    }
   }
 } else {
   $installed = Join-Path $VcpkgRoot "installed\$Triplet"
