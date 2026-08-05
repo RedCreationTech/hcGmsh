@@ -82,6 +82,10 @@ if (-not $windeployqt) {
   throw "未找到 windeployqt.exe, 候选路径: $($windeployqtCandidates -join '; ')"
 }
 
+# 依赖 DLL 目录加入 PATH: CMake AUTOMOC 会试运行 moc.exe,
+# conda 环境的 Qt6Core.dll 等在 Library\bin, 不在 PATH 会报 0xc0000135
+$env:PATH = "$dllDir;$env:PATH"
+
 Write-Host "==> CMake configure"
 cmake @cmakeArgs
 
