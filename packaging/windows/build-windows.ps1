@@ -45,7 +45,12 @@ if ($CondaPrefix) {
   # conda-forge 布局: 库与工具在 <env>\Library 下
   $libPrefix = Join-Path $CondaPrefix "Library"
   $dllDir    = Join-Path $libPrefix "bin"
-  $windeployqt = Join-Path $dllDir "windeployqt.exe"
+  # conda 版 qt6-main 的 windeployqt 可能叫 windeployqt6.exe 或在 lib\qt6\bin 下
+  $windeployqtCandidates = @(
+    (Join-Path $dllDir "windeployqt.exe"),
+    (Join-Path $dllDir "windeployqt6.exe"),
+    (Join-Path $libPrefix "lib\qt6\bin\windeployqt.exe")
+  )
   $cmakeArgs += "-DCMAKE_PREFIX_PATH=$libPrefix"
   # gmsh 的 cmake 配置可能在 share/gmsh 下
   $gmshCmake = Join-Path $libPrefix "share\gmsh"
@@ -56,16 +61,17 @@ if ($CondaPrefix) {
   $installed = Join-Path $VcpkgRoot "installed\$Triplet"
   $dllDir    = Join-Path $installed "bin"
   $toolchain = Join-Path $VcpkgRoot "scripts\buildsystems\vcpkg.cmake"
-  $windeployqt = Join-Path $installed "tools\Qt6\bin\windeployqt.exe"
+  $windeployqtCandidates = @((Join-Path $installed "tools\Qt6\bin\windeployqt.exe"))
   $cmakeArgs += "-DCMAKE_TOOLCHAIN_FILE=$toolchain"
   $cmakeArgs += "-DVCPKG_TARGET_TRIPLET=$Triplet"
 }
 if ($QtDir) {
   $cmakeArgs += "-DCMAKE_PREFIX_PATH=$QtDir"
-  $windeployqt = Join-Path $QtDir "bin\windeployqt.exe"
+  $windeployqtCandidates = @((Join-Path $QtDir "bin\windeployqt.exe")) + $windeployqtCandidates
 }
-if (-not (Test-Path $windeployqt)) {
-  throw "未找到 windeployqt.exe ($windeployqt), 请确认 Qt6 已正确安装"
+$windeployqt = $windeployqtCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $windeployqt) {
+  throw "未找到 windeployqt.exe, 候选路径: $($windeployqtCandidates -join '; ')"
 }
 
 Write-Host "==> CMake configure"
