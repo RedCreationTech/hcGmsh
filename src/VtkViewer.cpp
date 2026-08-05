@@ -84,16 +84,15 @@ namespace gmp {
 #ifdef GMP_ENABLE_VTK_VIEWER
 namespace {
 
-// 统一约束色标条尺寸，避免大窗口下标题/标签过大占据视口。
-// 必须先关闭 VTK 默认的约束字体模式，否则它会自动放大字体填满色标条，
-// 覆盖这里显式设置的字号与像素上限。
+// 统一约束色标条样式：尺寸按视口比例自适应（随黑色显示区缩放），
+// 必须先关闭 VTK 默认的约束字体模式，否则它会自动放大字体填满色标条。
 void style_scalar_bar(vtkScalarBarActor* bar) {
   if (!bar) {
     return;
   }
   bar->SetUnconstrainedFontSize(1);
-  bar->SetMaximumWidthInPixels(120);
-  bar->SetMaximumHeightInPixels(380);
+  bar->SetWidth(0.08);
+  bar->SetHeight(0.55);
   bar->SetNumberOfLabels(5);
   bar->SetBarRatio(0.35);
   if (auto* title = bar->GetTitleTextProperty()) {
@@ -102,6 +101,20 @@ void style_scalar_bar(vtkScalarBarActor* bar) {
   if (auto* label = bar->GetLabelTextProperty()) {
     label->SetFontSize(11);
   }
+}
+
+// 把色标条摆到视口的某个角（corner: 0=右下 1=右上 2=左下 3=左上），边距收紧
+void position_scalar_bar(vtkScalarBarActor* bar, int corner) {
+  if (!bar) {
+    return;
+  }
+  const double w = bar->GetWidth();
+  const double h = bar->GetHeight();
+  const double mx = 0.015;
+  const double my = 0.02;
+  const double x = (corner == 0 || corner == 1) ? 1.0 - w - mx : mx;
+  const double y = (corner == 0 || corner == 2) ? my : 1.0 - h - my;
+  bar->SetPosition(x, y);
 }
 
 struct VectorStats {
@@ -518,6 +531,21 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   AttachComboPopupFix(repr_combo_);
   connect(repr_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, &VtkViewer::on_repr_changed);
+  scalar_bar_pos_combo_ = new QComboBox();
+  scalar_bar_pos_combo_->addItem("Right-Bottom", 0);
+  scalar_bar_pos_combo_->addItem("Right-Top", 1);
+  scalar_bar_pos_combo_->addItem("Left-Bottom", 2);
+  scalar_bar_pos_combo_->addItem("Left-Top", 3);
+  AttachComboPopupFix(scalar_bar_pos_combo_);
+  connect(scalar_bar_pos_combo_,
+          QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          [this](int index) {
+            scalar_bar_pos_ = scalar_bar_pos_combo_->itemData(index).toInt();
+            apply_scalar_bar_pos();
+            if (render_window_) {
+              render_window_->Render();
+            }
+          });
 
   auto_range_ = new QCheckBox("Auto Range");
   auto_range_->setChecked(true);
@@ -541,6 +569,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   scalar_row->addWidget(preset_combo_);
   scalar_row->addWidget(new QLabel("Repr"));
   scalar_row->addWidget(repr_combo_);
+  scalar_row->addWidget(new QLabel("Bar Pos"));
+  scalar_row->addWidget(scalar_bar_pos_combo_);
   scalar_row->addWidget(auto_range_);
   scalar_row->addWidget(range_min_);
   scalar_row->addWidget(range_max_);
@@ -1064,6 +1094,7 @@ void VtkViewer::set_exodus_file(const QString& path) {
   if (!scalar_bar_) {
     scalar_bar_ = vtkSmartPointer<vtkScalarBarActor>::New();
     style_scalar_bar(scalar_bar_);
+    position_scalar_bar(scalar_bar_, scalar_bar_pos_);
   }
   mapper_->SetLookupTable(lut_);
   geom_->SetInputConnection(reader_->GetOutputPort());
@@ -1125,6 +1156,7 @@ void VtkViewer::set_mesh_file(const QString& path) {
     mapper_->SetLookupTable(lut_);
     scalar_bar_ = vtkSmartPointer<vtkScalarBarActor>::New();
     style_scalar_bar(scalar_bar_);
+    position_scalar_bar(scalar_bar_, scalar_bar_pos_);
   }
   if (!mesh_geom_) {
     mesh_geom_ = vtkSmartPointer<vtkDataSetSurfaceFilter>::New();
@@ -1271,6 +1303,7 @@ void VtkViewer::set_mesh_entity_filter(int dim, int tag) {
 QVariantMap VtkViewer::viewer_settings() const {
   QVariantMap map;
   map.insert("current_file", current_file_);
+  map.insert("scalar_bar_pos", scalar_bar_pos_);
   map.insert("array_key",
              array_combo_ ? array_combo_->currentData().toString() : "");
   map.insert("preset",
@@ -1345,6 +1378,16 @@ void VtkViewer::apply_viewer_settings(const QVariantMap& settings) {
   const QString file = settings.value("current_file").toString();
   if (!file.isEmpty()) {
     load_file(file);
+  }
+  if (settings.contains("scalar_bar_pos")) {
+    scalar_bar_pos_ = settings.value("scalar_bar_pos").toInt();
+    if (scalar_bar_pos_combo_) {
+      const int idx = scalar_bar_pos_combo_->findData(scalar_bar_pos_);
+      if (idx >= 0) {
+        scalar_bar_pos_combo_->setCurrentIndex(idx);
+      }
+    }
+    apply_scalar_bar_pos();
   }
   if (show_faces_) {
     show_faces_->setChecked(
@@ -3625,6 +3668,14 @@ void VtkViewer::update_selection_pipeline() {
   mesh_select_actor_->SetVisibility(true);
   if (render_window_) {
     render_window_->Render();
+  }
+#endif
+}
+
+void VtkViewer::apply_scalar_bar_pos() {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (scalar_bar_) {
+    position_scalar_bar(scalar_bar_, scalar_bar_pos_);
   }
 #endif
 }

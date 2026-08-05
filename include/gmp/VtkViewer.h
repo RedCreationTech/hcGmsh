@@ -104,6 +104,7 @@ signals:
   void handle_pick(int x, int y);
   void update_selection_pipeline();
   void update_scene_extras();
+  void apply_scalar_bar_pos();
   void apply_view_preset(int preset);
   void update_array_list();
   void update_vector_list();
@@ -118,6 +119,8 @@ signals:
   QComboBox* array_combo_ = nullptr;
   QComboBox* preset_combo_ = nullptr;
   QComboBox* repr_combo_ = nullptr;
+  QComboBox* scalar_bar_pos_combo_ = nullptr;
+  int scalar_bar_pos_ = 0;  // 0=右下 1=右上 2=左下 3=左上
   QCheckBox* auto_range_ = nullptr;
   QCheckBox* auto_refresh_ = nullptr;
   QCheckBox* show_nodes_ = nullptr;
