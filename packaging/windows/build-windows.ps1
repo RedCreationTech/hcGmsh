@@ -45,11 +45,13 @@ if ($CondaPrefix) {
   # conda-forge 布局: 库与工具在 <env>\Library 下
   $libPrefix = Join-Path $CondaPrefix "Library"
   $dllDir    = Join-Path $libPrefix "bin"
-  # conda 版 qt6-main 的 windeployqt 可能叫 windeployqt6.exe 或在 lib\qt6\bin 下
+  # conda 版 qt6-main: 必须用 lib\qt6\bin 下的 windeployqt.exe,
+  # 其同目录有 qtpaths.exe 供其查询插件; bin\ 下的 windeployqt6.exe
+  # 会因找不到 qtpaths 而部署失败并以非零退出
   $windeployqtCandidates = @(
+    (Join-Path $libPrefix "lib\qt6\bin\windeployqt.exe"),
     (Join-Path $dllDir "windeployqt.exe"),
-    (Join-Path $dllDir "windeployqt6.exe"),
-    (Join-Path $libPrefix "lib\qt6\bin\windeployqt.exe")
+    (Join-Path $dllDir "windeployqt6.exe")
   )
   $cmakeArgs += "-DCMAKE_PREFIX_PATH=$libPrefix"
   # gmsh 的 cmake 配置可能在 share/gmsh 下
@@ -102,6 +104,9 @@ New-Item -ItemType Directory -Path $dist | Out-Null
 Copy-Item $exe $dist
 
 & $windeployqt --release --compiler-runtime --no-translations (Join-Path $dist "gmp_ise.exe")
+if (-not (Test-Path (Join-Path $dist "platforms\qwindows.dll"))) {
+  throw "windeployqt 未部署 platforms 插件 (qwindows.dll 缺失), 打包中止"
+}
 
 # 依赖 DLL (VTK / Gmsh / yaml-cpp / OCC / HDF5 等传递依赖)
 Copy-Item (Join-Path $dllDir "*.dll") $dist
@@ -110,3 +115,5 @@ $zip = Join-Path $RepoRoot "gmp_ise-windows-x64.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path (Join-Path $dist "*") -DestinationPath $zip
 Write-Host "==> 打包完成: $zip"
+# 显式成功退出: 防止上游原生命令残留的非零 LASTEXITCODE 让 CI 误判失败
+exit 0
