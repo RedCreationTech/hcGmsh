@@ -103,9 +103,34 @@ if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory -Path $dist | Out-Null
 Copy-Item $exe $dist
 
-& $windeployqt --release --compiler-runtime --no-translations (Join-Path $dist "gmp_ise.exe")
-if (-not (Test-Path (Join-Path $dist "platforms\qwindows.dll"))) {
-  throw "windeployqt 未部署 platforms 插件 (qwindows.dll 缺失), 打包中止"
+if ($CondaPrefix) {
+  # conda 版 Qt 布局与 windeployqt 的路径推导不兼容(前缀重复拼接),
+  # 改为手动部署: Qt6 DLL 已由下方 *.dll 复制覆盖, 这里补插件与 MSVC 运行时
+  $qtPlugins = Join-Path $libPrefix "lib\qt6\plugins"
+  foreach ($dir in @("platforms", "styles", "imageformats")) {
+    $src = Join-Path $qtPlugins $dir
+    if (Test-Path $src) {
+      Copy-Item $src $dist -Recurse
+      Write-Host "==> deployed Qt plugin: $dir"
+    }
+  }
+  if (-not (Test-Path (Join-Path $dist "platforms\qwindows.dll"))) {
+    throw "Qt platforms 插件部署失败 (qwindows.dll 缺失), 打包中止"
+  }
+  # MSVC 运行时 (msvcp140/vcruntime140 系列, 取自 VS 安装目录的 Redist)
+  $crt = Get-ChildItem "C:\Program Files\Microsoft Visual Studio\*\*\VC\Redist\MSVC\*\x64\*.CRT\*" `
+    -Include msvcp140.dll, vcruntime140.dll, vcruntime140_1.dll -ErrorAction SilentlyContinue
+  if ($crt) {
+    Copy-Item $crt.FullName $dist
+    Write-Host "==> deployed MSVC CRT ($($crt.Count) dlls)"
+  } else {
+    Write-Warning "未找到 MSVC CRT redist, 目标机器需自行安装 VC++ Redistributable"
+  }
+} else {
+  & $windeployqt --release --compiler-runtime --no-translations (Join-Path $dist "gmp_ise.exe")
+  if (-not (Test-Path (Join-Path $dist "platforms\qwindows.dll"))) {
+    throw "windeployqt 未部署 platforms 插件 (qwindows.dll 缺失), 打包中止"
+  }
 }
 
 # 依赖 DLL (VTK / Gmsh / yaml-cpp / OCC / HDF5 等传递依赖)
