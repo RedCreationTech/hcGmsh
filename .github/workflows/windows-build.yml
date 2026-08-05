@@ -1,0 +1,47 @@
+# Windows EXE 自动构建与打包
+# 触发方式: 推送 v* 标签 (如 v0.1.0), 或在 Actions 页面手动运行 (workflow_dispatch)
+# 构建逻辑与 packaging/windows/build-windows.ps1 完全一致 (CI 直接调用该脚本)
+name: windows-build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout (含子模块 yaml-cpp)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # vcpkg 全量依赖首次编译需 2-4 小时, 之后命中缓存只需几分钟
+      - name: vcpkg 缓存
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg
+          key: vcpkg-qt-vtk-gmsh-${{ hashFiles('.github/workflows/windows-build.yml') }}
+          restore-keys: vcpkg-qt-vtk-gmsh-
+
+      - name: 安装 vcpkg 依赖 (qtbase / vtk[qt] / gmsh / yaml-cpp)
+        shell: pwsh
+        run: |
+          if (-not (Test-Path C:\vcpkg\vcpkg.exe)) {
+            git clone --depth 1 https://github.com/microsoft/vcpkg C:\vcpkg
+            C:\vcpkg\bootstrap-vcpkg.bat
+          }
+          C:\vcpkg\vcpkg install qtbase "vtk[qt]" gmsh yaml-cpp --triplet x64-windows
+
+      - name: 构建并打包
+        shell: pwsh
+        run: packaging\windows\build-windows.ps1 -VcpkgRoot C:\vcpkg
+
+      - name: 上传 EXE 打包产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: gmp_ise-windows-x64
+          path: gmp_ise-windows-x64.zip
+          retention-days: 30

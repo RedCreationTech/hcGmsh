@@ -144,7 +144,33 @@ GMP_ENABLE_GMSH_GUI=OFF GMP_ENABLE_VTK_VIEWER=OFF ./dev.sh
 cmake --build build -j4 && ./build/gmp_ise
 ```
 
-## 4. 参考文档
+## 4. Windows EXE 打包
+
+**本机（macOS）无法产出 Windows EXE**（Qt6/VTK/Gmsh 全栈需 Windows 目标构建），提供两条路径，共用同一脚本 `packaging/windows/build-windows.ps1`：
+
+### 4.1 GitHub Actions（推荐）
+
+`.github/workflows/windows-build.yml`：推送 `v*` 标签或在 Actions 页手动触发，自动在 `windows-latest` runner 上安装 vcpkg 依赖（`qtbase / vtk[qt] / gmsh / yaml-cpp`）→ 构建 → `windeployqt` 打包 → 上传 `gmp_ise-windows-x64.zip` artifact。
+
+注意：vcpkg 依赖首次编译需 2-4 小时，之后走 actions/cache（分钟级）。
+
+### 4.2 Windows 本机打包
+
+前置：VS 2022（C++ 桌面开发）+ CMake + vcpkg，然后：
+
+```powershell
+vcpkg install qtbase "vtk[qt]" gmsh yaml-cpp --triplet x64-windows
+powershell -ExecutionPolicy Bypass -File packaging/windows/build-windows.ps1 -VcpkgRoot C:\vcpkg
+```
+
+产出 `dist-windows\`（免安装目录）与 `gmp_ise-windows-x64.zip`。
+
+说明：
+
+- VTK 必须带 `[qt]` 特性（`QVTKOpenGLNativeWidget` 需要 vtkGUISupportQt）；Qt 也从 vcpkg 装，避免与官方 Qt 混链。
+- Windows 端**不需要 MOOSE 求解环境**（求解在远程机器）；如需 WSL 求解后端，构建时追加 `-DGMP_ENABLE_WSL_RUNNER=ON`。
+
+## 5. 参考文档
 
 - `readme.org` — 架构设计（L1–L5 分层）、数据打通协议、平台矩阵与 Roadmap
 - `progress.org` — 迭代计划与每次进度记录
