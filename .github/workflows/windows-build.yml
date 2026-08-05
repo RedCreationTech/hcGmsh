@@ -52,7 +52,7 @@ jobs:
             git clone --depth 1 https://github.com/microsoft/vcpkg C:\vcpkg
             C:\vcpkg\bootstrap-vcpkg.bat
           }
-          C:\vcpkg\vcpkg install qtbase "vtk[qt]" gmsh yaml-cpp --triplet x64-windows-release
+          C:\vcpkg\vcpkg install qtbase "vtk[qt]" gmsh yaml-cpp --triplet x64-windows-release --host-triplet x64-windows-release
 
       - name: 构建并打包
         shell: pwsh

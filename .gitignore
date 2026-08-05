@@ -5,3 +5,4 @@
 /dist-windows/
 *.zip
 .DS_Store
+bug/logs_*/
