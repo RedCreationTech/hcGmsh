@@ -159,7 +159,7 @@ cmake --build build -j4 && ./build/gmp_ise
 前置：VS 2022（C++ 桌面开发）+ CMake + vcpkg，然后：
 
 ```powershell
-vcpkg install qtbase "vtk[qt]" gmsh yaml-cpp --triplet x64-windows
+vcpkg install qtbase "vtk[qt]" gmsh yaml-cpp --triplet x64-windows-release
 powershell -ExecutionPolicy Bypass -File packaging/windows/build-windows.ps1 -VcpkgRoot C:\vcpkg
 ```
 

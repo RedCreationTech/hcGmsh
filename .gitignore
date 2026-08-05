@@ -4,3 +4,4 @@
 /build-windows/
 /dist-windows/
 *.zip
+.DS_Store
