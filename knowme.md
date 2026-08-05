@@ -159,7 +159,7 @@ cmake --build build -j4 && ./build/gmp_ise
 前置：VS 2022（C++ 桌面开发）+ CMake + [micromamba](https://mamba.readthedocs.io/)，然后：
 
 ```powershell
-micromamba create -n gmp-win -c conda-forge qt6-main vtk gmsh
+micromamba create -n gmp-win -c conda-forge qt6-main vtk gmsh libxml2-devel liblzma-devel
 powershell -ExecutionPolicy Bypass -File packaging/windows/build-windows.ps1 `
   -CondaPrefix "$env:USERPROFILE\micromamba\envs\gmp-win"
 ```

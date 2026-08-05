@@ -26,6 +26,8 @@ jobs:
         run: git submodule update --init external/yaml-cpp
 
       - name: 安装 conda-forge 预编译依赖 (qt6-main / vtk / gmsh)
+        # libxml2/liblzma 在 conda-forge 上做了拆分, 运行包不含头文件与导入库,
+        # VTK 的 cmake find-package 需要对应的 -devel 包
         uses: mamba-org/setup-micromamba@v2
         with:
           environment-name: gmp-win
@@ -33,6 +35,8 @@ jobs:
             qt6-main
             vtk
             gmsh
+            libxml2-devel
+            liblzma-devel
           cache-environment: true
           cache-downloads: true
 
