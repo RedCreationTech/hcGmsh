@@ -146,28 +146,35 @@ cmake --build build -j4 && ./build/gmp_ise
 
 ## 4. Windows EXE 打包
 
-**本机（macOS）无法产出 Windows EXE**（Qt6/VTK/Gmsh 全栈需 Windows 目标构建），提供两条路径，共用同一脚本 `packaging/windows/build-windows.ps1`：
+**本机（macOS）无法产出 Windows EXE**（Qt6/VTK/Gmsh 全栈需 Windows 目标构建）。依赖走 **conda-forge 预编译包**（`qt6-main / vtk / gmsh`，零源码编译，CI 全程约 10-20 分钟），本机与 CI 共用同一脚本 `packaging/windows/build-windows.ps1`。
 
 ### 4.1 GitHub Actions（推荐）
 
-`.github/workflows/windows-build.yml`：推送 `v*` 标签或在 Actions 页手动触发，自动在 `windows-latest` runner 上安装 vcpkg 依赖（`qtbase / vtk[qt] / gmsh / yaml-cpp`）→ 构建 → `windeployqt` 打包 → 上传 `gmp_ise-windows-x64.zip` artifact。
+`.github/workflows/windows-build.yml`：推送 `v*` 标签或在 Actions 页手动触发，`windows-latest` runner 上用 micromamba 安装 conda-forge 预编译依赖 → 构建 → `windeployqt` 打包 → 上传 `gmp_ise-windows-x64.zip` artifact。
 
-注意：vcpkg 依赖首次编译需 2-4 小时，之后走 actions/cache（分钟级）。
+> 历史说明：此前使用 vcpkg 源码编译路线，因 runner 磁盘上限反复失败（Debug+Release 双份 / host triplet 遗漏 / VTK 构建树堆积），已弃用；conda 版 vtk 官方启用了 `GUISupportQt/RenderingQt`，满足 `QVTKOpenGLNativeWidget` 需求。
 
 ### 4.2 Windows 本机打包
 
-前置：VS 2022（C++ 桌面开发）+ CMake + vcpkg，然后：
+前置：VS 2022（C++ 桌面开发）+ CMake + [micromamba](https://mamba.readthedocs.io/)，然后：
 
 ```powershell
-vcpkg install qtbase "vtk[qt]" gmsh yaml-cpp --triplet x64-windows-release --host-triplet x64-windows-release --host-triplet x64-windows-release
-powershell -ExecutionPolicy Bypass -File packaging/windows/build-windows.ps1 -VcpkgRoot C:\vcpkg
+micromamba create -n gmp-win -c conda-forge qt6-main vtk gmsh
+powershell -ExecutionPolicy Bypass -File packaging/windows/build-windows.ps1 `
+  -CondaPrefix "$env:USERPROFILE\micromamba\envs\gmp-win"
 ```
 
 产出 `dist-windows\`（免安装目录）与 `gmp_ise-windows-x64.zip`。
 
+如坚持 vcpkg 源码路线（备选）：
+
+```powershell
+vcpkg install qtbase "vtk[qt]" gmsh yaml-cpp --triplet x64-windows-release --host-triplet x64-windows-release
+powershell -ExecutionPolicy Bypass -File packaging/windows/build-windows.ps1 -VcpkgRoot C:\vcpkg
+```
+
 说明：
 
-- VTK 必须带 `[qt]` 特性（`QVTKOpenGLNativeWidget` 需要 vtkGUISupportQt）；Qt 也从 vcpkg 装，避免与官方 Qt 混链。
 - Windows 端**不需要 MOOSE 求解环境**（求解在远程机器）；如需 WSL 求解后端，构建时追加 `-DGMP_ENABLE_WSL_RUNNER=ON`。
 
 ## 5. 参考文档

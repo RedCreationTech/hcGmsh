@@ -1,6 +1,9 @@
 # Windows EXE 自动构建与打包
 # 触发方式: 推送 v* 标签 (如 v0.1.0), 或在 Actions 页面手动运行 (workflow_dispatch)
-# 构建逻辑与 packaging/windows/build-windows.ps1 完全一致 (CI 直接调用该脚本)
+# 构建逻辑与 packaging/windows/build-windows.ps1 共用 (CI 直接调用该脚本)
+#
+# 依赖路线: conda-forge 预编译包 (qt6-main / vtk / gmsh), 零源码编译,
+# 全程约 10-20 分钟, 磁盘占用几个 GB. conda 版 vtk 已启用 GUISupportQt/RenderingQt.
 name: windows-build
 
 on:
@@ -22,40 +25,20 @@ jobs:
       - name: 初始化 yaml-cpp 子模块
         run: git submodule update --init external/yaml-cpp
 
-      # vcpkg 全量依赖首次编译需 2-4 小时, 之后命中缓存只需几分钟
-      - name: vcpkg 缓存
-        uses: actions/cache@v4
+      - name: 安装 conda-forge 预编译依赖 (qt6-main / vtk / gmsh)
+        uses: mamba-org/setup-micromamba@v2
         with:
-          path: C:\vcpkg
-          key: vcpkg-release-qt-vtk-gmsh-${{ hashFiles('.github/workflows/windows-build.yml') }}
-          restore-keys: vcpkg-release-qt-vtk-gmsh-
-
-      # x64-windows 默认同时编 Debug+Release, 会写爆 runner 磁盘 (LNK1116/112);
-      # 用成熟的清理 action 一次释放 tool-cache/Android/dotnet/Haskell/docker 等 (30GB+)
-      - name: 释放磁盘空间
-        uses: jlumbroso/free-disk-space@v1.3.1
-        with:
-          tool-cache: true
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
-      # 只编 Release (x64-windows-release, host 同), 且每个包装完即清构建树
-      - name: 安装 vcpkg 依赖 (qtbase / vtk[qt] / gmsh / yaml-cpp)
-        shell: pwsh
-        run: |
-          if (-not (Test-Path C:\vcpkg\vcpkg.exe)) {
-            git clone --depth 1 https://github.com/microsoft/vcpkg C:\vcpkg
-            C:\vcpkg\bootstrap-vcpkg.bat
-          }
-          C:\vcpkg\vcpkg install qtbase "vtk[qt]" gmsh yaml-cpp --triplet x64-windows-release --host-triplet x64-windows-release --clean-buildtrees-after-build --clean-packages-after-build
+          environment-name: gmp-win
+          create-args: >-
+            qt6-main
+            vtk
+            gmsh
+          cache-environment: true
+          cache-downloads: true
 
       - name: 构建并打包
         shell: pwsh
-        run: packaging\windows\build-windows.ps1 -VcpkgRoot C:\vcpkg
+        run: packaging\windows\build-windows.ps1 -CondaPrefix "$env:MAMBA_ROOT_PREFIX\envs\gmp-win"
 
       - name: 上传 EXE 打包产物
         uses: actions/upload-artifact@v4
