@@ -13,10 +13,14 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - name: Checkout (含子模块 yaml-cpp)
+      # 只拉主仓库: moose/gmsh 子模块在 Windows 打包中不需要
+      # (递归拉取会因 moose 嵌套子模块 TriBITS 的超长文件名在 Windows 上失败)
+      - name: Checkout (仅主仓库)
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
+
+      # CMake 无条件 add_subdirectory(external/yaml-cpp), 必须单独初始化
+      - name: 初始化 yaml-cpp 子模块
+        run: git submodule update --init external/yaml-cpp
 
       # vcpkg 全量依赖首次编译需 2-4 小时, 之后命中缓存只需几分钟
       - name: vcpkg 缓存
