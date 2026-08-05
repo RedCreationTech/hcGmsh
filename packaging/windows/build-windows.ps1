@@ -5,7 +5,7 @@
 # 前置条件:
 #   1. Visual Studio 2022 (含"使用 C++ 的桌面开发"工作负载) + CMake
 #   2. vcpkg 及依赖 (首次安装需 2-4 小时编译, 之后走 vcpkg 缓存):
-#        vcpkg install qtbase "vtk[qt]" gmsh yaml-cpp --triplet x64-windows-release --host-triplet x64-windows-release
+#        vcpkg install qtbase "vtk[qt]" gmsh yaml-cpp --triplet x64-windows-release --host-triplet x64-windows-release --host-triplet x64-windows-release
 #      说明: vtk 必须带 [qt] 特性 (QVTKOpenGLNativeWidget 需要 vtkGUISupportQt);
 #      Qt 也从 vcpkg 装, 避免与官方 Qt 安装混链; 若 gmsh 缺 OCC 内核, 改用 gmsh[occ].
 #

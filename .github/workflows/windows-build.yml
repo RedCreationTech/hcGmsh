@@ -31,20 +31,19 @@ jobs:
           restore-keys: vcpkg-release-qt-vtk-gmsh-
 
       # x64-windows 默认同时编 Debug+Release, 会写爆 runner 磁盘 (LNK1116/112);
-      # 先清掉用不到的 Android SDK / dotnet 等, 释放 15-20GB
+      # 用成熟的清理 action 一次释放 tool-cache/Android/dotnet/Haskell/docker 等 (30GB+)
       - name: 释放磁盘空间
-        shell: pwsh
-        run: |
-          $paths = @($env:ANDROID_HOME, $env:ANDROID_SDK_ROOT,
-                     "C:\Program Files\dotnet", "C:\Program Files (x86)\Android")
-          foreach ($p in $paths) {
-            if ($p -and (Test-Path $p)) {
-              Write-Host "removing $p"
-              Remove-Item $p -Recurse -Force -ErrorAction SilentlyContinue
-            }
-          }
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
 
-      # 只编 Release (x64-windows-release), 磁盘与时间减半
+      # 只编 Release (x64-windows-release, host 同), 且每个包装完即清构建树
       - name: 安装 vcpkg 依赖 (qtbase / vtk[qt] / gmsh / yaml-cpp)
         shell: pwsh
         run: |
@@ -52,7 +51,7 @@ jobs:
             git clone --depth 1 https://github.com/microsoft/vcpkg C:\vcpkg
             C:\vcpkg\bootstrap-vcpkg.bat
           }
-          C:\vcpkg\vcpkg install qtbase "vtk[qt]" gmsh yaml-cpp --triplet x64-windows-release --host-triplet x64-windows-release
+          C:\vcpkg\vcpkg install qtbase "vtk[qt]" gmsh yaml-cpp --triplet x64-windows-release --host-triplet x64-windows-release --clean-buildtrees-after-build --clean-packages-after-build
 
       - name: 构建并打包
         shell: pwsh
