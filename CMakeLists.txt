@@ -43,6 +43,7 @@ add_executable(gmp_ise
   src/main.cpp
   src/MainWindow.cpp
   src/GmshPanel.cpp
+  src/L10n.cpp
   src/MoosePanel.cpp
   src/VtkViewer.cpp
   src/PropertyEditor.cpp
@@ -54,6 +55,7 @@ add_executable(gmp_ise
   src/WslRunner.cpp
   src/ProcessRunner.h
   include/gmp/Runner.h
+  include/gmp/L10n.h
   include/gmp/MainWindow.h
   include/gmp/GmshPanel.h
   include/gmp/MoosePanel.h

@@ -1028,7 +1028,7 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
 
 #ifdef GMP_ENABLE_VTK_VIEWER
   vtk_widget_ = new QVTKOpenGLNativeWidget(right_panel);
-  vtk_widget_->setMinimumSize(360, 220);
+  vtk_widget_->setMinimumSize(240, 160);
   right_layout->addWidget(vtk_widget_, 1);
   QTimer::singleShot(0, this, [this]() { init_vtk(); });
 #else

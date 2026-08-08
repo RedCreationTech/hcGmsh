@@ -1,4 +1,5 @@
 #include "gmp/MainWindow.h"
+#include "gmp/L10n.h"
 
 #include <QFileDialog>
 #include <QFile>
@@ -9,6 +10,7 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QComboBox>
+#include <QActionGroup>
 #include <QSizePolicy>
 #include <QScrollArea>
 #include <QPlainTextEdit>
@@ -378,7 +380,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       actions_layout->setSpacing(6);
       for (const auto& button : buttons) {
         auto* btn = new QPushButton(button.first, actions);
-        btn->setMinimumWidth(230);
+        // 不设最小宽度, 由右栏滚动区在过窄时承载横向滚动
         const auto action = button.second;
         connect(btn, &QPushButton::clicked, container,
                 [action]() { action(); });
@@ -520,16 +522,29 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   vertical_split->setChildrenCollapsible(false);
   main_layout->addWidget(vertical_split, 1);
 
+  // 不允许整栏折叠消失; 内容最小宽度已通过紧凑样式压小, 可拖到很窄
   auto* main_split = new QSplitter(Qt::Horizontal, vertical_split);
   main_split->setChildrenCollapsible(false);
-  main_split->setHandleWidth(3);
+  main_split->setHandleWidth(4);
   vertical_split->addWidget(main_split);
 
   auto* tree_panel = new QFrame(main_split);
   tree_panel->setObjectName("treePanel");
   tree_panel->setFrameShape(QFrame::StyledPanel);
   tree_panel->setFrameShadow(QFrame::Sunken);
-  auto* tree_layout = new QVBoxLayout(tree_panel);
+  auto* tree_outer = new QVBoxLayout(tree_panel);
+  tree_outer->setContentsMargins(0, 0, 0, 0);
+  tree_outer->setSpacing(0);
+  // 左栏包滚动区: 与中/右栏一致, 允许分割条拖到很窄, 内容滚动承载
+  auto* tree_scroll = new QScrollArea(tree_panel);
+  tree_scroll->setWidgetResizable(true);
+  tree_scroll->setFrameShape(QFrame::NoFrame);
+  tree_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  tree_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  tree_outer->addWidget(tree_scroll);
+  auto* tree_content = new QWidget();
+  tree_scroll->setWidget(tree_content);
+  auto* tree_layout = new QVBoxLayout(tree_content);
   tree_layout->setContentsMargins(0, 0, 0, 0);
   tree_layout->setSpacing(3);
   auto* model_tree_title = new QLabel("Model Tree", tree_panel);
@@ -563,7 +578,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   model_tree_ = new QTreeWidget(tree_panel);
   model_tree_->setHeaderLabel("Model Tree");
-  model_tree_->setMinimumWidth(220);
+  // 不设最小宽度: 允许分割条自由拖动, 过窄时树内部出现横向滚动条
   model_tree_->setEditTriggers(QAbstractItemView::SelectedClicked |
                                QAbstractItemView::EditKeyPressed);
   tree_layout->addWidget(model_tree_, 1);
@@ -636,7 +651,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   table_layout->addWidget(table_view, 1);
   center_tabs->addTab(plot_page, "Plot");
   center_tabs->addTab(table_page, "Table");
-  center_layout->addWidget(center_tabs);
+  // 中栏包滚动区: 视口控制行最宽可达 1300+px, 不允许它撑死布局;
+  // 窗口较窄时由内部横向滚动条承载, 分割条保持可拖动
+  auto* center_scroll = new QScrollArea(center_panel);
+  center_scroll->setWidgetResizable(true);
+  center_scroll->setFrameShape(QFrame::NoFrame);
+  center_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  center_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  center_scroll->setWidget(center_tabs);
+  center_layout->addWidget(center_scroll);
 
   auto* property_panel = new QFrame(main_split);
   property_panel->setObjectName("propertyPanel");
@@ -651,10 +674,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   property_title->setFont(property_title_font);
   property_layout->addWidget(property_title);
 
-  property_stack_ = new QStackedWidget(property_panel);
-  property_stack_->setMinimumWidth(340);
-  property_stack_->setMaximumWidth(520);
-  property_layout->addWidget(property_stack_, 1);
+  property_stack_ = new QStackedWidget();
+  // 右栏包一层滚动区: 不设最小/最大宽度, 分割条可自由拖动;
+  // 内容显示不开时由内部滚动条承载
+  auto* property_scroll = new QScrollArea(property_panel);
+  property_scroll->setWidgetResizable(true);
+  property_scroll->setFrameShape(QFrame::NoFrame);
+  property_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  property_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  property_scroll->setWidget(property_stack_);
+  property_layout->addWidget(property_scroll, 1);
 
   main_split->addWidget(tree_panel);
   main_split->addWidget(center_panel);
@@ -1544,9 +1573,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   main_split->setStretchFactor(0, 0);
   main_split->setStretchFactor(1, 1);
   main_split->setStretchFactor(2, 0);
-  const int left_w = qBound(220, int(width() * 0.18), 320);
-  const int right_w = qBound(340, int(width() * 0.27), 520);
-  const int center_w = std::max(560, width() - left_w - right_w);
+  const int left_w = qBound(180, int(width() * 0.16), 300);
+  const int right_w = qBound(280, int(width() * 0.24), 460);
+  const int center_w = std::max(480, width() - left_w - right_w);
   main_split->setSizes({left_w, center_w, right_w});
 
   connect(module_tabs_, &QTabBar::currentChanged, this,
@@ -1566,6 +1595,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             }
             if (target == 0 && property_editor_) {
               property_editor_->set_item(model_tree_->currentItem());
+            }
+            // 模块页与命令条是动态重建的, 中文模式下需重新翻译新控件
+            if (l10n::current_language() == l10n::Language::Chinese) {
+              QTimer::singleShot(0, this, [this]() { l10n::apply(this); });
             }
           });
   if (part_tab >= 0) {
@@ -1768,6 +1801,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   connect(model_tree_, &QTreeWidget::itemSelectionChanged, this, [this]() {
     auto* item = model_tree_->currentItem();
     property_editor_->set_item(item);
+    // PropertyEditor 表单是动态重建的, 中文模式下需重新翻译
+    if (l10n::current_language() == l10n::Language::Chinese) {
+      QTimer::singleShot(0, this, [this]() { l10n::apply(this); });
+    }
   });
   connect(model_tree_, &QTreeWidget::itemChanged, this,
           [this](QTreeWidgetItem* item, int) {
@@ -1817,6 +1854,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   statusBar()->addPermanentWidget(dirty_status_label_);
   update_window_title();
   statusBar()->showMessage("Ready");
+
+  // 启动时恢复语言偏好 (动态重建的页面在模块切换时已另行处理)
+  if (l10n::current_language() == l10n::Language::Chinese) {
+    QTimer::singleShot(0, this, [this]() { l10n::apply(this); });
+  }
 }
 
 void MainWindow::build_menu() {
@@ -1864,6 +1906,31 @@ void MainWindow::build_menu() {
   auto* demo_setup_nl =
       demo_menu->addAction("Setup Nonlinear Heat");
   auto* demo_run_nl = demo_menu->addAction("Run Nonlinear Heat");
+
+  // 设置菜单: 中英文界面切换 (字典式运行时翻译, 见 L10n)
+  auto* settings_menu = menuBar()->addMenu("&Settings");
+  auto* lang_menu = settings_menu->addMenu("Language");
+  auto* lang_group = new QActionGroup(this);
+  lang_group->setExclusive(true);
+  auto* lang_en = lang_menu->addAction("English");
+  auto* lang_zh = lang_menu->addAction("中文");
+  for (auto* a : {lang_en, lang_zh}) {
+    a->setCheckable(true);
+    lang_group->addAction(a);
+  }
+  const bool is_zh = l10n::current_language() == l10n::Language::Chinese;
+  lang_zh->setChecked(is_zh);
+  lang_en->setChecked(!is_zh);
+  connect(lang_en, &QAction::triggered, this, [this]() {
+    l10n::set_language(l10n::Language::English);
+    l10n::apply(this);
+    update_window_title();
+  });
+  connect(lang_zh, &QAction::triggered, this, [this]() {
+    l10n::set_language(l10n::Language::Chinese);
+    l10n::apply(this);
+    update_window_title();
+  });
 
   connect(action_new_, &QAction::triggered, this, [this]() {
     project_path_.clear();
@@ -2061,75 +2128,99 @@ void MainWindow::apply_theme() {
   QApplication::setFont(font);
 
   const QString style = R"(
-QMainWindow { background: #e6e6e6; }
+/* ===== 现代浅色主题: 柔和底 + 白色卡片 + 蓝色点缀 ===== */
+QMainWindow { background: #eef1f5; }
+QWidget { color: #1f2937; }
+
 QWidget#moduleBar {
-  background: #d9d9d9;
-  border-bottom: 1px solid #b5b5b5;
-  padding: 1px;
+  background: #e4e8ee;
+  border-bottom: 1px solid #cbd2db;
+  padding: 2px;
 }
 QWidget#moduleToolbar {
-  background: #efefef;
-  border-top: 1px solid #ffffff;
-  border-bottom: 1px solid #b5b5b5;
+  background: #f2f4f8;
+  border-bottom: 1px solid #cbd2db;
 }
 QWidget#treePanel,
 QWidget#centerPanel,
 QWidget#propertyPanel {
-  border: 1px solid #b5b5b5;
-  background: #ececec;
+  border: 1px solid #d2d8e0;
+  border-radius: 4px;
+  background: #f7f8fa;
 }
 QLabel#workflowStatus {
-  border: 1px solid #c6c6c6;
-  border-radius: 2px;
-  background: #f6f6f6;
-  padding: 4px 6px;
+  border: 1px solid #d5dbe3;
+  border-radius: 4px;
+  background: #eef4ff;
+  color: #1e3a5f;
+  padding: 5px 8px;
 }
-QWidget#treePanel,
-QWidget#propertyPanel {
-  margin: 0;
-}
+
 QMenuBar {
-  background: #d4d4d4;
-  border-bottom: 1px solid #b5b5b5;
+  background: #f5f6f8;
+  border-bottom: 1px solid #d2d8e0;
 }
-QMenuBar::item { padding: 4px 10px; }
-QMenuBar::item:selected { background: #c9c9c9; }
+QMenuBar::item { padding: 5px 12px; border-radius: 4px; }
+QMenuBar::item:selected { background: #e0e9fb; }
+QMenu {
+  background: #ffffff;
+  border: 1px solid #d2d8e0;
+  padding: 4px;
+}
+QMenu::item { padding: 5px 24px 5px 28px; border-radius: 3px; }
+QMenu::item:selected { background: #e0e9fb; }
+QMenu::separator { height: 1px; background: #e2e6ec; margin: 4px 8px; }
+
+QTabBar { qproperty-shape: RoundedNorth; border-bottom: 1px solid #cbd2db; }
 QTabBar::tab {
-  background: #d9d9d9;
-  border: 1px solid #b5b5b5;
+  background: #e4e8ee;
+  border: 1px solid #cbd2db;
   border-bottom: none;
   padding: 7px 14px;
   min-height: 26px;
   margin-right: 2px;
+  border-top-left-radius: 5px;
+  border-top-right-radius: 5px;
 }
 QTabBar::tab:selected {
-  background: #f2f2f2;
-  border-bottom: 1px solid #f2f2f2;
+  background: #ffffff;
+  border-bottom: 2px solid #2f6fed;
+  color: #1d4ed8;
 }
-QTabBar::tab:hover { background: #efefef; }
-QTabBar::tear {
-  border: 0;
-}
-QTabBar {
-  qproperty-shape: RoundedNorth;
-  border-bottom: 1px solid #b5b5b5;
-}
+QTabBar::tab:hover:!selected { background: #eef2f8; }
+QTabBar::tear { border: 0; }
+QTabWidget::pane { border: 1px solid #d2d8e0; border-radius: 3px; }
+
 QTreeWidget, QPlainTextEdit, QLineEdit, QTableWidget, QComboBox, QSpinBox,
-QDoubleSpinBox {
-  background: #fbfbfb;
-  border: 1px solid #b5b5b5;
+QDoubleSpinBox, QListWidget {
+  background: #ffffff;
+  border: 1px solid #ccd3dc;
+  border-radius: 3px;
 }
-QComboBox QAbstractItemView {
-  background: #fbfbfb;
-  border: 1px solid #b5b5b5;
-  selection-background-color: #cfe1ff;
-  selection-color: #111;
-  outline: 0;
+QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus,
+QComboBox:focus {
+  border: 1px solid #2f6fed;
 }
+QTreeWidget::item, QTreeView::item { padding: 4px 6px; }
+QTreeView::item:selected, QTreeWidget::item:selected {
+  background: #dbe7ff; color: #1e3a5f;
+}
+QTreeView::item:hover:!selected { background: #eef2f8; }
+QTableWidget::item { padding: 2px 4px; }
+QHeaderView::section {
+  background: #eef1f5;
+  padding: 5px;
+  border: none;
+  border-right: 1px solid #d8dde4;
+  border-bottom: 1px solid #cbd2db;
+  font-weight: bold;
+  color: #374151;
+}
+
 QComboBox {
   min-height: 24px;
-  min-width: 84px;
-  padding: 2px 24px 2px 8px;
+  min-width: 56px;
+  padding: 2px 22px 2px 8px;
   text-align: left;
 }
 QComboBox::down-arrow {
@@ -2146,59 +2237,98 @@ QComboBox::drop-down {
   subcontrol-origin: padding;
   subcontrol-position: right center;
   width: 24px;
-  border-left: 1px solid #b5b5b5;
+  border-left: 1px solid #ccd3dc;
 }
-QComboBox QAbstractItemView::item:hover {
-  background: #cfe1ff;
-  color: #111;
+QComboBox QAbstractItemView {
+  background: #ffffff;
+  border: 1px solid #ccd3dc;
+  selection-background-color: #dbe7ff;
+  selection-color: #1e3a5f;
+  outline: 0;
 }
-QComboBox QAbstractItemView::item:selected {
-  background: #98c1ff;
-  color: #111;
-}
-QComboBox QAbstractItemView::item {
-  min-height: 18px;
-}
-QTreeView::item { padding: 4px 6px; }
-QTreeView::item:selected { background: #cfe1ff; color: #111; }
-QTableWidget::item { padding: 2px 4px; }
-QHeaderView::section {
-  background: #e0e0e0;
-  padding: 4px;
-  border: 1px solid #b5b5b5;
-}
+QComboBox QAbstractItemView::item { min-height: 20px; }
+QComboBox QAbstractItemView::item:hover { background: #dbe7ff; color: #1e3a5f; }
+QComboBox QAbstractItemView::item:selected { background: #bcd4ff; color: #1e3a5f; }
+
 QGroupBox {
-  border: 1px solid #b5b5b5;
-  margin-top: 8px;
+  border: 1px solid #d2d8e0;
+  border-radius: 5px;
+  margin-top: 10px;
+  padding-top: 6px;
+  background: #fbfcfd;
 }
 QGroupBox::title {
   subcontrol-origin: margin;
   left: 8px;
-  padding: 0 4px;
+  padding: 0 5px;
+  color: #374151;
+  font-weight: bold;
 }
-QToolBar {
-  background: #d4d4d4;
-  border-bottom: 1px solid #b5b5b5;
-}
-QStatusBar {
-  background: #d4d4d4;
-  border-top: 1px solid #b5b5b5;
-}
+
 QPushButton {
-  background: #f2f2f2;
-  border: 1px solid #b5b5b5;
-  padding: 4px 10px;
+  background: #ffffff;
+  border: 1px solid #c6cdd7;
+  border-radius: 4px;
+  padding: 5px 10px;
   min-height: 24px;
-  min-width: 72px;
 }
-QPushButton:hover { background: #f9f9f9; }
-QPushButton:pressed { background: #e0e0e0; }
-QToolButton {
-  background: transparent;
-  padding: 2px 4px;
+QPushButton:hover { background: #eef4ff; border-color: #2f6fed; }
+QPushButton:pressed { background: #dbe7ff; }
+QPushButton:disabled { color: #9aa3af; background: #f3f4f6; }
+QToolButton { background: transparent; padding: 2px 4px; border-radius: 3px; }
+QToolButton:hover { background: #dbe4f0; }
+QToolButton:checked { background: #cdd9ee; }
+
+QToolBar { background: #f5f6f8; border-bottom: 1px solid #d2d8e0; spacing: 4px; }
+QStatusBar { background: #f5f6f8; border-top: 1px solid #d2d8e0; }
+
+QSplitter::handle { background: #e2e7ed; }
+QSplitter::handle:hover { background: #b9c6d6; }
+QSplitter::handle:horizontal { width: 4px; }
+QSplitter::handle:vertical { height: 4px; }
+
+QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
+QScrollBar::handle:vertical {
+  background: #c3cbd5; border-radius: 4px; min-height: 24px;
 }
-QToolButton:hover { background: #cfcfcf; }
-QToolButton:checked { background: #c9c9c9; }
+QScrollBar::handle:vertical:hover { background: #9fabb9; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }
+QScrollBar::handle:horizontal {
+  background: #c3cbd5; border-radius: 4px; min-width: 24px;
+}
+QScrollBar::handle:horizontal:hover { background: #9fabb9; }
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; border: none; }
+QScrollBar::add-page, QScrollBar::sub-page { background: none; }
+
+QCheckBox, QRadioButton { spacing: 6px; }
+QCheckBox::indicator, QRadioButton::indicator {
+  width: 14px; height: 14px;
+  border: 1px solid #aab4c0;
+  border-radius: 3px;
+  background: #ffffff;
+}
+QRadioButton::indicator { border-radius: 7px; }
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+  background: #2f6fed;
+  border: 1px solid #2f6fed;
+}
+QCheckBox::indicator:hover, QRadioButton::indicator:hover { border-color: #2f6fed; }
+
+QSlider::groove:horizontal {
+  height: 4px; background: #d5dbe3; border-radius: 2px;
+}
+QSlider::handle:horizontal {
+  width: 14px; height: 14px; margin: -5px 0;
+  border-radius: 7px; background: #2f6fed;
+}
+QSlider::handle:horizontal:hover { background: #1d4ed8; }
+
+QToolTip {
+  background: #1f2937;
+  color: #f9fafb;
+  border: none;
+  padding: 4px 8px;
+}
 )";
   setStyleSheet(style);
 }
