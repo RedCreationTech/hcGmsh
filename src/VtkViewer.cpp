@@ -16,6 +16,7 @@
 #include <QSlider>
 #include <QSplitter>
 #include <QTabWidget>
+#include <QStackedWidget>
 #include <QTableWidget>
 #include <QTableWidgetItem>
 #include <QTimer>
@@ -447,7 +448,6 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   auto* output_row = new QHBoxLayout();
   output_label_ = new QLabel("Outputs");
   output_combo_ = new QComboBox();
-  output_combo_->setMinimumWidth(240);
   AttachComboPopupFix(output_combo_);
   output_pick_ = new QPushButton("Load Selected");
   connect(output_pick_, &QPushButton::clicked, this, [this]() {
@@ -501,24 +501,42 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   right_layout->setContentsMargins(0, 0, 0, 0);
   right_layout->setSpacing(6);
 
-  auto* control_tabs = new QTabWidget(right_panel);
-  control_tabs->setObjectName("controlTabs");
-  control_tabs_ = control_tabs;
-  right_layout->addWidget(control_tabs);
-  auto make_tab = [control_tabs](const QString& name) {
-    auto* tab = new QWidget(control_tabs);
+  // 窄侧边栏里页签条会超出宽度(出现滚动箭头), 改为"下拉选择器+堆叠页"
+  auto* control_host = new QWidget(right_panel);
+  auto* control_host_layout = new QVBoxLayout(control_host);
+  control_host_layout->setContentsMargins(0, 0, 0, 0);
+  control_host_layout->setSpacing(4);
+  control_nav_ = new QComboBox(control_host);
+  AttachComboPopupFix(control_nav_);
+  control_host_layout->addWidget(control_nav_);
+  control_stack_ = new QStackedWidget(control_host);
+  control_host_layout->addWidget(control_stack_, 1);
+  control_tabs_ = control_host;
+  right_layout->addWidget(control_host);
+  connect(control_nav_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+          control_stack_, &QStackedWidget::setCurrentIndex);
+  auto make_tab = [this](const QString& name) {
+    auto* tab = new QWidget(control_stack_);
+    // 页内容不参与撑宽堆叠区, 各页按边栏宽度显示, 宽内容自行内部滚动
+    tab->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     auto* tab_layout = new QVBoxLayout(tab);
     tab_layout->setContentsMargins(0, 0, 0, 0);
     tab_layout->setSpacing(4);
-    control_tabs->addTab(tab, name);
+    control_stack_->addWidget(tab);
+    control_nav_->addItem(name);
     return tab_layout;
+  };
+
+  // 纵向堆叠控件, 适配窄侧边栏; 行内说明文字(QLabel)独占一行位于控件上方
+  auto vadd = [](QVBoxLayout* layout, std::initializer_list<QWidget*> ws) {
+    for (auto* w : ws) {
+      layout->addWidget(w);
+    }
   };
 
   auto* scalar_layout = make_tab("Scalar");
 
-  auto* scalar_row = new QHBoxLayout();
   array_combo_ = new QComboBox();
-  array_combo_->setMinimumWidth(220);
   AttachComboPopupFix(array_combo_);
   connect(array_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, &VtkViewer::on_array_changed);
@@ -568,22 +586,12 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   connect(range_max_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
           this, &VtkViewer::on_apply_range);
 
-  scalar_row->addWidget(new QLabel("Scalar"));
-  scalar_row->addWidget(array_combo_, 2);
-  scalar_row->addWidget(new QLabel("Preset"));
-  scalar_row->addWidget(preset_combo_);
-  scalar_row->addWidget(new QLabel("Repr"));
-  scalar_row->addWidget(repr_combo_);
-  scalar_row->addWidget(new QLabel("Bar Pos"));
-  scalar_row->addWidget(scalar_bar_pos_combo_);
-  scalar_row->addWidget(auto_range_);
-  scalar_row->addWidget(range_min_);
-  scalar_row->addWidget(range_max_);
-  scalar_layout->addLayout(scalar_row);
+  vadd(scalar_layout,
+       {new QLabel("Scalar"), array_combo_, new QLabel("Preset"),
+        preset_combo_, new QLabel("Repr"), repr_combo_, new QLabel("Bar Pos"),
+        scalar_bar_pos_combo_, auto_range_, range_min_, range_max_});
 
   auto* mesh_layout = make_tab("Mesh");
-  auto* mesh_row = new QHBoxLayout();
-  mesh_row->addWidget(new QLabel("Mesh"));
   show_faces_ = new QCheckBox("Faces");
   show_faces_->setChecked(true);
   connect(show_faces_, &QCheckBox::toggled, this,
@@ -618,36 +626,21 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   connect(mesh_dim_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this](int) { update_mesh_pipeline(); });
   mesh_group_ = new QComboBox();
-  mesh_group_->setMinimumWidth(180);
   AttachComboPopupFix(mesh_group_);
   connect(mesh_group_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this](int) { update_mesh_pipeline(); });
-  mesh_row->addWidget(show_faces_);
-  mesh_row->addWidget(show_edges_);
-  mesh_row->addWidget(show_shell_);
-  mesh_row->addWidget(show_nodes_);
-  mesh_row->addWidget(show_quality_);
-  mesh_row->addWidget(new QLabel("Dim"));
-  mesh_row->addWidget(mesh_dim_);
-  mesh_row->addWidget(new QLabel("Group"));
-  mesh_row->addWidget(mesh_group_, 1);
-  mesh_row->addStretch(1);
-  mesh_layout->addLayout(mesh_row);
+  vadd(mesh_layout,
+       {new QLabel("Mesh"), show_faces_, show_edges_, show_shell_, show_nodes_,
+        show_quality_, new QLabel("Dim"), mesh_dim_, new QLabel("Group"),
+        mesh_group_});
 
-  auto* entity_row = new QHBoxLayout();
   mesh_entity_ = new QComboBox();
-  mesh_entity_->setMinimumWidth(180);
   AttachComboPopupFix(mesh_entity_);
   connect(mesh_entity_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this](int) { update_mesh_pipeline(); });
-  entity_row->addWidget(new QLabel("Entity"));
-  entity_row->addWidget(mesh_entity_, 1);
-  entity_row->addStretch(1);
-  mesh_layout->addLayout(entity_row);
+  vadd(mesh_layout, {new QLabel("Entity"), mesh_entity_});
 
-  auto* mesh_opts = new QHBoxLayout();
   mesh_type_ = new QComboBox();
-  mesh_type_->setMinimumWidth(160);
   AttachComboPopupFix(mesh_type_);
   connect(mesh_type_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this](int) { update_mesh_pipeline(); });
@@ -693,21 +686,12 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
       pick_info_->setText("Pick: cleared");
     }
   });
-  mesh_opts->addWidget(new QLabel("Type"));
-  mesh_opts->addWidget(mesh_type_, 1);
-  mesh_opts->addWidget(new QLabel("Opacity"));
-  mesh_opts->addWidget(mesh_opacity_);
-  mesh_opts->addWidget(new QLabel("Shrink"));
-  mesh_opts->addWidget(mesh_shrink_);
-  mesh_opts->addWidget(mesh_scalar_bar_);
-  mesh_opts->addWidget(pick_enable_);
-  mesh_opts->addWidget(pick_mode_);
-  mesh_opts->addWidget(pick_clear_);
-  mesh_opts->addStretch(1);
-  mesh_layout->addLayout(mesh_opts);
+  vadd(mesh_layout,
+       {new QLabel("Type"), mesh_type_, new QLabel("Opacity"), mesh_opacity_,
+        new QLabel("Shrink"), mesh_shrink_, mesh_scalar_bar_, pick_enable_,
+        pick_mode_, pick_clear_});
 
   auto* view_layout = make_tab("View");
-  auto* view_row = new QHBoxLayout();
   view_combo_ = new QComboBox();
   view_combo_->addItem("Reset", 0);
   view_combo_->addItem("Front", 1);
@@ -763,19 +747,13 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
     selected_cell_id_ = -1;
     update_mesh_pipeline();
   });
-  view_row->addWidget(view_combo_);
-  view_row->addWidget(view_apply_);
-  view_row->addWidget(show_axes_);
-  view_row->addWidget(show_outline_);
-  view_row->addWidget(reset_filters);
-  view_row->addStretch(1);
-  view_layout->addLayout(view_row);
+  vadd(view_layout,
+       {view_combo_, view_apply_, show_axes_, show_outline_, reset_filters});
 
   pick_info_ = new QLabel("Pick: disabled");
   view_layout->addWidget(pick_info_);
 
   auto* slice_layout = make_tab("Slice");
-  auto* slice_row = new QHBoxLayout();
   slice_enable_ = new QCheckBox("Slice");
   slice_axis_ = new QComboBox();
   slice_axis_->addItems({"X", "Y", "Z"});
@@ -789,10 +767,7 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
           this, [this](int) { update_mesh_pipeline(); });
   connect(slice_slider_, &QSlider::valueChanged, this,
           [this](int) { update_mesh_pipeline(); });
-  slice_row->addWidget(slice_enable_);
-  slice_row->addWidget(slice_axis_);
-  slice_row->addWidget(slice_slider_, 1);
-  slice_layout->addLayout(slice_row);
+  vadd(slice_layout, {slice_enable_, slice_axis_, slice_slider_});
 
   mesh_legend_ = new QLabel();
   mesh_legend_->setWordWrap(true);
@@ -800,7 +775,6 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   view_layout->addWidget(mesh_legend_);
 
   auto* time_layout = make_tab("Time");
-  auto* refresh_row = new QHBoxLayout();
   auto_refresh_ = new QCheckBox("Auto Refresh");
   refresh_ms_ = new QSpinBox();
   refresh_ms_->setRange(250, 10000);
@@ -821,37 +795,25 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   debounce_timer_->setSingleShot(true);
   connect(debounce_timer_, &QTimer::timeout, this,
           &VtkViewer::on_auto_refresh_tick);
-  refresh_row->addWidget(auto_refresh_);
-  refresh_row->addWidget(new QLabel("ms"));
-  refresh_row->addWidget(refresh_ms_);
-  refresh_row->addStretch(1);
-  time_layout->addLayout(refresh_row);
+  vadd(time_layout, {auto_refresh_, new QLabel("ms"), refresh_ms_});
 
-  auto* time_row = new QHBoxLayout();
   time_slider_ = new QSlider(Qt::Horizontal);
   time_slider_->setRange(0, 0);
   time_label_ = new QLabel("t=0");
   connect(time_slider_, &QSlider::valueChanged, this, &VtkViewer::on_time_changed);
-  time_row->addWidget(new QLabel("Time"));
-  time_row->addWidget(time_slider_, 1);
-  time_row->addWidget(time_label_);
-  time_layout->addLayout(time_row);
+  vadd(time_layout, {new QLabel("Time"), time_slider_, time_label_});
 
   auto* vector_layout = make_tab("Vector");
   vector_array_combo_ = new QComboBox();
-  vector_array_combo_->setMinimumWidth(240);
   AttachComboPopupFix(vector_array_combo_);
   vector_auto_sync_deform_ = new QCheckBox("Auto-sync deformation vector");
   vector_auto_sync_deform_->setChecked(true);
   vector_apply_to_deform_ = new QPushButton("Apply to Deform");
   vector_info_ = new QLabel("No vector data loaded");
   vector_info_->setWordWrap(true);
-  auto* vector_row = new QHBoxLayout();
-  vector_row->addWidget(new QLabel("Vector"));
-  vector_row->addWidget(vector_array_combo_, 1);
-  vector_row->addWidget(vector_auto_sync_deform_);
-  vector_row->addWidget(vector_apply_to_deform_);
-  vector_layout->addLayout(vector_row);
+  vadd(vector_layout,
+       {new QLabel("Vector"), vector_array_combo_, vector_auto_sync_deform_,
+        vector_apply_to_deform_});
   vector_layout->addWidget(vector_info_);
   vector_layout->addStretch(1);
   connect(vector_array_combo_,
@@ -898,21 +860,16 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   auto* deform_layout = make_tab("Deformation");
   deform_enable_ = new QCheckBox("Enable Deformation");
   deform_vector_ = new QComboBox();
-  deform_vector_->setMinimumWidth(200);
   AttachComboPopupFix(deform_vector_);
   deform_scale_ = new QDoubleSpinBox();
   deform_scale_->setRange(0.0, 1000.0);
   deform_scale_->setSingleStep(0.1);
   deform_scale_->setValue(1.0);
-  auto* deform_row = new QHBoxLayout();
-  deform_row->addWidget(deform_enable_);
-  deform_row->addWidget(new QLabel("Vector"));
-  deform_row->addWidget(deform_vector_, 1);
-  deform_row->addWidget(new QLabel("Scale"));
-  deform_row->addWidget(deform_scale_);
-  deform_layout->addLayout(deform_row);
+  vadd(deform_layout,
+       {deform_enable_, new QLabel("Vector"), deform_vector_,
+        new QLabel("Scale"), deform_scale_});
   auto* deform_hint = new QLabel(
-      "Applies warping using the selected vector array.", control_tabs);
+      "Applies warping using the selected vector array.", control_stack_);
   deform_hint->setStyleSheet("color: #666;");
   deform_layout->addWidget(deform_hint);
   deform_layout->addStretch(1);
@@ -947,13 +904,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   probe_mode_->addItem("Cell", 1);
   AttachComboPopupFix(probe_mode_);
   probe_clear_ = new QPushButton("Clear");
-  auto* probe_row = new QHBoxLayout();
-  probe_row->addWidget(probe_enable_);
-  probe_row->addWidget(new QLabel("Mode"));
-  probe_row->addWidget(probe_mode_);
-  probe_row->addWidget(probe_clear_);
-  probe_row->addStretch(1);
-  probe_layout->addLayout(probe_row);
+  vadd(probe_layout,
+       {probe_enable_, new QLabel("Mode"), probe_mode_, probe_clear_});
   probe_info_ = new QLabel("Probe: disabled");
   probe_info_->setWordWrap(true);
   probe_layout->addWidget(probe_info_);
@@ -981,13 +933,9 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   });
 
   auto* plot_layout = make_tab("Plot");
-  auto* plot_row = new QHBoxLayout();
   plot_refresh_btn_ = new QPushButton("Refresh");
   plot_stats_ = new QLabel("No data");
-  plot_row->addWidget(plot_refresh_btn_);
-  plot_row->addWidget(plot_stats_);
-  plot_row->addStretch(1);
-  plot_layout->addLayout(plot_row);
+  vadd(plot_layout, {plot_refresh_btn_, plot_stats_});
   plot_view_ = new QPlainTextEdit();
   plot_view_->setReadOnly(true);
   plot_view_->setLineWrapMode(QPlainTextEdit::NoWrap);
@@ -1002,19 +950,15 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
           &VtkViewer::update_plot_view);
 
   auto* table_layout = make_tab("Table");
-  auto* table_row = new QHBoxLayout();
-  table_row->addWidget(new QLabel("Rows"));
   table_rows_spin_ = new QSpinBox();
   table_rows_spin_->setRange(10, 5000);
   table_rows_spin_->setSingleStep(50);
   table_rows_spin_->setValue(100);
   table_refresh_btn_ = new QPushButton("Refresh");
   table_stats_ = new QLabel("No data");
-  table_row->addWidget(table_rows_spin_);
-  table_row->addWidget(table_refresh_btn_);
-  table_row->addWidget(table_stats_);
-  table_row->addStretch(1);
-  table_layout->addLayout(table_row);
+  vadd(table_layout,
+       {new QLabel("Rows"), table_rows_spin_, table_refresh_btn_,
+        table_stats_});
   table_view_ = new QTableWidget();
   table_view_->setSelectionBehavior(QAbstractItemView::SelectRows);
   table_view_->setSelectionMode(QAbstractItemView::SingleSelection);

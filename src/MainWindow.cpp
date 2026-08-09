@@ -84,6 +84,10 @@ enum class IconGlyph {
   Interaction,
   Job,
   Result,
+  AddItem,
+  DuplicateItem,
+  RenameItem,
+  RemoveItem,
 };
 
 QIcon MakeIcon(IconGlyph glyph, int size = 18) {
@@ -229,6 +233,40 @@ QIcon MakeIcon(IconGlyph glyph, int size = 18) {
       p.drawRect(r);
       p.drawLine(m + 2, s - m - 3, s / 2, s / 2);
       p.drawLine(s / 2, s / 2, s - m - 2, m + 3);
+      break;
+    }
+    case IconGlyph::AddItem: {
+      p.drawEllipse(r);
+      p.drawLine(s / 2, m + 4, s / 2, s - m - 4);
+      p.drawLine(m + 4, s / 2, s - m - 4, s / 2);
+      break;
+    }
+    case IconGlyph::DuplicateItem: {
+      QRect back(m + 4, m + 1, s - 2 * m - 5, s - 2 * m - 5);
+      QRect front(m + 1, m + 4, s - 2 * m - 5, s - 2 * m - 5);
+      p.drawRect(back);
+      p.setBrush(QColor("#ffffff"));
+      p.drawRect(front);
+      break;
+    }
+    case IconGlyph::RenameItem: {
+      // 铅笔: 斜向笔身 + 笔尖
+      p.drawLine(m + 3, s - m - 3, s - m - 4, m + 2);
+      p.drawLine(m + 5, s - m - 1, s - m - 2, m + 4);
+      p.drawLine(m + 3, s - m - 3, m + 2, s - m - 1);
+      p.drawLine(m + 2, s - m - 1, m + 5, s - m - 1);
+      break;
+    }
+    case IconGlyph::RemoveItem: {
+      // 垃圾桶: 桶身 + 盖子 + 提手
+      p.drawLine(m + 2, m + 4, s - m - 2, m + 4);
+      p.drawLine(s / 2 - 3, m + 4, s / 2 - 3, m + 2);
+      p.drawLine(s / 2 - 3, m + 2, s / 2 + 3, m + 2);
+      p.drawLine(s / 2 + 3, m + 2, s / 2 + 3, m + 4);
+      QPolygon bin;
+      bin << QPoint(m + 3, m + 4) << QPoint(s - m - 3, m + 4)
+          << QPoint(s - m - 4, s - m - 1) << QPoint(m + 4, s - m - 1);
+      p.drawPolyline(bin);
       break;
     }
   }
@@ -539,6 +577,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* tree_scroll = new QScrollArea(tree_panel);
   tree_scroll->setWidgetResizable(true);
   tree_scroll->setFrameShape(QFrame::NoFrame);
+  tree_scroll->setMinimumWidth(0);
   tree_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   tree_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   tree_outer->addWidget(tree_scroll);
@@ -563,10 +602,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   tree_layout->addWidget(workflow_status_label_);
 
   auto* tree_actions = new QHBoxLayout();
-  auto* add_btn = new QPushButton("Add");
-  auto* dup_btn = new QPushButton("Duplicate");
-  auto* rename_btn = new QPushButton("Rename");
-  auto* remove_btn = new QPushButton("Remove");
+  auto make_tree_action = [](IconGlyph glyph, const QString& tip) {
+    auto* b = new QPushButton();
+    b->setIcon(MakeIcon(glyph, 16));
+    b->setIconSize(QSize(16, 16));
+    b->setFixedSize(30, 30);
+    b->setToolTip(tip);
+    return b;
+  };
+  auto* add_btn = make_tree_action(IconGlyph::AddItem, "Add");
+  auto* dup_btn = make_tree_action(IconGlyph::DuplicateItem, "Duplicate");
+  auto* rename_btn = make_tree_action(IconGlyph::RenameItem, "Rename");
+  auto* remove_btn = make_tree_action(IconGlyph::RemoveItem, "Remove");
   tree_actions->addWidget(add_btn);
   tree_actions->addWidget(dup_btn);
   tree_actions->addWidget(rename_btn);
@@ -656,6 +703,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* center_scroll = new QScrollArea(center_panel);
   center_scroll->setWidgetResizable(true);
   center_scroll->setFrameShape(QFrame::NoFrame);
+  center_scroll->setMinimumWidth(0);
   center_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   center_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   center_scroll->setWidget(center_tabs);
@@ -680,6 +728,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* property_scroll = new QScrollArea(property_panel);
   property_scroll->setWidgetResizable(true);
   property_scroll->setFrameShape(QFrame::NoFrame);
+  property_scroll->setMinimumWidth(0);
+  // 竖向滚动由各页面内部滚动区承担, 外层只保留横向兜底, 避免双竖向滚动条
+  property_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   property_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   property_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   property_scroll->setWidget(property_stack_);
@@ -1565,7 +1616,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     command_layout->addStretch(1);
   };
 
-  property_stack_->addWidget(property_editor_);
+  // 无内部滚动区的页面统一包一层, 竖向滚动只保留一层
+  // (否则外层 property_scroll 与页面内滚动区会出现双竖向滚动条)
+  auto wrap_scroll = [](QWidget* w) {
+    auto* s = new QScrollArea();
+    s->setWidgetResizable(true);
+    s->setFrameShape(QFrame::NoFrame);
+    s->setMinimumWidth(0);
+    s->setWidget(w);
+    return s;
+  };
+  property_stack_->addWidget(wrap_scroll(property_editor_));
   property_stack_->addWidget(part_page);
   property_stack_->addWidget(material_page);
   property_stack_->addWidget(section_page);
@@ -1574,9 +1635,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   property_stack_->addWidget(interaction_page);
   property_stack_->addWidget(load_page);
   property_stack_->addWidget(mesh_page);
-  property_stack_->addWidget(job_container);
+  property_stack_->addWidget(wrap_scroll(job_container));
   property_stack_->addWidget(visualization_page);
-  property_stack_->addWidget(results_page);
+  property_stack_->addWidget(wrap_scroll(results_page));
+  // QStackedWidget 的最小宽度默认取所有页面的最大值(如 Job 页的7列表格),
+  // 会把整个右栏撑宽并迫使每页都出现横向滚动条。
+  // 各页改为 Ignored, 栈只按当前页内容计算宽度。
+  for (int i = 0; i < property_stack_->count(); ++i) {
+    property_stack_->widget(i)->setSizePolicy(QSizePolicy::Ignored,
+                                              QSizePolicy::Preferred);
+  }
   refresh_module_pages();
 
   console_ = new QPlainTextEdit(vertical_split);
@@ -1591,7 +1659,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   main_split->setStretchFactor(1, 1);
   main_split->setStretchFactor(2, 0);
   const int left_w = qBound(180, int(width() * 0.16), 300);
-  const int right_w = qBound(280, int(width() * 0.24), 460);
+  const int right_w = qBound(280, int(width() * 0.21), 400);
   const int center_w = std::max(480, width() - left_w - right_w);
   main_split->setSizes({left_w, center_w, right_w});
 
@@ -2333,9 +2401,15 @@ QCheckBox::indicator, QRadioButton::indicator {
   background: #ffffff;
 }
 QRadioButton::indicator { border-radius: 7px; }
-QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+QCheckBox::indicator:checked {
   background: #2f6fed;
   border: 1px solid #2f6fed;
+  image: url(":/icons/check.png");
+}
+QRadioButton::indicator:checked {
+  background: #2f6fed;
+  border: 1px solid #2f6fed;
+  image: url(":/icons/dot.png");
 }
 QCheckBox::indicator:hover, QRadioButton::indicator:hover { border-color: #2f6fed; }
 

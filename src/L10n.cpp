@@ -267,6 +267,7 @@ void translate_widget(QWidget* w, Language lang) {
   }
   if (auto* btn = qobject_cast<QAbstractButton*>(w)) {
     btn->setText(translate_text(btn->text(), lang));
+    btn->setToolTip(translate_text(btn->toolTip(), lang));
   } else if (auto* box = qobject_cast<QGroupBox*>(w)) {
     box->setTitle(translate_text(box->title(), lang));
   } else if (auto* label = qobject_cast<QLabel*>(w)) {
@@ -293,7 +294,7 @@ void translate_widget(QWidget* w, Language lang) {
 
 Language current_language() {
   QSettings s("gmp-ise", "gmp_ise");
-  return s.value("ui_language", "en").toString() == "zh" ? Language::Chinese
+  return s.value("ui_language", "zh").toString() == "zh" ? Language::Chinese
                                                          : Language::English;
 }
 

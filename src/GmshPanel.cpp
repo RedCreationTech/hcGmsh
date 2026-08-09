@@ -93,12 +93,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   connect(open_geo, &QPushButton::clicked, this, &GmshPanel::on_open_geometry);
   auto* clear_geo = new QPushButton("Clear Model");
   connect(clear_geo, &QPushButton::clicked, this, &GmshPanel::on_clear_model);
-  auto* geo_row = new QHBoxLayout();
-  geo_row->addWidget(geo_path_);
-  geo_row->addWidget(open_geo);
-  auto* geo_row_container = new QWidget();
-  geo_row_container->setLayout(geo_row);
-  model_form->addRow("Geometry", geo_row_container);
+  model_form->addRow("Geometry", geo_path_);
+  model_form->addRow(open_geo);
   model_form->addRow("", clear_geo);
   auto_mesh_on_import_ = new QCheckBox("Auto mesh after import");
   auto_mesh_on_import_->setChecked(true);
@@ -112,7 +108,6 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
 
   auto* entities_box = new QGroupBox("Entities");
   auto* entities_layout = new QVBoxLayout(entities_box);
-  auto* ent_row = new QHBoxLayout();
   entity_dim_ = new QComboBox();
   entity_dim_->addItem("All", -1);
   entity_dim_->addItem("0", 0);
@@ -126,11 +121,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   connect(refresh_btn, &QPushButton::clicked, this, [this]() {
     update_entity_list();
   });
-  ent_row->addWidget(new QLabel("Dim"));
-  ent_row->addWidget(entity_dim_);
-  ent_row->addStretch(1);
-  ent_row->addWidget(refresh_btn);
-  entities_layout->addLayout(ent_row);
+  entities_layout->addWidget(new QLabel("Dim"));
+  entities_layout->addWidget(entity_dim_);
+  entities_layout->addWidget(refresh_btn);
   entity_list_ = new QPlainTextEdit();
   entity_list_->setReadOnly(true);
   entity_list_->setMaximumHeight(120);
@@ -172,24 +165,16 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
           this, [this](int) { update_primitive_controls(); });
   prim_form->addRow("Type", primitive_kind_);
 
-  auto* origin_row = new QHBoxLayout();
   prim_x_ = new QDoubleSpinBox();
   prim_y_ = new QDoubleSpinBox();
   prim_z_ = new QDoubleSpinBox();
   prim_x_->setRange(-1e6, 1e6);
   prim_y_->setRange(-1e6, 1e6);
   prim_z_->setRange(-1e6, 1e6);
-  origin_row->addWidget(new QLabel("x"));
-  origin_row->addWidget(prim_x_);
-  origin_row->addWidget(new QLabel("y"));
-  origin_row->addWidget(prim_y_);
-  origin_row->addWidget(new QLabel("z"));
-  origin_row->addWidget(prim_z_);
-  auto* origin_container = new QWidget();
-  origin_container->setLayout(origin_row);
-  prim_form->addRow("Origin/Base", origin_container);
+  prim_form->addRow("Origin/Base x", prim_x_);
+  prim_form->addRow("Origin/Base y", prim_y_);
+  prim_form->addRow("Origin/Base z", prim_z_);
 
-  auto* size_row = new QHBoxLayout();
   prim_dx_ = new QDoubleSpinBox();
   prim_dy_ = new QDoubleSpinBox();
   prim_dz_ = new QDoubleSpinBox();
@@ -199,15 +184,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   prim_dx_->setValue(1.0);
   prim_dy_->setValue(1.0);
   prim_dz_->setValue(1.0);
-  size_row->addWidget(new QLabel("dx"));
-  size_row->addWidget(prim_dx_);
-  size_row->addWidget(new QLabel("dy"));
-  size_row->addWidget(prim_dy_);
-  size_row->addWidget(new QLabel("dz"));
-  size_row->addWidget(prim_dz_);
-  auto* size_container = new QWidget();
-  size_container->setLayout(size_row);
-  prim_form->addRow("Size/Axis", size_container);
+  prim_form->addRow("Size/Axis dx", prim_dx_);
+  prim_form->addRow("Size/Axis dy", prim_dy_);
+  prim_form->addRow("Size/Axis dz", prim_dz_);
 
   prim_radius_ = new QDoubleSpinBox();
   prim_radius_->setRange(0.0, 1e6);
@@ -223,7 +202,6 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
 
   auto* xform_box = new QGroupBox("Transform");
   auto* xform_form = new QFormLayout(xform_box);
-  auto* sel_row = new QHBoxLayout();
   transform_dim_ = new QComboBox();
   transform_dim_->addItem("All", -1);
   transform_dim_->addItem("0", 0);
@@ -242,20 +220,14 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
                              transform_ids_->text()));
   });
   bind_entity_input_validation(transform_ids_, transform_dim_, true);
-  sel_row->addWidget(new QLabel("Dim"));
-  sel_row->addWidget(transform_dim_);
-  sel_row->addWidget(new QLabel("IDs"));
-  sel_row->addWidget(transform_ids_, 1);
+  xform_form->addRow("Dim", transform_dim_);
+  xform_form->addRow("IDs", transform_ids_);
   transform_template_ = new QComboBox();
   transform_template_->setEditable(true);
   transform_template_->addItem("Templates");
   tune_gmsh_combo(transform_template_, 110, 160);
-  sel_row->addWidget(new QLabel("Template"));
-  sel_row->addWidget(transform_template_);
-  sel_row->addWidget(transform_pick);
-  auto* sel_container = new QWidget();
-  sel_container->setLayout(sel_row);
-  xform_form->addRow("Selection", sel_container);
+  xform_form->addRow("Template", transform_template_);
+  xform_form->addRow(transform_pick);
   populate_transform_entity_templates(-1);
   connect(transform_dim_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           [this]() {
@@ -273,7 +245,6 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
             transform_template_->setCurrentIndex(0);
           });
 
-  auto* trans_row = new QHBoxLayout();
   trans_dx_ = new QDoubleSpinBox();
   trans_dy_ = new QDoubleSpinBox();
   trans_dz_ = new QDoubleSpinBox();
@@ -283,35 +254,21 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* trans_btn = new QPushButton("Translate");
   connect(trans_btn, &QPushButton::clicked, this,
           &GmshPanel::on_apply_translate);
-  trans_row->addWidget(new QLabel("dx"));
-  trans_row->addWidget(trans_dx_);
-  trans_row->addWidget(new QLabel("dy"));
-  trans_row->addWidget(trans_dy_);
-  trans_row->addWidget(new QLabel("dz"));
-  trans_row->addWidget(trans_dz_);
-  trans_row->addWidget(trans_btn);
-  auto* trans_container = new QWidget();
-  trans_container->setLayout(trans_row);
-  xform_form->addRow("Translate", trans_container);
+  xform_form->addRow("dx", trans_dx_);
+  xform_form->addRow("dy", trans_dy_);
+  xform_form->addRow("dz", trans_dz_);
+  xform_form->addRow(trans_btn);
 
-  auto* rot_origin_row = new QHBoxLayout();
   rot_x_ = new QDoubleSpinBox();
   rot_y_ = new QDoubleSpinBox();
   rot_z_ = new QDoubleSpinBox();
   rot_x_->setRange(-1e6, 1e6);
   rot_y_->setRange(-1e6, 1e6);
   rot_z_->setRange(-1e6, 1e6);
-  rot_origin_row->addWidget(new QLabel("x"));
-  rot_origin_row->addWidget(rot_x_);
-  rot_origin_row->addWidget(new QLabel("y"));
-  rot_origin_row->addWidget(rot_y_);
-  rot_origin_row->addWidget(new QLabel("z"));
-  rot_origin_row->addWidget(rot_z_);
-  auto* rot_origin_container = new QWidget();
-  rot_origin_container->setLayout(rot_origin_row);
-  xform_form->addRow("Rotate Origin", rot_origin_container);
+  xform_form->addRow("Rotate Origin x", rot_x_);
+  xform_form->addRow("Rotate Origin y", rot_y_);
+  xform_form->addRow("Rotate Origin z", rot_z_);
 
-  auto* rot_axis_row = new QHBoxLayout();
   rot_ax_ = new QDoubleSpinBox();
   rot_ay_ = new QDoubleSpinBox();
   rot_az_ = new QDoubleSpinBox();
@@ -327,37 +284,22 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* rot_btn = new QPushButton("Rotate");
   connect(rot_btn, &QPushButton::clicked, this,
           &GmshPanel::on_apply_rotate);
-  rot_axis_row->addWidget(new QLabel("ax"));
-  rot_axis_row->addWidget(rot_ax_);
-  rot_axis_row->addWidget(new QLabel("ay"));
-  rot_axis_row->addWidget(rot_ay_);
-  rot_axis_row->addWidget(new QLabel("az"));
-  rot_axis_row->addWidget(rot_az_);
-  rot_axis_row->addWidget(new QLabel("deg"));
-  rot_axis_row->addWidget(rot_angle_);
-  rot_axis_row->addWidget(rot_btn);
-  auto* rot_axis_container = new QWidget();
-  rot_axis_container->setLayout(rot_axis_row);
-  xform_form->addRow("Rotate Axis", rot_axis_container);
+  xform_form->addRow("Rotate Axis ax", rot_ax_);
+  xform_form->addRow("Rotate Axis ay", rot_ay_);
+  xform_form->addRow("Rotate Axis az", rot_az_);
+  xform_form->addRow("deg", rot_angle_);
+  xform_form->addRow(rot_btn);
 
-  auto* scale_center_row = new QHBoxLayout();
   scale_cx_ = new QDoubleSpinBox();
   scale_cy_ = new QDoubleSpinBox();
   scale_cz_ = new QDoubleSpinBox();
   scale_cx_->setRange(-1e6, 1e6);
   scale_cy_->setRange(-1e6, 1e6);
   scale_cz_->setRange(-1e6, 1e6);
-  scale_center_row->addWidget(new QLabel("x"));
-  scale_center_row->addWidget(scale_cx_);
-  scale_center_row->addWidget(new QLabel("y"));
-  scale_center_row->addWidget(scale_cy_);
-  scale_center_row->addWidget(new QLabel("z"));
-  scale_center_row->addWidget(scale_cz_);
-  auto* scale_center_container = new QWidget();
-  scale_center_container->setLayout(scale_center_row);
-  xform_form->addRow("Scale Center", scale_center_container);
+  xform_form->addRow("Scale Center x", scale_cx_);
+  xform_form->addRow("Scale Center y", scale_cy_);
+  xform_form->addRow("Scale Center z", scale_cz_);
 
-  auto* scale_row = new QHBoxLayout();
   scale_x_ = new QDoubleSpinBox();
   scale_y_ = new QDoubleSpinBox();
   scale_z_ = new QDoubleSpinBox();
@@ -370,29 +312,21 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* scale_btn = new QPushButton("Scale");
   connect(scale_btn, &QPushButton::clicked, this,
           &GmshPanel::on_apply_scale);
-  scale_row->addWidget(new QLabel("sx"));
-  scale_row->addWidget(scale_x_);
-  scale_row->addWidget(new QLabel("sy"));
-  scale_row->addWidget(scale_y_);
-  scale_row->addWidget(new QLabel("sz"));
-  scale_row->addWidget(scale_z_);
-  scale_row->addWidget(scale_btn);
-  auto* scale_container = new QWidget();
-  scale_container->setLayout(scale_row);
-  xform_form->addRow("Scale", scale_container);
+  xform_form->addRow("sx", scale_x_);
+  xform_form->addRow("sy", scale_y_);
+  xform_form->addRow("sz", scale_z_);
+  xform_form->addRow(scale_btn);
   content_layout->addWidget(xform_box);
 
   auto* bool_box = new QGroupBox("Boolean");
   auto* bool_form = new QFormLayout(bool_box);
-  auto* bool_row = new QHBoxLayout();
   boolean_dim_ = new QComboBox();
   boolean_dim_->addItem("3", 3);
   boolean_dim_->addItem("2", 2);
   boolean_dim_->addItem("1", 1);
   boolean_dim_->addItem("0", 0);
   tune_dim_combo(boolean_dim_);
-  bool_row->addWidget(new QLabel("Dim"));
-  bool_row->addWidget(boolean_dim_);
+  bool_form->addRow("Dim", boolean_dim_);
   boolean_obj_ids_ = new QLineEdit();
   boolean_obj_ids_->setPlaceholderText("Object IDs or dim:tag (e.g. 1,2 or 3:4)");
   boolean_tool_ids_ = new QLineEdit();
@@ -413,29 +347,22 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
         pick_entities_dialog(dim, "Select Boolean Tools",
                              boolean_tool_ids_->text()));
   });
-  bool_row->addWidget(new QLabel("Obj"));
-  bool_row->addWidget(boolean_obj_ids_, 1);
+  bool_form->addRow("Obj", boolean_obj_ids_);
   bind_entity_input_validation(boolean_obj_ids_, boolean_dim_, true);
   boolean_obj_template_ = new QComboBox();
   boolean_obj_template_->setEditable(true);
   boolean_obj_template_->addItem("Templates");
   tune_gmsh_combo(boolean_obj_template_, 110, 160);
-  bool_row->addWidget(new QLabel("Template"));
-  bool_row->addWidget(boolean_obj_template_);
-  bool_row->addWidget(boolean_obj_pick);
-  bool_row->addWidget(new QLabel("Tool"));
-  bool_row->addWidget(boolean_tool_ids_, 1);
+  bool_form->addRow("Template", boolean_obj_template_);
+  bool_form->addRow(boolean_obj_pick);
+  bool_form->addRow("Tool", boolean_tool_ids_);
   bind_entity_input_validation(boolean_tool_ids_, boolean_dim_, true);
   boolean_tool_template_ = new QComboBox();
   boolean_tool_template_->setEditable(true);
   boolean_tool_template_->addItem("Templates");
   tune_gmsh_combo(boolean_tool_template_, 110, 160);
-  bool_row->addWidget(new QLabel("Template"));
-  bool_row->addWidget(boolean_tool_template_);
-  bool_row->addWidget(boolean_tool_pick);
-  auto* bool_container = new QWidget();
-  bool_container->setLayout(bool_row);
-  bool_form->addRow("Selection", bool_container);
+  bool_form->addRow("Template", boolean_tool_template_);
+  bool_form->addRow(boolean_tool_pick);
   connect(boolean_dim_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           [this]() {
             const int dim = boolean_dim_->currentData().toInt();
@@ -465,19 +392,13 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
           });
   populate_boolean_entity_templates(3);
 
-  auto* bool_opts = new QHBoxLayout();
   boolean_remove_obj_ = new QCheckBox("Remove Object");
   boolean_remove_tool_ = new QCheckBox("Remove Tool");
   boolean_remove_obj_->setChecked(true);
   boolean_remove_tool_->setChecked(true);
-  bool_opts->addWidget(boolean_remove_obj_);
-  bool_opts->addWidget(boolean_remove_tool_);
-  bool_opts->addStretch(1);
-  auto* bool_opts_container = new QWidget();
-  bool_opts_container->setLayout(bool_opts);
-  bool_form->addRow("", bool_opts_container);
+  bool_form->addRow(boolean_remove_obj_);
+  bool_form->addRow(boolean_remove_tool_);
 
-  auto* bool_btns = new QHBoxLayout();
   auto* fuse_btn = new QPushButton("Fuse");
   auto* cut_btn = new QPushButton("Cut");
   auto* intersect_btn = new QPushButton("Intersect");
@@ -487,32 +408,23 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
           &GmshPanel::on_apply_boolean_cut);
   connect(intersect_btn, &QPushButton::clicked, this,
           &GmshPanel::on_apply_boolean_intersect);
-  bool_btns->addWidget(fuse_btn);
-  bool_btns->addWidget(cut_btn);
-  bool_btns->addWidget(intersect_btn);
-  auto* bool_btns_container = new QWidget();
-  bool_btns_container->setLayout(bool_btns);
-  bool_form->addRow("", bool_btns_container);
+  bool_form->addRow(fuse_btn);
+  bool_form->addRow(cut_btn);
+  bool_form->addRow(intersect_btn);
   content_layout->addWidget(bool_box);
 
   auto* phys_box = new QGroupBox("Physical Groups");
   auto* phys_form = new QFormLayout(phys_box);
-  auto* phys_top = new QHBoxLayout();
   phys_group_list_ = new QComboBox();
-  phys_group_list_->setMinimumWidth(220);
+  phys_group_list_->setMinimumWidth(0);
   connect(phys_group_list_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, &GmshPanel::on_physical_group_selected);
   auto* phys_refresh = new QPushButton("Refresh");
   connect(phys_refresh, &QPushButton::clicked, this,
           &GmshPanel::on_physical_group_refresh);
-  phys_top->addWidget(new QLabel("Groups"));
-  phys_top->addWidget(phys_group_list_, 1);
-  phys_top->addWidget(phys_refresh);
-  auto* phys_top_container = new QWidget();
-  phys_top_container->setLayout(phys_top);
-  phys_form->addRow("", phys_top_container);
+  phys_form->addRow("Groups", phys_group_list_);
+  phys_form->addRow(phys_refresh);
 
-  auto* phys_row = new QHBoxLayout();
   phys_group_dim_ = new QComboBox();
   phys_group_dim_->addItem("0", 0);
   phys_group_dim_->addItem("1", 1);
@@ -528,17 +440,11 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
           });
   phys_group_name_ = new QLineEdit();
   phys_group_name_->setPlaceholderText("Name");
-  phys_row->addWidget(new QLabel("Dim"));
-  phys_row->addWidget(phys_group_dim_);
-  phys_row->addWidget(new QLabel("Name"));
-  phys_row->addWidget(phys_group_name_, 1);
-  auto* phys_row_container = new QWidget();
-  phys_row_container->setLayout(phys_row);
-  phys_form->addRow("Group", phys_row_container);
+  phys_form->addRow("Dim", phys_group_dim_);
+  phys_form->addRow("Name", phys_group_name_);
 
   phys_group_entities_ = new QLineEdit();
   phys_group_entities_->setPlaceholderText("Entity IDs or dim:tag list");
-  auto* phys_entities_row = new QHBoxLayout();
   auto* phys_entities_pick = new QPushButton("Pick");
   connect(phys_entities_pick, &QPushButton::clicked, this, [this]() {
     const int dim = phys_group_dim_ ? phys_group_dim_->currentData().toInt() : -1;
@@ -547,14 +453,10 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
         pick_entities_dialog(dim, "Select Physical Group Entities",
                              phys_group_entities_->text()));
   });
-  phys_entities_row->addWidget(phys_group_entities_, 1);
-  phys_entities_row->addWidget(phys_entities_pick);
+  phys_form->addRow("Entities", phys_group_entities_);
+  phys_form->addRow(phys_entities_pick);
   bind_entity_input_validation(phys_group_entities_, phys_group_dim_, false);
-  auto* phys_entities_container = new QWidget();
-  phys_entities_container->setLayout(phys_entities_row);
-  phys_form->addRow("Entities", phys_entities_container);
 
-  auto* phys_btns = new QHBoxLayout();
   phys_group_add_ = new QPushButton("Add");
   phys_group_update_ = new QPushButton("Update Selected");
   phys_group_delete_ = new QPushButton("Delete Selected");
@@ -564,18 +466,18 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
           &GmshPanel::on_physical_group_update);
   connect(phys_group_delete_, &QPushButton::clicked, this,
           &GmshPanel::on_physical_group_delete);
-  phys_btns->addWidget(phys_group_add_);
-  phys_btns->addWidget(phys_group_update_);
-  phys_btns->addWidget(phys_group_delete_);
-  auto* phys_btns_container = new QWidget();
-  phys_btns_container->setLayout(phys_btns);
-  phys_form->addRow("", phys_btns_container);
+  phys_form->addRow(phys_group_add_);
+  phys_form->addRow(phys_group_update_);
+  phys_form->addRow(phys_group_delete_);
 
   phys_group_table_ = new QTableWidget();
   phys_group_table_->setColumnCount(5);
   phys_group_table_->setHorizontalHeaderLabels(
       {"Dim", "Tag", "Name", "Entities", "Elements"});
   phys_group_table_->horizontalHeader()->setStretchLastSection(true);
+  // 5列表格不参与撑宽面板, 过窄时表格内部自行横向滚动
+  phys_group_table_->setSizePolicy(QSizePolicy::Ignored,
+                                   QSizePolicy::Preferred);
   phys_group_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
   phys_group_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
   phys_group_table_->setMinimumHeight(120);
@@ -603,7 +505,6 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
 
   auto* field_box = new QGroupBox("Mesh Fields");
   auto* field_form = new QFormLayout(field_box);
-  auto* field_sel = new QHBoxLayout();
   field_dim_ = new QComboBox();
   field_dim_->addItem("1", 1);
   field_dim_->addItem("2", 2);
@@ -626,47 +527,29 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
         pick_entities_dialog(dim, "Select Field Entities",
                              field_entities_->text()));
   });
-  field_sel->addWidget(new QLabel("Dim"));
-  field_sel->addWidget(field_dim_);
-  field_sel->addWidget(new QLabel("Entities"));
-  field_sel->addWidget(field_entities_, 1);
-  field_sel->addWidget(field_entities_pick);
+  field_form->addRow("Dim", field_dim_);
+  field_form->addRow("Entities", field_entities_);
+  field_form->addRow(field_entities_pick);
   bind_entity_input_validation(field_entities_, field_dim_, false);
-  auto* field_sel_container = new QWidget();
-  field_sel_container->setLayout(field_sel);
-  field_form->addRow("Targets", field_sel_container);
 
-  auto* dist_row = new QHBoxLayout();
   field_dist_min_ = new QDoubleSpinBox();
   field_dist_max_ = new QDoubleSpinBox();
   field_dist_min_->setRange(0.0, 1e6);
   field_dist_max_->setRange(0.0, 1e6);
   field_dist_min_->setValue(0.1);
   field_dist_max_->setValue(1.0);
-  dist_row->addWidget(new QLabel("DistMin"));
-  dist_row->addWidget(field_dist_min_);
-  dist_row->addWidget(new QLabel("DistMax"));
-  dist_row->addWidget(field_dist_max_);
-  auto* dist_container = new QWidget();
-  dist_container->setLayout(dist_row);
-  field_form->addRow("Distance", dist_container);
+  field_form->addRow("DistMin", field_dist_min_);
+  field_form->addRow("DistMax", field_dist_max_);
 
-  auto* field_size_row = new QHBoxLayout();
   field_size_min_ = new QDoubleSpinBox();
   field_size_max_ = new QDoubleSpinBox();
   field_size_min_->setRange(0.0, 1e6);
   field_size_max_->setRange(0.0, 1e6);
   field_size_min_->setValue(0.05);
   field_size_max_->setValue(0.2);
-  field_size_row->addWidget(new QLabel("SizeMin"));
-  field_size_row->addWidget(field_size_min_);
-  field_size_row->addWidget(new QLabel("SizeMax"));
-  field_size_row->addWidget(field_size_max_);
-  auto* field_size_container = new QWidget();
-  field_size_container->setLayout(field_size_row);
-  field_form->addRow("Size", field_size_container);
+  field_form->addRow("SizeMin", field_size_min_);
+  field_form->addRow("SizeMax", field_size_max_);
 
-  auto* field_btns = new QHBoxLayout();
   auto* field_apply = new QPushButton("Apply Field");
   auto* field_clear = new QPushButton("Clear Fields");
   auto* field_refresh = new QPushButton("Refresh");
@@ -674,12 +557,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   connect(field_clear, &QPushButton::clicked, this, &GmshPanel::on_field_clear);
   connect(field_refresh, &QPushButton::clicked, this,
           &GmshPanel::on_field_refresh);
-  field_btns->addWidget(field_apply);
-  field_btns->addWidget(field_clear);
-  field_btns->addWidget(field_refresh);
-  auto* field_btns_container = new QWidget();
-  field_btns_container->setLayout(field_btns);
-  field_form->addRow("", field_btns_container);
+  field_form->addRow(field_apply);
+  field_form->addRow(field_clear);
+  field_form->addRow(field_refresh);
 
   field_list_ = new QPlainTextEdit();
   field_list_->setReadOnly(true);
@@ -703,7 +583,6 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   mesh_dim_->addItem("3D", 3);
   mesh_form->addRow("Generate Dim", mesh_dim_);
 
-  auto* entity_size_row = new QHBoxLayout();
   entity_size_dim_ = new QComboBox();
   entity_size_dim_->addItem("0", 0);
   entity_size_dim_->addItem("1", 1);
@@ -737,19 +616,13 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
           &GmshPanel::on_entity_size_apply);
   connect(entity_size_clear_, &QPushButton::clicked, this,
           &GmshPanel::on_entity_size_clear);
-  entity_size_row->addWidget(new QLabel("Dim"));
-  entity_size_row->addWidget(entity_size_dim_);
-  entity_size_row->addWidget(new QLabel("IDs"));
-  entity_size_row->addWidget(entity_size_ids_, 1);
-  entity_size_row->addWidget(entity_size_pick);
+  mesh_form->addRow("Dim", entity_size_dim_);
+  mesh_form->addRow("IDs", entity_size_ids_);
+  mesh_form->addRow(entity_size_pick);
   bind_entity_input_validation(entity_size_ids_, entity_size_dim_, false);
-  entity_size_row->addWidget(new QLabel("Size"));
-  entity_size_row->addWidget(entity_size_value_);
-  entity_size_row->addWidget(entity_size_apply_);
-  entity_size_row->addWidget(entity_size_clear_);
-  auto* entity_size_container = new QWidget();
-  entity_size_container->setLayout(entity_size_row);
-  mesh_form->addRow("Entity Size", entity_size_container);
+  mesh_form->addRow("Size", entity_size_value_);
+  mesh_form->addRow(entity_size_apply_);
+  mesh_form->addRow(entity_size_clear_);
 
   elem_order_ = new QComboBox();
   elem_order_->addItem("Linear (1)", 1);
@@ -808,13 +681,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* pick_btn = new QPushButton("Pick Output");
   connect(pick_btn, &QPushButton::clicked, this, &GmshPanel::on_pick_output);
 
-  auto* path_row = new QHBoxLayout();
-  path_row->addWidget(output_path_);
-  path_row->addWidget(pick_btn);
-
-  auto* path_container = new QWidget();
-  path_container->setLayout(path_row);
-  form->addRow("Mesh Output", path_container);
+  form->addRow("Mesh Output", output_path_);
+  form->addRow(pick_btn);
 
   content_layout->addLayout(form);
 
@@ -847,13 +715,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
     on_generate();
   });
 
-  auto* generate_row = new QHBoxLayout();
-  generate_row->addWidget(generate_btn);
-  generate_row->addWidget(generate_2d_btn);
-  generate_row->addWidget(generate_3d_btn);
-  auto* generate_container = new QWidget();
-  generate_container->setLayout(generate_row);
-  content_layout->addWidget(generate_container);
+  content_layout->addWidget(generate_btn);
+  content_layout->addWidget(generate_2d_btn);
+  content_layout->addWidget(generate_3d_btn);
 
   log_ = new QPlainTextEdit();
   log_->setReadOnly(true);
@@ -866,16 +730,21 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   tune_gmsh_combo(primitive_kind_, 90, 180);
   tune_gmsh_combo(transform_dim_, 90, 120);
   tune_gmsh_combo(boolean_dim_, 90, 120);
-  tune_gmsh_combo(phys_group_list_, 220, 240);
+  tune_gmsh_combo(phys_group_list_, 170, 200);
   tune_gmsh_combo(phys_group_dim_, 70, 120);
   tune_gmsh_combo(field_dim_, 70, 120);
   tune_gmsh_combo(entity_size_dim_, 70, 120);
   tune_gmsh_combo(elem_order_, 140, 160);
-  tune_gmsh_combo(high_order_opt_, 220, 240);
+  tune_gmsh_combo(high_order_opt_, 170, 200);
   tune_gmsh_combo(msh_version_, 110, 140);
   tune_gmsh_combo(mesh_dim_, 90, 120);
   tune_gmsh_combo(algo2d_, 150, 180);
   tune_gmsh_combo(algo3d_, 150, 180);
+
+  // 右侧边栏宽度有限: 表单标签换行到控件上方(垂直布局), 减少横向溢出
+  for (auto* f : findChildren<QFormLayout*>()) {
+    f->setRowWrapPolicy(QFormLayout::WrapAllRows);
+  }
 
   append_log("Gmsh panel ready.");
 #ifndef GMP_ENABLE_GMSH_GUI

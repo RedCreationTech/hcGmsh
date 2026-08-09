@@ -208,6 +208,11 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
             &PropertyEditor::refresh_validation_summary);
   }
 
+  // 右侧边栏宽度有限: 表单标签换行到控件上方(垂直布局), 减少横向溢出
+  for (auto* f : findChildren<QFormLayout*>()) {
+    f->setRowWrapPolicy(QFormLayout::WrapAllRows);
+  }
+
   set_item(nullptr);
 }
 
