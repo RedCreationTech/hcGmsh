@@ -434,18 +434,30 @@ void AttachComboPopupFix(QComboBox* combo) {
 VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   auto* layout = new QVBoxLayout(this);
 
-  auto* header = new QHBoxLayout();
+  // 顶部文件/输出行改为独立容器 top_bar_, 由 MainWindow 迁移到右侧边栏,
+  // 中央区域只保留 3D 场景与变量列表
+  top_bar_ = new QWidget();
+  auto* top_bar_layout = new QVBoxLayout(top_bar_);
+  top_bar_layout->setContentsMargins(0, 0, 0, 0);
+  top_bar_layout->setSpacing(4);
   file_label_ = new QLabel("No file loaded");
+  // 长路径不撑宽边栏, 超出部分直接裁剪
+  file_label_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   open_btn_ = new QPushButton("Open");
   reload_btn_ = new QPushButton("Reload");
   connect(open_btn_, &QPushButton::clicked, this, &VtkViewer::on_open_file);
   connect(reload_btn_, &QPushButton::clicked, this, &VtkViewer::on_reload);
-  header->addWidget(file_label_, 1);
-  header->addWidget(open_btn_);
-  header->addWidget(reload_btn_);
-  layout->addLayout(header);
+  top_bar_layout->addWidget(file_label_);
+  {
+    auto* btn_row = new QHBoxLayout();
+    btn_row->setContentsMargins(0, 0, 0, 0);
+    btn_row->setSpacing(6);
+    btn_row->addWidget(open_btn_);
+    btn_row->addWidget(reload_btn_);
+    btn_row->addStretch(1);
+    top_bar_layout->addLayout(btn_row);
+  }
 
-  auto* output_row = new QHBoxLayout();
   output_label_ = new QLabel("Outputs");
   output_combo_ = new QComboBox();
   AttachComboPopupFix(output_combo_);
@@ -456,10 +468,9 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
       set_exodus_file(path);
     }
   });
-  output_row->addWidget(output_label_);
-  output_row->addWidget(output_combo_, 1);
-  output_row->addWidget(output_pick_);
-  layout->addLayout(output_row);
+  top_bar_layout->addWidget(output_label_);
+  top_bar_layout->addWidget(output_combo_);
+  top_bar_layout->addWidget(output_pick_);
 
   auto* main_split = new QSplitter(Qt::Horizontal, this);
   main_split->setChildrenCollapsible(false);

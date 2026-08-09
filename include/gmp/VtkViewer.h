@@ -59,6 +59,8 @@ class VtkViewer : public QWidget {
 
   // 视口控制区(标量/网格/视图/...), 供 MainWindow 迁移到右侧边栏
   QWidget* control_tabs() const { return control_tabs_; }
+  // 顶部文件/输出操作区, 同样迁移到右侧边栏
+  QWidget* top_bar() const { return top_bar_; }
 
  public slots:
   void set_exodus_file(const QString& path);
@@ -126,6 +128,7 @@ signals:
   QComboBox* repr_combo_ = nullptr;
   QComboBox* scalar_bar_pos_combo_ = nullptr;
   QWidget* control_tabs_ = nullptr;
+  QWidget* top_bar_ = nullptr;
   QComboBox* control_nav_ = nullptr;
   QStackedWidget* control_stack_ = nullptr;
   int scalar_bar_pos_ = 0;  // 0=右下 1=右上 2=左下 3=左上

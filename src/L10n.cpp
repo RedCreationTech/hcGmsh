@@ -71,6 +71,8 @@ const QHash<QString, QString>& zh_dict() {
       // ===== 面板标题与通用按钮 =====
       {"Model Tree", "模型树"},
       {"Viewport", "视口"},
+      {"Plot Preview", "曲线预览"},
+      {"Table Preview", "表格预览"},
       {"Current Module", "当前模块"},
       {"Add", "添加"},
       {"Duplicate", "复制"},

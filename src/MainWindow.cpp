@@ -698,6 +698,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   table_layout->addWidget(table_view, 1);
   center_tabs->addTab(plot_page, "Plot");
   center_tabs->addTab(table_page, "Table");
+  // 页签条与边栏按钮(打开视口/曲线/表格)重复, 隐藏页签条,
+  // 切换完全由边栏按钮驱动; 标题跟随当前页
+  center_tabs->tabBar()->hide();
+  center_tabs->setCurrentIndex(0);
+  connect(center_tabs, &QTabWidget::currentChanged, this,
+          [center_title](int index) {
+            const QStringList titles = {"Viewport", "Plot Preview", "Table Preview"};
+            if (index >= 0 && index < titles.size()) {
+              center_title->setText(titles.at(index));
+            }
+          });
   // 中栏包滚动区: 视口控制行最宽可达 1300+px, 不允许它撑死布局;
   // 窗口较窄时由内部横向滚动条承载, 分割条保持可拖动
   auto* center_scroll = new QScrollArea(center_panel);
@@ -1046,9 +1057,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       if (QWidget* panel = scroll->widget()) {
         if (auto* panel_layout =
                 qobject_cast<QVBoxLayout*>(panel->layout())) {
+          const int ct_pos = qMax(0, panel_layout->count() - 1);
           ct->setParent(panel);
-          panel_layout->insertWidget(qMax(0, panel_layout->count() - 1), ct, 1);
+          panel_layout->insertWidget(ct_pos, ct, 1);
           ct->show();  // setParent 会隐藏控件, 需重新显示
+          // 视口顶部的文件/输出操作区也迁入边栏, 位于控制页之前
+          if (auto* tb = viewer_->top_bar()) {
+            tb->setParent(panel);
+            panel_layout->insertWidget(ct_pos, tb);
+            tb->show();
+          }
         }
       }
     }
