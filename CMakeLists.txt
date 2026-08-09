@@ -41,6 +41,7 @@ endif()
 
 add_executable(gmp_ise
   src/main.cpp
+  resources/icons.qrc
   src/MainWindow.cpp
   src/GmshPanel.cpp
   src/L10n.cpp

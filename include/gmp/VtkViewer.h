@@ -47,6 +47,8 @@ class vtkWarpVector;
 #include <vector>
 #endif
 
+class QTabWidget;
+
 namespace gmp {
 
 class VtkViewer : public QWidget {
@@ -54,6 +56,9 @@ class VtkViewer : public QWidget {
  public:
   explicit VtkViewer(QWidget* parent = nullptr);
   ~VtkViewer() override = default;
+
+  // 视口控制页签(Scalar/Mesh/View/...), 供 MainWindow 迁移到右侧边栏
+  QTabWidget* control_tabs() const { return control_tabs_; }
 
  public slots:
   void set_exodus_file(const QString& path);
@@ -120,6 +125,7 @@ signals:
   QComboBox* preset_combo_ = nullptr;
   QComboBox* repr_combo_ = nullptr;
   QComboBox* scalar_bar_pos_combo_ = nullptr;
+  QTabWidget* control_tabs_ = nullptr;
   int scalar_bar_pos_ = 0;  // 0=右下 1=右上 2=左下 3=左上
   QCheckBox* auto_range_ = nullptr;
   QCheckBox* auto_refresh_ = nullptr;

@@ -463,9 +463,12 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
 
   auto* main_split = new QSplitter(Qt::Horizontal, this);
   main_split->setChildrenCollapsible(false);
+  main_split->setStretchFactor(0, 0);
+  main_split->setStretchFactor(1, 1);
   layout->addWidget(main_split, 1);
 
   auto* left_panel = new QWidget(main_split);
+  left_panel->setMaximumWidth(220);  // Variables 列表限宽, 让 3D 场景占更大比例
   auto* left_layout = new QVBoxLayout(left_panel);
   left_layout->setContentsMargins(0, 0, 0, 0);
   left_layout->setSpacing(6);
@@ -499,12 +502,14 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   right_layout->setSpacing(6);
 
   auto* control_tabs = new QTabWidget(right_panel);
+  control_tabs->setObjectName("controlTabs");
+  control_tabs_ = control_tabs;
   right_layout->addWidget(control_tabs);
   auto make_tab = [control_tabs](const QString& name) {
     auto* tab = new QWidget(control_tabs);
     auto* tab_layout = new QVBoxLayout(tab);
     tab_layout->setContentsMargins(0, 0, 0, 0);
-    tab_layout->setSpacing(6);
+    tab_layout->setSpacing(4);
     control_tabs->addTab(tab, name);
     return tab_layout;
   };

@@ -979,12 +979,29 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   auto* visualization_page = make_module_page(
       "Visualization",
-      "Use this module to inspect mesh and result output interactively. Open full controls in the viewport right panel.",
+      "Control tabs live in this side panel; the viewport stays clean for the 3D scene.",
       {
           {"Open Visualization Tab", [center_tabs]() { center_tabs->setCurrentIndex(0); }},
           {"Show Plot Preview", [center_tabs]() { center_tabs->setCurrentIndex(1); }},
           {"Show Table Preview", [center_tabs]() { center_tabs->setCurrentIndex(2); }},
       });
+
+  // 视口控制页签(Scalar/Mesh/View/...)迁移到右侧边栏,
+  // 让中栏黑色 3D 场景占据全部高度。
+  // make_module_page 的结构是 container > QScrollArea > panel,
+  // 需要插入到滚动区内的 panel 布局底部 stretch 之前
+  if (auto* ct = viewer_ ? viewer_->control_tabs() : nullptr) {
+    if (auto* scroll = visualization_page->findChild<QScrollArea*>()) {
+      if (QWidget* panel = scroll->widget()) {
+        if (auto* panel_layout =
+                qobject_cast<QVBoxLayout*>(panel->layout())) {
+          ct->setParent(panel);
+          panel_layout->insertWidget(qMax(0, panel_layout->count() - 1), ct, 1);
+          ct->show();  // setParent 会隐藏控件, 需重新显示
+        }
+      }
+    }
+  }
 
   auto* results_page = new QWidget(property_stack_);
   auto* results_layout = new QVBoxLayout(results_page);
@@ -2190,6 +2207,14 @@ QTabBar::tab:selected {
 QTabBar::tab:hover:!selected { background: #eef2f8; }
 QTabBar::tear { border: 0; }
 QTabWidget::pane { border: 1px solid #d2d8e0; border-radius: 3px; }
+/* 视口内二级控制页签: 紧凑化, 把空间让给 3D 场景 */
+QTabWidget#controlTabs QTabBar::tab {
+  padding: 4px 10px;
+  min-height: 20px;
+}
+QTabWidget#controlTabs QTabWidget::tab-bar {
+  left: 4px;
+}
 
 QTreeWidget, QPlainTextEdit, QLineEdit, QTableWidget, QComboBox, QSpinBox,
 QDoubleSpinBox, QListWidget {
@@ -2224,14 +2249,14 @@ QComboBox {
   text-align: left;
 }
 QComboBox::down-arrow {
-  image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPScxNycgaGVpZ2h0PScxNycgdmlld0JveD0nMCAwIDE3IDE3Jz48cG9seWdvbiBwb2ludHM9JzMsNSAxMyw1IDgsMTEnIGZpbGw9JyM0NDQnLz48L3N2Zz4=");
-  width: 8px;
-  height: 10px;
+  image: url(":/icons/down-arrow.png");
+  width: 10px;
+  height: 8px;
 }
 QComboBox::down-arrow:on {
-  image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnIHdpZHRoPScxNycgaGVpZ2h0PScxNycgdmlld0JveD0nMCAwIDE3IDE3Jz48cG9seWdvbiBwb2ludHM9JzMsNSAxMyw1IDgsMTEnIGZpbGw9JyMyMjInLz48L3N2Zz4=");
-  width: 8px;
-  height: 10px;
+  image: url(":/icons/down-arrow-open.png");
+  width: 10px;
+  height: 8px;
 }
 QComboBox::drop-down {
   subcontrol-origin: padding;
