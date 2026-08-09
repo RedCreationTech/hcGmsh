@@ -5,11 +5,17 @@
 #include <QComboBox>
 #include <QGroupBox>
 #include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
 #include <QMenu>
+#include <QPlainTextEdit>
 #include <QHash>
 #include <QSettings>
 #include <QTabBar>
 #include <QTabWidget>
+#include <QTableWidget>
+#include <QTreeWidget>
+#include <QVector>
 #include <QWidget>
 
 namespace gmp {
@@ -86,6 +92,7 @@ const QHash<QString, QString>& zh_dict() {
       {"No quick actions", "暂无快捷操作"},
       // ===== 模块页按钮 =====
       {"Open Parts Root", "打开部件根节点"},
+      {"Open Part Root", "打开部件根节点"},
       {"New Part", "新建部件"},
       {"Open Gmsh Panel", "打开 Gmsh 面板"},
       {"Open Mesh Module", "打开网格模块"},
@@ -234,6 +241,231 @@ const QHash<QString, QString>& zh_dict() {
       {"Variables", "变量"},
       {"Outputs", "输出"},
       {"Open Visualization", "打开可视化"},
+      // ===== MainWindow 模块页 =====
+      {"Current entries:", "当前条目:"},
+      {"Double click item to jump to model tree.", "双击条目跳转到模型树。"},
+      {"Open Selected part", "打开所选部件"},
+      {"Open Selected material", "打开所选材料"},
+      {"Open Selected section", "打开所选截面"},
+      {"Open Selected step", "打开所选分析步"},
+      {"Open Selected interaction", "打开所选相互作用"},
+      {"Open Selected load", "打开所选载荷"},
+      {"Define geometric primitives and manage part-level entities. Parts are a user-facing grouping for your geometry and mesh assignments.",
+       "定义几何基元并管理部件级实体。部件是面向用户的几何与网格指派的分组单位。"},
+      {"Create material definitions, tune constitutive laws, and keep properties ready for sections.",
+       "创建材料定义、调整本构关系, 并为截面准备好属性。"},
+      {"Create section assignments to bind materials and options to part regions or sets.",
+       "创建截面指派, 将材料与选项绑定到部件区域或集合。"},
+      {"Combine and instantiate parts into assembly-level units, then map mesh/topology for job-level binding.",
+       "将部件组合实例化为装配级单元, 并映射网格/拓扑以供作业级绑定。"},
+      {"Create analysis steps, control time integration and execution options in the current model setup.",
+       "创建分析步, 控制当前模型设置中的时间积分与执行选项。"},
+      {"Setup contact, ties, and other coupling behaviors between sets/parts.",
+       "设置集合/部件之间的接触、绑定及其他耦合行为。"},
+      {"Create loads, body forces, pressure and thermal sources and map them to mesh groups.",
+       "创建载荷、体力、压力与热源, 并将其映射到网格分组。"},
+      {"Control tabs live in this side panel; the viewport stays clean for the 3D scene.",
+       "控制页签位于此侧边栏; 视口保持简洁以展示 3D 场景。"},
+      {"Review generated outputs and quickly open results in the viewer.",
+       "查看生成的输出, 并在视图中快速打开结果。"},
+      {"No parts yet.", "暂无部件。"},
+      {"No parts yet. Create one from this module or Gmsh panel.",
+       "暂无部件。可在此模块或 Gmsh 面板中创建。"},
+      {"No materials yet.", "暂无材料。"},
+      {"No sections yet.", "暂无截面。"},
+      {"No parts available for assembly yet.", "暂无可用于装配的部件。"},
+      {"No part entries available for assembly.", "暂无可用于装配的部件条目。"},
+      {"No steps yet.", "暂无分析步。"},
+      {"No steps yet. Add at least one step before run.",
+       "暂无分析步。运行前请至少添加一个分析步。"},
+      {"No interactions yet.", "暂无相互作用。"},
+      {"No loads yet.", "暂无载荷。"},
+      {"No step blocks yet.", "暂无分析步块。"},
+      {"Step sequence preview (Executioner uses first step; remaining shown for check):",
+       "分析步序列预览 (Executioner 使用第一个分析步; 其余仅供检查):"},
+      {"Add Step Preset: steady", "添加分析步预设: steady"},
+      {"Plot Preview (from active dataset)", "曲线预览 (来自当前数据集)"},
+      {"Table Preview (from active dataset)", "表格预览 (来自当前数据集)"},
+      {"Tip: full visualization is in Visualization module.",
+       "提示: 完整可视化功能位于“可视化”模块。"},
+      {"Select a result item for quick preview.", "选择结果条目以快速预览。"},
+      {"No file path for this result.", "此结果没有文件路径。"},
+      {"Job/Message Console", "作业/消息控制台"},
+      {"Job Log", "作业日志"},
+      {"Project: Untitled", "项目: 未命名"},
+      {"Saved", "已保存"},
+      {"Modified", "已修改"},
+      {"(None)", "(空)"},
+      // ===== 表头 =====
+      {"Start", "开始"},
+      {"Duration", "耗时"},
+      {"Exec", "程序"},
+      {"Result", "结果文件"},
+      {"Key", "键"},
+      {"Value", "值"},
+      {"Node", "节点"},
+      {"Issues", "问题"},
+      {"Dim", "维度"},
+      {"Tag", "标识"},
+      {"Elements", "单元数"},
+      // ===== 通用下拉项/标签 =====
+      {"All", "全部"},
+      {"New", "新建"},
+      {"Type", "类型"},
+      {"Group", "组"},
+      {"Groups", "分组"},
+      {"Entity", "实体"},
+      {"Mode", "模式"},
+      {"Variable", "变量"},
+      {"Function", "函数"},
+      {"Boundary", "边界"},
+      {"Templates", "模板"},
+      {"Reset", "重置"},
+      {"Front", "前视"},
+      {"Right", "右视"},
+      {"Top", "顶视"},
+      {"Iso", "轴测"},
+      {"Local", "本地"},
+      {"Remote", "远程"},
+      {"Automatic", "自动"},
+      {"Auto", "自动"},
+      {"Linear (1)", "线性 (1)"},
+      {"Quadratic (2)", "二次 (2)"},
+      {"Cubic (3)", "三次 (3)"},
+      {"Quartic (4)", "四次 (4)"},
+      {"High-Order Optimize: Off", "高阶优化: 关"},
+      {"High-Order Optimize: Simple", "高阶优化: 简单"},
+      {"High-Order Optimize: Elastic", "高阶优化: 弹性"},
+      {"High-Order Optimize: Fast Curving", "高阶优化: 快速曲面化"},
+      {"Solver (.e/.exo)", "求解器 (.e/.exo)"},
+      {"Mesh (.msh)", "网格 (.msh)"},
+      {"Text (.txt/.csv/.log/.yaml/.yml)", "文本 (.txt/.csv/.log/.yaml/.yml)"},
+      // ===== PropertyEditor =====
+      {"No Selection", "未选择"},
+      {"Select physical groups to apply.", "选择要应用的物理组。"},
+      {"Selected:", "已选:"},
+      {"Sync", "同步"},
+      {"Bidirectional (Recommended)", "双向 (推荐)"},
+      {"Quick Form Wins", "快捷表单优先"},
+      {"Controls how Advanced Parameters sync with Quick form",
+       "控制高级参数与快捷表单之间的同步方式"},
+      {"No issues.", "无问题。"},
+      {"No validation issues.", "无校验问题。"},
+      {"Selected item preview:", "所选条目预览:"},
+      {"Select a node in the model tree.", "在模型树中选择一个节点。"},
+      {"Apply selection to boundary.", "将所选应用到边界。"},
+      {"Apply selection to block.", "将所选应用到块。"},
+      {"Boundary Groups", "边界分组"},
+      {"Volume Groups", "体分组"},
+      {"(none)", "(无)"},
+      {"Applies defaults for the selected type.", "应用所选类型的默认值。"},
+      {"No description.", "无说明。"},
+      {"Prop Names", "属性名"},
+      {"Prop Values", "属性值"},
+      {"Expression", "表达式"},
+      {"Property Name", "属性名称"},
+      {"Coupled Vars", "耦合变量"},
+      {"Diffusivity", "扩散系数"},
+      {"Displacements", "位移"},
+      // ===== GmshPanel =====
+      {"Summary", "摘要"},
+      {"Stats", "统计"},
+      {"Fields", "场"},
+      {"IDs", "ID 列表"},
+      {"Obj", "对象"},
+      {"Tool", "工具"},
+      {"Size", "尺寸"},
+      {"Size X", "尺寸 X"},
+      {"Size Y", "尺寸 Y"},
+      {"Size Z", "尺寸 Z"},
+      {"Radius", "半径"},
+      {"Origin/Base x", "原点/基点 x"},
+      {"Origin/Base y", "原点/基点 y"},
+      {"Origin/Base z", "原点/基点 z"},
+      {"Size/Axis dx", "尺寸/轴 dx"},
+      {"Size/Axis dy", "尺寸/轴 dy"},
+      {"Size/Axis dz", "尺寸/轴 dz"},
+      {"Rotate Origin x", "旋转原点 x"},
+      {"Rotate Origin y", "旋转原点 y"},
+      {"Rotate Origin z", "旋转原点 z"},
+      {"Rotate Axis ax", "旋转轴 ax"},
+      {"Rotate Axis ay", "旋转轴 ay"},
+      {"Rotate Axis az", "旋转轴 az"},
+      {"Scale Center x", "缩放中心 x"},
+      {"Scale Center y", "缩放中心 y"},
+      {"Scale Center z", "缩放中心 z"},
+      {"DistMin", "最小距离"},
+      {"DistMax", "最大距离"},
+      {"SizeMin", "最小尺寸"},
+      {"SizeMax", "最大尺寸"},
+      {"No geometry loaded", "未加载几何"},
+      {"No model.", "无模型。"},
+      {"No fields.", "无场。"},
+      {"IDs or dim:tag (e.g. 1,2 or 2:5). Empty = all.",
+       "ID 或 dim:tag (如 1,2 或 2:5)。留空 = 全部。"},
+      {"Object IDs or dim:tag (e.g. 1,2 or 3:4)",
+       "对象 ID 或 dim:tag (如 1,2 或 3:4)"},
+      {"Tool IDs or dim:tag (e.g. 3 or 3:5)", "工具 ID 或 dim:tag (如 3 或 3:5)"},
+      {"Entity IDs or dim:tag list", "实体 ID 或 dim:tag 列表"},
+      {"IDs or dim:tag list", "ID 或 dim:tag 列表"},
+      {"Output mesh path (*.msh)", "输出网格路径 (*.msh)"},
+      // ===== MoosePanel =====
+      {"Auto-detect MOOSE executable", "自动检测 MOOSE 可执行文件"},
+      {"Path to moose executable", "MOOSE 可执行文件路径"},
+      {"Input file path (*.i)", "输入文件路径 (*.i)"},
+      {"Working directory (optional)", "工作目录 (可选)"},
+      {"Path to mesh file (.msh)", "网格文件路径 (.msh)"},
+      {"No boundary groups detected yet.", "尚未检测到边界分组。"},
+      {"Extra args (e.g. --n-threads=4)", "额外参数 (如 --n-threads=4)"},
+      {"GeneratedMesh (Transient Diffusion)", "GeneratedMesh (瞬态扩散)"},
+      {"FileMesh (Transient Diffusion)", "FileMesh (瞬态扩散)"},
+      {"GeneratedMesh (Nonlinear Heat)", "GeneratedMesh (非线性热传导)"},
+      {"GeneratedMesh (Thermo-Mechanics)", "GeneratedMesh (热-力耦合)"},
+      {"FileMesh (Thermo-Mechanics)", "FileMesh (热-力耦合)"},
+      // ===== VtkViewer =====
+      {"No file loaded", "未加载文件"},
+      {"Failed to load mesh", "加载网格失败"},
+      {"Mesh preview requires libgmsh", "网格预览需要 libgmsh"},
+      {"No data", "无数据"},
+      {"No array selected", "未选择数组"},
+      {"Invalid array", "无效数组"},
+      {"vtk disabled", "VTK 已禁用"},
+      {"No stats", "无统计"},
+      {"No plot widget", "无曲线控件"},
+      {"No table widget", "无表格控件"},
+      {"No vector data loaded", "未加载向量数据"},
+      {"No vector arrays (>=2 components)", "无向量数组 (>=2 个分量)"},
+      {"No selectable vector array", "无可选向量数组"},
+      {"Array must have 2+ components", "数组必须至少有 2 个分量"},
+      {"No compatible vector data", "无兼容向量数据"},
+      {"Pick: disabled", "拾取: 已禁用"},
+      {"Pick: cleared", "拾取: 已清除"},
+      {"Pick: none", "拾取: 无"},
+      {"Pick: click to inspect", "拾取: 点击图元查看信息"},
+      {"Probe: disabled", "探针: 已禁用"},
+      {"Probe: cleared", "探针: 已清除"},
+      {"Probe: none", "探针: 无"},
+      {"Groups: none", "分组: 无"},
+      {"Apply to Deform", "应用到变形"},
+      {"Auto-sync deformation vector", "自动同步变形向量"},
+      {"Applies warping using the selected vector array.",
+       "使用所选向量数组施加变形。"},
+      {"Rows", "行数"},
+      {"Opacity", "不透明度"},
+      {"Shrink", "收缩"},
+      {"VTK Viewer Disabled\n(Rebuild with GMP_ENABLE_VTK_VIEWER=ON)",
+       "VTK 查看器已禁用\n(使用 GMP_ENABLE_VTK_VIEWER=ON 重新构建)"},
+      // ===== 模块标题 (页签名 + " Module") =====
+      {"Part Module", "部件模块"},
+      {"Property Module", "属性模块"},
+      {"Material Module", "材料模块"},
+      {"Section Module", "截面模块"},
+      {"Assembly Module", "装配模块"},
+      {"Step Module", "分析步模块"},
+      {"Interaction Module", "相互作用模块"},
+      {"Load Module", "载荷模块"},
+      {"Visualization Module", "可视化模块"},
+      {"Results Module", "结果模块"},
   };
   return dict;
 }
@@ -251,14 +483,58 @@ const QHash<QString, QString>& en_dict() {
   return reverse;
 }
 
+// 动态拼接串的前缀翻译: 整串匹配失败时, 若文本以表中英文前缀开头,
+// 则仅替换前缀部分 (如 "Missing required fields: dt, end_time")
+const QVector<QPair<QString, QString>>& zh_prefixes() {
+  static const QVector<QPair<QString, QString>> prefixes = {
+      {"Missing required fields: ", "缺失必填字段: "},
+      {"Workflow status: ", "流程状态: "},
+      {"Invalid entities: ", "无效实体: "},
+      {"No file attached for: ", "无关联文件: "},
+      {"Entities: ", "实体: "},
+      {"Project: ", "项目: "},
+      {"Preview: ", "预览: "},
+      {"Groups: ", "分组: "},
+      {"Pick: ", "拾取: "},
+      {"Probe: ", "探针: "},
+      {"status: ", "状态: "},
+      {"Add ", "添加 "},
+  };
+  return prefixes;
+}
+
 QString translate_text(const QString& text, Language lang) {
   if (text.isEmpty()) {
     return text;
   }
-  if (lang == Language::Chinese) {
-    return zh_dict().value(text, text);
+  // 菜单标题可能带快捷键标记 (如 "&File"), 去掉 & 翻译后还原
+  if (text.startsWith('&')) {
+    const QString rest = text.mid(1);
+    const QString translated = translate_text(rest, lang);
+    return translated == rest ? text : "&" + translated;
   }
-  return en_dict().value(text, text);
+  if (lang == Language::Chinese) {
+    const auto it = zh_dict().constFind(text);
+    if (it != zh_dict().constEnd()) {
+      return it.value();
+    }
+    for (const auto& p : zh_prefixes()) {
+      if (text.startsWith(p.first)) {
+        return p.second + text.mid(p.first.size());
+      }
+    }
+    return text;
+  }
+  const auto it = en_dict().constFind(text);
+  if (it != en_dict().constEnd()) {
+    return it.value();
+  }
+  for (const auto& p : zh_prefixes()) {
+    if (text.startsWith(p.second)) {
+      return p.first + text.mid(p.second.size());
+    }
+  }
+  return text;
 }
 
 void translate_widget(QWidget* w, Language lang) {
@@ -272,6 +548,37 @@ void translate_widget(QWidget* w, Language lang) {
     box->setTitle(translate_text(box->title(), lang));
   } else if (auto* label = qobject_cast<QLabel*>(w)) {
     label->setText(translate_text(label->text(), lang));
+  } else if (auto* list = qobject_cast<QListWidget*>(w)) {
+    for (int i = 0; i < list->count(); ++i) {
+      if (auto* item = list->item(i)) {
+        item->setText(translate_text(item->text(), lang));
+        item->setToolTip(translate_text(item->toolTip(), lang));
+      }
+    }
+    list->setToolTip(translate_text(list->toolTip(), lang));
+  } else if (auto* table = qobject_cast<QTableWidget*>(w)) {
+    for (int i = 0; i < table->columnCount(); ++i) {
+      if (auto* header = table->horizontalHeaderItem(i)) {
+        header->setText(translate_text(header->text(), lang));
+      }
+    }
+  } else if (auto* edit = qobject_cast<QLineEdit*>(w)) {
+    // 只翻占位符; 编辑框内容是用户数据/路径, 不动
+    edit->setPlaceholderText(translate_text(edit->placeholderText(), lang));
+  } else if (auto* plain = qobject_cast<QPlainTextEdit*>(w)) {
+    plain->setPlaceholderText(translate_text(plain->placeholderText(), lang));
+    // 只读 plain text 的内容是程序生成的固定提示 (如 "No data"),
+    // 整串在字典中命中才替换, 日志/数据内容不受影响
+    if (plain->isReadOnly()) {
+      plain->setPlainText(translate_text(plain->toPlainText(), lang));
+    }
+  }
+  if (auto* tree = qobject_cast<QTreeWidget*>(w)) {
+    if (auto* header = tree->headerItem()) {
+      for (int i = 0; i < header->columnCount(); ++i) {
+        header->setText(i, translate_text(header->text(i), lang));
+      }
+    }
   }
   if (auto* tabs = qobject_cast<QTabWidget*>(w)) {
     for (int i = 0; i < tabs->count(); ++i) {
@@ -287,6 +594,7 @@ void translate_widget(QWidget* w, Language lang) {
     for (int i = 0; i < combo->count(); ++i) {
       combo->setItemText(i, translate_text(combo->itemText(i), lang));
     }
+    combo->setToolTip(translate_text(combo->toolTip(), lang));
   }
 }
 

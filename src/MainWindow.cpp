@@ -4037,6 +4037,15 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
       if (viewer_) {
         viewer_->set_mesh_file(mesh_path);
       }
+      // 可选: GMP_TOUR_NAV=<index> 切换边栏控制页(0=标量 1=网格 2=视图 3=切片...)
+      const QByteArray nav = qgetenv("GMP_TOUR_NAV");
+      if (!nav.isEmpty() && viewer_ && viewer_->control_tabs()) {
+        if (auto* nav_combo =
+                viewer_->control_tabs()->findChild<QComboBox*>()) {
+          nav_combo->setCurrentIndex(QString::fromLocal8Bit(nav).toInt());
+        }
+      }
+      module_tabs_->setCurrentIndex(10);  // Visualization
     });
     // 直接用 VTK 离屏渲染导出一张视口图（绕过 Qt grab 的时机问题）
     QTimer::singleShot(6000, this, [this, dir]() {

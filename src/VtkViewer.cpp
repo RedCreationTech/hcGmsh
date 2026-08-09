@@ -533,6 +533,17 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
       layout->addWidget(w);
     }
   };
+  // 窄控件紧凑同行(复选框/窄下拉/按钮等), 行尾自动补 stretch
+  auto hrow = [](QVBoxLayout* layout, std::initializer_list<QWidget*> ws) {
+    auto* row = new QHBoxLayout();
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(6);
+    for (auto* w : ws) {
+      row->addWidget(w);
+    }
+    row->addStretch(1);
+    layout->addLayout(row);
+  };
 
   auto* scalar_layout = make_tab("Scalar");
 
@@ -589,7 +600,9 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   vadd(scalar_layout,
        {new QLabel("Scalar"), array_combo_, new QLabel("Preset"),
         preset_combo_, new QLabel("Repr"), repr_combo_, new QLabel("Bar Pos"),
-        scalar_bar_pos_combo_, auto_range_, range_min_, range_max_});
+        scalar_bar_pos_combo_});
+  hrow(scalar_layout, {auto_range_, range_min_, range_max_});
+  scalar_layout->addStretch(1);
 
   auto* mesh_layout = make_tab("Mesh");
   show_faces_ = new QCheckBox("Faces");
@@ -629,10 +642,10 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   AttachComboPopupFix(mesh_group_);
   connect(mesh_group_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this](int) { update_mesh_pipeline(); });
+  hrow(mesh_layout, {new QLabel("Mesh"), show_faces_, show_edges_, show_shell_});
+  hrow(mesh_layout, {show_nodes_, show_quality_});
   vadd(mesh_layout,
-       {new QLabel("Mesh"), show_faces_, show_edges_, show_shell_, show_nodes_,
-        show_quality_, new QLabel("Dim"), mesh_dim_, new QLabel("Group"),
-        mesh_group_});
+       {new QLabel("Dim"), mesh_dim_, new QLabel("Group"), mesh_group_});
 
   mesh_entity_ = new QComboBox();
   AttachComboPopupFix(mesh_entity_);
@@ -687,9 +700,11 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
     }
   });
   vadd(mesh_layout,
-       {new QLabel("Type"), mesh_type_, new QLabel("Opacity"), mesh_opacity_,
-        new QLabel("Shrink"), mesh_shrink_, mesh_scalar_bar_, pick_enable_,
-        pick_mode_, pick_clear_});
+       {new QLabel("Type"), mesh_type_});
+  hrow(mesh_layout, {new QLabel("Opacity"), mesh_opacity_, new QLabel("Shrink"),
+                     mesh_shrink_});
+  hrow(mesh_layout, {mesh_scalar_bar_, pick_enable_, pick_mode_, pick_clear_});
+  mesh_layout->addStretch(1);
 
   auto* view_layout = make_tab("View");
   view_combo_ = new QComboBox();
@@ -747,8 +762,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
     selected_cell_id_ = -1;
     update_mesh_pipeline();
   });
-  vadd(view_layout,
-       {view_combo_, view_apply_, show_axes_, show_outline_, reset_filters});
+  hrow(view_layout, {view_combo_, view_apply_});
+  hrow(view_layout, {show_axes_, show_outline_, reset_filters});
 
   pick_info_ = new QLabel("Pick: disabled");
   view_layout->addWidget(pick_info_);
@@ -767,12 +782,22 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
           this, [this](int) { update_mesh_pipeline(); });
   connect(slice_slider_, &QSlider::valueChanged, this,
           [this](int) { update_mesh_pipeline(); });
-  vadd(slice_layout, {slice_enable_, slice_axis_, slice_slider_});
+  {
+    auto* slice_row = new QHBoxLayout();
+    slice_row->setContentsMargins(0, 0, 0, 0);
+    slice_row->setSpacing(6);
+    slice_row->addWidget(slice_enable_);
+    slice_row->addWidget(slice_axis_);
+    slice_row->addWidget(slice_slider_, 1);
+    slice_layout->addLayout(slice_row);
+  }
+  slice_layout->addStretch(1);
 
   mesh_legend_ = new QLabel();
   mesh_legend_->setWordWrap(true);
   mesh_legend_->setText("Groups: none");
   view_layout->addWidget(mesh_legend_);
+  view_layout->addStretch(1);
 
   auto* time_layout = make_tab("Time");
   auto_refresh_ = new QCheckBox("Auto Refresh");
@@ -795,13 +820,22 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   debounce_timer_->setSingleShot(true);
   connect(debounce_timer_, &QTimer::timeout, this,
           &VtkViewer::on_auto_refresh_tick);
-  vadd(time_layout, {auto_refresh_, new QLabel("ms"), refresh_ms_});
+  hrow(time_layout, {auto_refresh_, refresh_ms_, new QLabel("ms")});
 
   time_slider_ = new QSlider(Qt::Horizontal);
   time_slider_->setRange(0, 0);
   time_label_ = new QLabel("t=0");
   connect(time_slider_, &QSlider::valueChanged, this, &VtkViewer::on_time_changed);
-  vadd(time_layout, {new QLabel("Time"), time_slider_, time_label_});
+  {
+    auto* time_row = new QHBoxLayout();
+    time_row->setContentsMargins(0, 0, 0, 0);
+    time_row->setSpacing(6);
+    time_row->addWidget(new QLabel("Time"));
+    time_row->addWidget(time_slider_, 1);
+    time_row->addWidget(time_label_);
+    time_layout->addLayout(time_row);
+  }
+  time_layout->addStretch(1);
 
   auto* vector_layout = make_tab("Vector");
   vector_array_combo_ = new QComboBox();
@@ -811,9 +845,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   vector_apply_to_deform_ = new QPushButton("Apply to Deform");
   vector_info_ = new QLabel("No vector data loaded");
   vector_info_->setWordWrap(true);
-  vadd(vector_layout,
-       {new QLabel("Vector"), vector_array_combo_, vector_auto_sync_deform_,
-        vector_apply_to_deform_});
+  vadd(vector_layout, {new QLabel("Vector"), vector_array_combo_});
+  hrow(vector_layout, {vector_auto_sync_deform_, vector_apply_to_deform_});
   vector_layout->addWidget(vector_info_);
   vector_layout->addStretch(1);
   connect(vector_array_combo_,
@@ -865,9 +898,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   deform_scale_->setRange(0.0, 1000.0);
   deform_scale_->setSingleStep(0.1);
   deform_scale_->setValue(1.0);
-  vadd(deform_layout,
-       {deform_enable_, new QLabel("Vector"), deform_vector_,
-        new QLabel("Scale"), deform_scale_});
+  vadd(deform_layout, {deform_enable_, new QLabel("Vector"), deform_vector_});
+  hrow(deform_layout, {new QLabel("Scale"), deform_scale_});
   auto* deform_hint = new QLabel(
       "Applies warping using the selected vector array.", control_stack_);
   deform_hint->setStyleSheet("color: #666;");
@@ -904,8 +936,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   probe_mode_->addItem("Cell", 1);
   AttachComboPopupFix(probe_mode_);
   probe_clear_ = new QPushButton("Clear");
-  vadd(probe_layout,
-       {probe_enable_, new QLabel("Mode"), probe_mode_, probe_clear_});
+  hrow(probe_layout, {probe_enable_, new QLabel("Mode"), probe_mode_,
+                      probe_clear_});
   probe_info_ = new QLabel("Probe: disabled");
   probe_info_->setWordWrap(true);
   probe_layout->addWidget(probe_info_);
@@ -935,7 +967,7 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   auto* plot_layout = make_tab("Plot");
   plot_refresh_btn_ = new QPushButton("Refresh");
   plot_stats_ = new QLabel("No data");
-  vadd(plot_layout, {plot_refresh_btn_, plot_stats_});
+  hrow(plot_layout, {plot_refresh_btn_, plot_stats_});
   plot_view_ = new QPlainTextEdit();
   plot_view_->setReadOnly(true);
   plot_view_->setLineWrapMode(QPlainTextEdit::NoWrap);
@@ -956,9 +988,9 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   table_rows_spin_->setValue(100);
   table_refresh_btn_ = new QPushButton("Refresh");
   table_stats_ = new QLabel("No data");
-  vadd(table_layout,
-       {new QLabel("Rows"), table_rows_spin_, table_refresh_btn_,
-        table_stats_});
+  hrow(table_layout,
+       {new QLabel("Rows"), table_rows_spin_, table_refresh_btn_});
+  table_layout->addWidget(table_stats_);
   table_view_ = new QTableWidget();
   table_view_->setSelectionBehavior(QAbstractItemView::SelectRows);
   table_view_->setSelectionMode(QAbstractItemView::SingleSelection);
