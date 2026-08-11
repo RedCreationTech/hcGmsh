@@ -3,7 +3,10 @@
 #include <QWidget>
 #include <QString>
 #include <QDateTime>
+#include <QList>
 #include <QVariantMap>
+
+#include "gmp/SketchDocument.h"
 
 class QLabel;
 class QCheckBox;
@@ -42,6 +45,8 @@ class vtkLookupTable;
 class vtkCellPicker;
 class vtkCallbackCommand;
 class vtkWarpVector;
+class vtkInteractorStyle;
+class vtkInteractorStyleImage;
 
 #include <vtkSmartPointer.h>
 #include <vector>
@@ -50,6 +55,17 @@ class vtkWarpVector;
 class QStackedWidget;
 
 namespace gmp {
+
+// 草图绘制工具 (VtkViewer::set_sketch_tool 参数,
+// 与 SketchPanel::tool_selected 信号的 int 值一一对应)
+enum SketchTool {
+  SketchToolSelect = 0,     // 选择 (点击单选, Shift+点击切换多选)
+  SketchToolDrawLine = 1,   // 两点直线
+  SketchToolDrawCircle = 2, // 圆心 + 半径点
+  SketchToolDrawArc = 3,    // 三点式: 圆心 + 起点(定半径/起始角) + 终点角
+  SketchToolDelete = 4,     // 点击删除图元
+  SketchToolDrawRectangle = 5  // 两对角点轴对齐矩形 (生成 4 线 + 角点重合约束)
+};
 
 class VtkViewer : public QWidget {
   Q_OBJECT
@@ -63,6 +79,32 @@ class VtkViewer : public QWidget {
   QWidget* top_bar() const { return top_bar_; }
 
  public slots:
+  // 2D 草图模式: 相机切到 XY 正交俯视(平行投影, +Z 看向原点, view-up +Y),
+  // 交互样式换成 vtkInteractorStyleImage(禁旋转); 关闭后恢复透视投影与原样式。
+  // 2D 模式下 apply_view_preset 不生效。
+  void set_2d_mode(bool on);
+  bool is_2d_mode() const { return mode_2d_; }
+
+  // ---- 草图编辑会话 (WS1) ----
+  // 进入草图编辑: doc 为非拥有指针(由 MainWindow 持有), viewer 直接改它;
+  // 进入时自动开 2D 模式并渲染草图; 传 nullptr 退出编辑并恢复 3D 视图。
+  void set_sketch_document(SketchDocument* doc);
+  SketchDocument* sketch_document() const { return sketch_doc_; }
+  // 切换当前绘制工具, 取值为 SketchTool 枚举; 切换会取消进行中的绘制
+  void set_sketch_tool(int tool);
+  int sketch_tool() const { return sketch_tool_; }
+  // 当前选中图元 id 列表
+  QList<int> sketch_selection() const { return sketch_selection_; }
+  // 为当前选中图元添加几何约束 (type 为 SketchConstraintType 的 int 值:
+  // Horizontal/Vertical/Parallel/Perpendicular/Coincident 等),
+  // 选中图元数量/类型不满足时静默忽略; 成功后调用 SketchSolver::solve
+  // 尝试求解(容忍失败)并发出 sketch_modified()
+  void add_constraint_for_selection(int type);
+  // 为选中图元添加 driving 尺寸约束 (type 为 Distance/Radius),
+  // value 为目标值(必须 > 0); 同样尝试求解并发出 sketch_modified()
+  void add_dimension_for_selection(int type, double value);
+  // 外部(非交互)改动 doc 后请求重绘草图
+  void refresh_sketch();
   void set_exodus_file(const QString& path);
   void set_exodus_history(const QStringList& paths);
   bool save_screenshot(const QString& path);
@@ -79,6 +121,12 @@ class VtkViewer : public QWidget {
 signals:
   void mesh_group_picked(int dim, int tag);
   void mesh_entity_picked(int dim, int tag);
+  // 交互改动了草图 doc (增删图元/增删约束/求解回写), MainWindow 据此序列化
+  void sketch_modified();
+  // 草图选中集变化
+  void sketch_selection_changed();
+  // 草图编辑中鼠标的世界坐标 (XY 平面, 毫米), 供面板显示
+  void sketch_cursor_moved(double x, double y);
 
  private slots:
   void on_time_changed(int index);
@@ -120,7 +168,29 @@ signals:
   void update_plot_view();
   void update_table_view();
 
+  // ---- 草图编辑内部实现 (非 VTK 构建下为空实现) ----
+  void rebuild_sketch_actors();    // 全量重建草图/选中高亮 actor
+  void update_sketch_preview();    // 仅重建橡皮筋预览 actor
+  void sketch_press(const SketchPoint2d& pt, bool shift);  // 左键按下分发
+  void sketch_move(const SketchPoint2d& pt);               // 鼠标移动(预览/坐标)
+  void sketch_delete_selected();
+  bool sketch_display_to_world(int x, int y, SketchPoint2d* out) const;
+  double sketch_pick_tol() const;  // 拾取/吸附容差 (世界单位, 约 10 像素)
+  SketchPoint2d sketch_snap(const SketchPoint2d& pt) const;  // 端点吸附
+  void set_sketch_selection(const QList<int>& ids);
+  void solve_sketch_and_refresh();  // 调 SketchSolver(容忍失败) + 重绘 + 发信号
+
   QString current_file_;
+  bool mode_2d_ = false;  // 2D 草图模式标志(非 VTK 构建下也保留, 便于状态查询)
+
+  // ---- 草图编辑会话状态 (非 VTK 构建下同样保留, 保证 stub 可编译) ----
+  SketchDocument* sketch_doc_ = nullptr;  // 非拥有, MainWindow 持有
+  int sketch_tool_ = SketchToolSelect;
+  QList<int> sketch_selection_;           // 选中图元 id
+  SketchPoint2d sketch_cursor_{};         // 最近一次鼠标世界坐标
+  int sketch_stage_ = 0;                  // 绘制进度: 0=待首点 1/2=已定锚点
+  SketchPoint2d sketch_anchor1_{};        // 第一个锚点 (线起点/圆心)
+  SketchPoint2d sketch_anchor2_{};        // 第二个锚点 (弧起点, 定半径/起始角)
   QLabel* file_label_ = nullptr;
   QPushButton* open_btn_ = nullptr;
   QComboBox* array_combo_ = nullptr;
@@ -260,6 +330,18 @@ signals:
   vtkSmartPointer<vtkCellPicker> picker_;
   vtkSmartPointer<vtkCallbackCommand> pick_callback_;
   vtkSmartPointer<vtkWarpVector> warp_filter_;
+  vtkSmartPointer<vtkInteractorStyle> style_3d_;
+  vtkSmartPointer<vtkInteractorStyleImage> style_2d_;
+
+  // ---- 草图渲染/交互 (WS1) ----
+  vtkSmartPointer<vtkPolyDataMapper> sketch_mapper_;         // 全部图元
+  vtkSmartPointer<vtkActor> sketch_actor_;
+  vtkSmartPointer<vtkPolyDataMapper> sketch_sel_mapper_;     // 选中高亮
+  vtkSmartPointer<vtkActor> sketch_sel_actor_;
+  vtkSmartPointer<vtkPolyDataMapper> sketch_preview_mapper_; // 橡皮筋预览
+  vtkSmartPointer<vtkActor> sketch_preview_actor_;
+  vtkSmartPointer<vtkCallbackCommand> sketch_move_callback_; // 鼠标移动观察器
+  vtkSmartPointer<vtkCallbackCommand> sketch_key_callback_;  // Delete 键观察器
   bool first_render_ = true;
   bool pipeline_ready_ = false;
   bool actor_added_ = false;

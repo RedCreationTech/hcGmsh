@@ -25,10 +25,12 @@
 #include <QtCore/Qt>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <unordered_map>
 
 #include "gmp/ComboPopupFix.h"
+#include "gmp/SketchSolver.h"
 
 #ifdef GMP_ENABLE_VTK_VIEWER
 #include <QVTKOpenGLNativeWidget.h>
@@ -62,6 +64,7 @@
 #include <vtkIntArray.h>
 #include <vtkUnstructuredGrid.h>
 #include <vtkPoints.h>
+#include <vtkCellArray.h>
 #include <vtkCellType.h>
 #include <vtkVertexGlyphFilter.h>
 #include <vtkRenderer.h>
@@ -73,6 +76,7 @@
 #include <vtkCallbackCommand.h>
 #include <vtkRenderWindowInteractor.h>
 #include <vtkInteractorStyle.h>
+#include <vtkInteractorStyleImage.h>
 #include <vtkCommand.h>
 #endif
 
@@ -1783,6 +1787,17 @@ void VtkViewer::init_vtk() {
       if (!self || !iren) {
         return;
       }
+      // 草图编辑会话中左键完全由绘制/选择逻辑接管,
+      // 不再转发给交互样式(避免 vtkInteractorStyleImage 的窗宽窗位拖拽)
+      if (self->sketch_doc_) {
+        int spos[2] = {0, 0};
+        iren->GetEventPosition(spos);
+        SketchPoint2d wpt;
+        if (self->sketch_display_to_world(spos[0], spos[1], &wpt)) {
+          self->sketch_press(wpt, iren->GetShiftKey() != 0);
+        }
+        return;
+      }
       if ((self->pick_enable_ && self->pick_enable_->isChecked()) ||
           (self->probe_enable_ && self->probe_enable_->isChecked())) {
         int pos[2] = {0, 0};
@@ -1795,6 +1810,45 @@ void VtkViewer::init_vtk() {
       }
     });
     interactor->AddObserver(vtkCommand::LeftButtonPressEvent, pick_callback_);
+  }
+
+  // 草图编辑: 鼠标移动 (橡皮筋预览 + 世界坐标上报) 与 Delete 键删除选中图元。
+  // 仅在草图会话 (sketch_doc_ 非空) 中生效, 不影响 3D 视图交互。
+  if (interactor && !sketch_move_callback_) {
+    sketch_move_callback_ = vtkSmartPointer<vtkCallbackCommand>::New();
+    sketch_move_callback_->SetClientData(this);
+    sketch_move_callback_->SetCallback([](vtkObject* caller, unsigned long,
+                                          void* client_data, void*) {
+      auto* self = static_cast<VtkViewer*>(client_data);
+      auto* iren = vtkRenderWindowInteractor::SafeDownCast(caller);
+      if (!self || !iren || !self->sketch_doc_) {
+        return;
+      }
+      int pos[2] = {0, 0};
+      iren->GetEventPosition(pos);
+      SketchPoint2d wpt;
+      if (self->sketch_display_to_world(pos[0], pos[1], &wpt)) {
+        self->sketch_move(wpt);
+      }
+    });
+    interactor->AddObserver(vtkCommand::MouseMoveEvent, sketch_move_callback_);
+  }
+  if (interactor && !sketch_key_callback_) {
+    sketch_key_callback_ = vtkSmartPointer<vtkCallbackCommand>::New();
+    sketch_key_callback_->SetClientData(this);
+    sketch_key_callback_->SetCallback([](vtkObject* caller, unsigned long,
+                                         void* client_data, void*) {
+      auto* self = static_cast<VtkViewer*>(client_data);
+      auto* iren = vtkRenderWindowInteractor::SafeDownCast(caller);
+      if (!self || !iren || !self->sketch_doc_) {
+        return;
+      }
+      const char* sym = iren->GetKeySym();
+      if (sym && (strcmp(sym, "Delete") == 0 || strcmp(sym, "BackSpace") == 0)) {
+        self->sketch_delete_selected();
+      }
+    });
+    interactor->AddObserver(vtkCommand::KeyPressEvent, sketch_key_callback_);
   }
 
   // 左下角 XYZ 方向指示（vtkOrientationMarkerWidget），由 View 页签 Axes 开关控制
@@ -3712,6 +3766,9 @@ void VtkViewer::update_scene_extras() {
 
 void VtkViewer::apply_view_preset(int preset) {
 #ifdef GMP_ENABLE_VTK_VIEWER
+  if (mode_2d_) {
+    return;  // 2D 草图模式下视角预设不生效
+  }
   if (!renderer_) {
     return;
   }
@@ -3766,6 +3823,787 @@ void VtkViewer::apply_view_preset(int preset) {
 #else
   Q_UNUSED(preset);
 #endif
+}
+
+void VtkViewer::set_2d_mode(bool on) {
+  mode_2d_ = on;
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (!renderer_ || !render_window_) {
+    return;
+  }
+  auto* iren = render_window_->GetInteractor();
+  auto* cam = renderer_->GetActiveCamera();
+  if (on) {
+    if (iren) {
+      if (!style_3d_) {
+        // GetInteractorStyle 返回 vtkInteractorObserver*, 需向下转换保存
+        style_3d_ =
+            vtkInteractorStyle::SafeDownCast(iren->GetInteractorStyle());
+      }
+      if (!style_2d_) {
+        style_2d_ = vtkSmartPointer<vtkInteractorStyleImage>::New();
+      }
+      iren->SetInteractorStyle(style_2d_);
+    }
+    if (cam) {
+      cam->SetParallelProjection(true);
+      cam->SetPosition(0.0, 0.0, 1.0);
+      cam->SetFocalPoint(0.0, 0.0, 0.0);
+      cam->SetViewUp(0.0, 1.0, 0.0);
+    }
+    // ResetCamera 保持视线方向(-Z)并重新取景, 无数据时维持默认俯视
+    renderer_->ResetCamera();
+    renderer_->ResetCameraClippingRange();
+  } else {
+    if (iren && style_3d_) {
+      iren->SetInteractorStyle(style_3d_);
+    }
+    if (cam) {
+      cam->SetParallelProjection(false);
+    }
+    renderer_->ResetCamera();
+    renderer_->ResetCameraClippingRange();
+  }
+  render_window_->Render();
+#endif
+}
+
+// ==================== 草图编辑会话 (WS1) ====================
+
+#ifdef GMP_ENABLE_VTK_VIEWER
+namespace {
+
+// 把单个图元离散成折线并追加到 polydata; 同时把特征点(端点/圆心)追加为顶点
+void append_sketch_entity(const SketchEntity& e, vtkPoints* pts,
+                          vtkCellArray* lines, vtkCellArray* verts) {
+  if (!pts || !lines || !verts) {
+    return;
+  }
+  auto add_point = [pts](const SketchPoint2d& p) {
+    const vtkIdType id = pts->InsertNextPoint(p.x, p.y, 0.0);
+    return id;
+  };
+  auto add_vertex = [pts, verts](const SketchPoint2d& p) {
+    const vtkIdType id = pts->InsertNextPoint(p.x, p.y, 0.0);
+    verts->InsertNextCell(1, &id);
+  };
+  if (e.type == SketchEntityType::Line) {
+    const vtkIdType a = add_point(e.p1);
+    const vtkIdType b = add_point(e.p2);
+    lines->InsertNextCell(2);
+    lines->InsertCellPoint(a);
+    lines->InsertCellPoint(b);
+    add_vertex(e.p1);
+    add_vertex(e.p2);
+    return;
+  }
+  // Circle/Arc 离散为折线段
+  constexpr double kTwoPi = 6.28318530717958647692;
+  double start = 0.0;
+  double sweep = kTwoPi;
+  if (e.type == SketchEntityType::Arc) {
+    start = e.start_angle;
+    sweep = e.end_angle - e.start_angle;
+    while (sweep <= 0.0) {
+      sweep += kTwoPi;  // 约定逆时针为正
+    }
+  }
+  int n = static_cast<int>(sweep / kTwoPi * 96.0);
+  n = std::max(8, std::min(96, n));
+  std::vector<vtkIdType> ids;
+  ids.reserve(static_cast<size_t>(n) + 1);
+  for (int i = 0; i <= n; ++i) {
+    const double ang = start + sweep * static_cast<double>(i) / n;
+    SketchPoint2d p{e.center.x + e.radius * std::cos(ang),
+                    e.center.y + e.radius * std::sin(ang)};
+    ids.push_back(add_point(p));
+  }
+  lines->InsertNextCell(static_cast<vtkIdType>(ids.size()));
+  for (const vtkIdType id : ids) {
+    lines->InsertCellPoint(id);
+  }
+  add_vertex(e.center);
+  if (e.type == SketchEntityType::Arc) {
+    SketchPoint2d p1, p2;
+    if (SketchDocument::point_at_role(e, SketchPointRole::Start, &p1)) {
+      add_vertex(p1);
+    }
+    if (SketchDocument::point_at_role(e, SketchPointRole::End, &p2)) {
+      add_vertex(p2);
+    }
+  }
+}
+
+// 图元可用于 Coincident 约束的角色点集合
+std::vector<SketchPointRole> snap_roles_for(const SketchEntity& e) {
+  switch (e.type) {
+    case SketchEntityType::Line:
+      return {SketchPointRole::Start, SketchPointRole::End};
+    case SketchEntityType::Arc:
+      return {SketchPointRole::Start, SketchPointRole::End,
+              SketchPointRole::Center};
+    case SketchEntityType::Circle:
+      return {SketchPointRole::Center};
+  }
+  return {};
+}
+
+double dist2d(const SketchPoint2d& a, const SketchPoint2d& b) {
+  return std::hypot(a.x - b.x, a.y - b.y);
+}
+
+}  // namespace
+#endif
+
+void VtkViewer::set_sketch_document(SketchDocument* doc) {
+  if (sketch_doc_ == doc) {
+    refresh_sketch();
+    return;
+  }
+  sketch_doc_ = doc;
+  sketch_selection_.clear();
+  sketch_stage_ = 0;
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (doc) {
+    // 一次性创建草图 actor: 底层图元 / 选中高亮 / 橡皮筋预览
+    if (!sketch_actor_ && renderer_) {
+      sketch_mapper_ = vtkSmartPointer<vtkPolyDataMapper>::New();
+      sketch_actor_ = vtkSmartPointer<vtkActor>::New();
+      sketch_actor_->SetMapper(sketch_mapper_);
+      sketch_actor_->GetProperty()->SetColor(0.75, 0.85, 0.95);
+      sketch_actor_->GetProperty()->SetLineWidth(2.0);
+      sketch_actor_->GetProperty()->SetPointSize(7.0);
+      sketch_actor_->SetPickable(0);
+
+      sketch_sel_mapper_ = vtkSmartPointer<vtkPolyDataMapper>::New();
+      sketch_sel_actor_ = vtkSmartPointer<vtkActor>::New();
+      sketch_sel_actor_->SetMapper(sketch_sel_mapper_);
+      sketch_sel_actor_->GetProperty()->SetColor(1.0, 0.55, 0.10);
+      sketch_sel_actor_->GetProperty()->SetLineWidth(3.0);
+      sketch_sel_actor_->GetProperty()->SetPointSize(10.0);
+      sketch_sel_actor_->SetPickable(0);
+
+      sketch_preview_mapper_ = vtkSmartPointer<vtkPolyDataMapper>::New();
+      sketch_preview_actor_ = vtkSmartPointer<vtkActor>::New();
+      sketch_preview_actor_->SetMapper(sketch_preview_mapper_);
+      sketch_preview_actor_->GetProperty()->SetColor(0.95, 0.90, 0.20);
+      sketch_preview_actor_->GetProperty()->SetLineWidth(2.0);
+      sketch_preview_actor_->SetPickable(0);
+
+      renderer_->AddActor(sketch_actor_);
+      renderer_->AddActor(sketch_sel_actor_);
+      renderer_->AddActor(sketch_preview_actor_);
+    }
+    rebuild_sketch_actors();
+    set_2d_mode(true);
+    // 取景到草图范围 (空草图给默认视野, 单位毫米)
+    if (renderer_) {
+      double b[6] = {-50.0, 50.0, -50.0, 50.0, -1.0, 1.0};
+      bool has = false;
+      for (const auto& e : doc->entities()) {
+        double x0, x1, y0, y1;
+        if (e.type == SketchEntityType::Line) {
+          x0 = std::min(e.p1.x, e.p2.x);
+          x1 = std::max(e.p1.x, e.p2.x);
+          y0 = std::min(e.p1.y, e.p2.y);
+          y1 = std::max(e.p1.y, e.p2.y);
+        } else {
+          x0 = e.center.x - e.radius;
+          x1 = e.center.x + e.radius;
+          y0 = e.center.y - e.radius;
+          y1 = e.center.y + e.radius;
+        }
+        if (!has) {
+          b[0] = x0; b[1] = x1; b[2] = y0; b[3] = y1;
+          has = true;
+        } else {
+          b[0] = std::min(b[0], x0); b[1] = std::max(b[1], x1);
+          b[2] = std::min(b[2], y0); b[3] = std::max(b[3], y1);
+        }
+      }
+      if (has) {
+        const double px = std::max(10.0, (b[1] - b[0]) * 0.15);
+        const double py = std::max(10.0, (b[3] - b[2]) * 0.15);
+        b[0] -= px; b[1] += px; b[2] -= py; b[3] += py;
+      }
+      // 空草图也用默认视野取景, 避免空场景 ResetCamera 留下过小视野
+      renderer_->ResetCamera(b);
+      renderer_->ResetCameraClippingRange();
+      if (render_window_) {
+        render_window_->Render();
+      }
+    }
+  } else {
+    // 退出草图编辑: 隐藏草图 actor 并恢复 3D 视图
+    if (sketch_actor_) {
+      sketch_actor_->SetVisibility(0);
+      sketch_sel_actor_->SetVisibility(0);
+      sketch_preview_actor_->SetVisibility(0);
+    }
+    set_2d_mode(false);
+  }
+#endif
+  emit sketch_selection_changed();
+}
+
+void VtkViewer::set_sketch_tool(int tool) {
+  sketch_tool_ = tool;
+  // 切换工具时取消进行中的绘制
+  if (sketch_stage_ != 0) {
+    sketch_stage_ = 0;
+    update_sketch_preview();
+  }
+}
+
+void VtkViewer::refresh_sketch() {
+  rebuild_sketch_actors();
+}
+
+bool VtkViewer::sketch_display_to_world(int x, int y, SketchPoint2d* out) const {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (!renderer_ || !out) {
+    return false;
+  }
+  // 取世界原点对应的显示深度, 保证换算结果落在 Z=0 平面上
+  renderer_->SetWorldPoint(0.0, 0.0, 0.0, 1.0);
+  renderer_->WorldToDisplay();
+  const double z0 = renderer_->GetDisplayPoint()[2];
+  renderer_->SetDisplayPoint(static_cast<double>(x), static_cast<double>(y), z0);
+  renderer_->DisplayToWorld();
+  const double* w = renderer_->GetWorldPoint();
+  if (w[3] == 0.0) {
+    return false;
+  }
+  out->x = w[0] / w[3];
+  out->y = w[1] / w[3];
+  return true;
+#else
+  Q_UNUSED(x);
+  Q_UNUSED(y);
+  Q_UNUSED(out);
+  return false;
+#endif
+}
+
+double VtkViewer::sketch_pick_tol() const {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (renderer_) {
+    // 10 像素对应的世界长度作为容差 (平行投影下与位置无关)
+    SketchPoint2d a, b;
+    if (sketch_display_to_world(0, 0, &a) && sketch_display_to_world(10, 0, &b)) {
+      const double d = dist2d(a, b);
+      if (d > 0.0) {
+        return d;
+      }
+    }
+  }
+#endif
+  return 1e-3;
+}
+
+SketchPoint2d VtkViewer::sketch_snap(const SketchPoint2d& pt) const {
+  if (!sketch_doc_) {
+    return pt;
+  }
+  const double tol = sketch_pick_tol();
+  SketchPoint2d best = pt;
+  double best_d = tol;
+  for (const auto& e : sketch_doc_->entities()) {
+    for (const SketchPointRole role : snap_roles_for(e)) {
+      SketchPoint2d p;
+      if (!SketchDocument::point_at_role(e, role, &p)) {
+        continue;
+      }
+      const double d = dist2d(pt, p);
+      if (d <= best_d) {
+        best_d = d;
+        best = p;
+      }
+    }
+  }
+  return best;
+}
+
+void VtkViewer::set_sketch_selection(const QList<int>& ids) {
+  // 剔除已不存在的图元 id
+  QList<int> pruned;
+  if (sketch_doc_) {
+    for (const int id : ids) {
+      if (sketch_doc_->entity(id) && !pruned.contains(id)) {
+        pruned.append(id);
+      }
+    }
+  }
+  if (pruned == sketch_selection_) {
+    return;
+  }
+  sketch_selection_ = pruned;
+  emit sketch_selection_changed();
+  rebuild_sketch_actors();
+}
+
+void VtkViewer::rebuild_sketch_actors() {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (!sketch_actor_ || !renderer_) {
+    return;
+  }
+  auto pts = vtkSmartPointer<vtkPoints>::New();
+  auto lines = vtkSmartPointer<vtkCellArray>::New();
+  auto verts = vtkSmartPointer<vtkCellArray>::New();
+  auto spts = vtkSmartPointer<vtkPoints>::New();
+  auto slines = vtkSmartPointer<vtkCellArray>::New();
+  auto sverts = vtkSmartPointer<vtkCellArray>::New();
+  if (sketch_doc_) {
+    for (const auto& e : sketch_doc_->entities()) {
+      if (sketch_selection_.contains(e.id)) {
+        append_sketch_entity(e, spts, slines, sverts);
+      } else {
+        append_sketch_entity(e, pts, lines, verts);
+      }
+    }
+  }
+  auto poly = vtkSmartPointer<vtkPolyData>::New();
+  poly->SetPoints(pts);
+  poly->SetLines(lines);
+  poly->SetVerts(verts);
+  sketch_mapper_->SetInputData(poly);
+  auto spoly = vtkSmartPointer<vtkPolyData>::New();
+  spoly->SetPoints(spts);
+  spoly->SetLines(slines);
+  spoly->SetVerts(sverts);
+  sketch_sel_mapper_->SetInputData(spoly);
+  sketch_actor_->SetVisibility(1);
+  sketch_sel_actor_->SetVisibility(1);
+  sketch_preview_actor_->SetVisibility(1);
+  update_sketch_preview();
+  if (render_window_) {
+    render_window_->Render();
+  }
+#endif
+}
+
+void VtkViewer::update_sketch_preview() {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (!sketch_preview_actor_) {
+    return;
+  }
+  auto pts = vtkSmartPointer<vtkPoints>::New();
+  auto lines = vtkSmartPointer<vtkCellArray>::New();
+  auto verts = vtkSmartPointer<vtkCellArray>::New();
+  if (sketch_doc_ && sketch_stage_ > 0) {
+    const SketchPoint2d cur = sketch_snap(sketch_cursor_);
+    if (sketch_tool_ == SketchToolDrawLine && sketch_stage_ == 1) {
+      SketchEntity e;
+      e.type = SketchEntityType::Line;
+      e.p1 = sketch_anchor1_;
+      e.p2 = cur;
+      append_sketch_entity(e, pts, lines, verts);
+    } else if (sketch_tool_ == SketchToolDrawCircle && sketch_stage_ == 1) {
+      const double r = dist2d(sketch_anchor1_, cur);
+      if (r > 0.0) {
+        SketchEntity e;
+        e.type = SketchEntityType::Circle;
+        e.center = sketch_anchor1_;
+        e.radius = r;
+        append_sketch_entity(e, pts, lines, verts);
+      }
+    } else if (sketch_tool_ == SketchToolDrawRectangle && sketch_stage_ == 1) {
+      // 轴对齐矩形橡皮筋: anchor1 与当前点为对角
+      const double x1 = sketch_anchor1_.x, y1 = sketch_anchor1_.y;
+      const double x2 = cur.x, y2 = cur.y;
+      const SketchPoint2d corners[4] = {{x1, y1}, {x2, y1}, {x2, y2}, {x1, y2}};
+      for (int i = 0; i < 4; ++i) {
+        SketchEntity e;
+        e.type = SketchEntityType::Line;
+        e.p1 = corners[i];
+        e.p2 = corners[(i + 1) % 4];
+        append_sketch_entity(e, pts, lines, verts);
+      }
+    } else if (sketch_tool_ == SketchToolDrawArc) {
+      if (sketch_stage_ == 1) {
+        // 圆心到鼠标的半径引导线
+        SketchEntity e;
+        e.type = SketchEntityType::Line;
+        e.p1 = sketch_anchor1_;
+        e.p2 = cur;
+        append_sketch_entity(e, pts, lines, verts);
+      } else if (sketch_stage_ == 2) {
+        const double r = dist2d(sketch_anchor1_, sketch_anchor2_);
+        if (r > 0.0) {
+          SketchEntity e;
+          e.type = SketchEntityType::Arc;
+          e.center = sketch_anchor1_;
+          e.radius = r;
+          e.start_angle =
+              std::atan2(sketch_anchor2_.y - sketch_anchor1_.y,
+                         sketch_anchor2_.x - sketch_anchor1_.x);
+          e.end_angle = std::atan2(cur.y - sketch_anchor1_.y,
+                                   cur.x - sketch_anchor1_.x);
+          append_sketch_entity(e, pts, lines, verts);
+        }
+      }
+    }
+  }
+  auto poly = vtkSmartPointer<vtkPolyData>::New();
+  poly->SetPoints(pts);
+  poly->SetLines(lines);
+  poly->SetVerts(verts);
+  sketch_preview_mapper_->SetInputData(poly);
+  if (render_window_) {
+    render_window_->Render();
+  }
+#endif
+}
+
+void VtkViewer::sketch_press(const SketchPoint2d& pt, bool shift) {
+  if (!sketch_doc_) {
+    return;
+  }
+  const double tol = sketch_pick_tol();
+  switch (sketch_tool_) {
+    case SketchToolSelect: {
+      const int hit = sketch_doc_->hit_test(pt, tol);
+      QList<int> sel = sketch_selection_;
+      if (hit >= 0) {
+        if (shift) {
+          if (sel.contains(hit)) {
+            sel.removeAll(hit);
+          } else {
+            sel.append(hit);
+          }
+        } else {
+          sel = {hit};
+        }
+      } else if (!shift) {
+        sel.clear();
+      }
+      set_sketch_selection(sel);
+      return;
+    }
+    case SketchToolDelete: {
+      const int hit = sketch_doc_->hit_test(pt, tol);
+      if (hit >= 0) {
+        sketch_doc_->remove_entity(hit);
+        set_sketch_selection(sketch_selection_);
+        rebuild_sketch_actors();
+        emit sketch_modified();
+      }
+      return;
+    }
+    case SketchToolDrawLine: {
+      const SketchPoint2d p = sketch_snap(pt);
+      if (sketch_stage_ == 0) {
+        sketch_anchor1_ = p;
+        sketch_stage_ = 1;
+        update_sketch_preview();
+      } else {
+        SketchEntity e;
+        e.type = SketchEntityType::Line;
+        e.p1 = sketch_anchor1_;
+        e.p2 = p;
+        sketch_stage_ = 0;
+        if (dist2d(e.p1, e.p2) > tol) {  // 忽略零长度线
+          sketch_doc_->add_entity(e);
+          rebuild_sketch_actors();
+          emit sketch_modified();
+        } else {
+          update_sketch_preview();
+        }
+      }
+      return;
+    }
+    case SketchToolDrawCircle: {
+      if (sketch_stage_ == 0) {
+        sketch_anchor1_ = sketch_snap(pt);
+        sketch_stage_ = 1;
+        update_sketch_preview();
+      } else {
+        const double r = dist2d(sketch_anchor1_, pt);
+        sketch_stage_ = 0;
+        if (r > tol) {
+          SketchEntity e;
+          e.type = SketchEntityType::Circle;
+          e.center = sketch_anchor1_;
+          e.radius = r;
+          sketch_doc_->add_entity(e);
+          rebuild_sketch_actors();
+          emit sketch_modified();
+        } else {
+          update_sketch_preview();
+        }
+      }
+      return;
+    }
+    case SketchToolDrawArc: {
+      if (sketch_stage_ == 0) {
+        sketch_anchor1_ = sketch_snap(pt);  // 圆心
+        sketch_stage_ = 1;
+        update_sketch_preview();
+      } else if (sketch_stage_ == 1) {
+        if (dist2d(sketch_anchor1_, pt) <= tol) {
+          return;  // 半径太小, 等待下一个点
+        }
+        sketch_anchor2_ = pt;  // 起点: 定半径与起始角
+        sketch_stage_ = 2;
+        update_sketch_preview();
+      } else {
+        const double r = dist2d(sketch_anchor1_, sketch_anchor2_);
+        sketch_stage_ = 0;
+        if (r > tol && dist2d(sketch_anchor1_, pt) > tol) {
+          constexpr double kTwoPi = 6.28318530717958647692;
+          auto norm = [kTwoPi](double a) {
+            while (a < 0.0) {
+              a += kTwoPi;
+            }
+            return a;
+          };
+          SketchEntity e;
+          e.type = SketchEntityType::Arc;
+          e.center = sketch_anchor1_;
+          e.radius = r;
+          e.start_angle = norm(std::atan2(sketch_anchor2_.y - sketch_anchor1_.y,
+                                          sketch_anchor2_.x - sketch_anchor1_.x));
+          e.end_angle = norm(std::atan2(pt.y - sketch_anchor1_.y,
+                                        pt.x - sketch_anchor1_.x));
+          sketch_doc_->add_entity(e);
+          rebuild_sketch_actors();
+          emit sketch_modified();
+        } else {
+          update_sketch_preview();
+        }
+      }
+      return;
+    }
+    case SketchToolDrawRectangle: {
+      const SketchPoint2d p = sketch_snap(pt);
+      if (sketch_stage_ == 0) {
+        sketch_anchor1_ = p;
+        sketch_stage_ = 1;
+        update_sketch_preview();
+      } else {
+        // 第二对角点: 生成 4 条线 + 4 个角点重合约束 (一次修改, 一步撤销)
+        const double x1 = sketch_anchor1_.x, y1 = sketch_anchor1_.y;
+        const double x2 = p.x, y2 = p.y;
+        sketch_stage_ = 0;
+        if (std::fabs(x2 - x1) > tol && std::fabs(y2 - y1) > tol) {
+          const SketchPoint2d corners[4] = {{x1, y1}, {x2, y1}, {x2, y2}, {x1, y2}};
+          int line_ids[4] = {-1, -1, -1, -1};
+          for (int i = 0; i < 4; ++i) {
+            SketchEntity e;
+            e.type = SketchEntityType::Line;
+            e.p1 = corners[i];
+            e.p2 = corners[(i + 1) % 4];
+            line_ids[i] = sketch_doc_->add_entity(e);
+          }
+          for (int i = 0; i < 4; ++i) {
+            SketchConstraint c;
+            c.type = SketchConstraintType::Coincident;
+            c.entity1 = line_ids[i];
+            c.role1 = SketchPointRole::End;
+            c.entity2 = line_ids[(i + 1) % 4];
+            c.role2 = SketchPointRole::Start;
+            sketch_doc_->add_constraint(c);
+          }
+          rebuild_sketch_actors();
+          emit sketch_modified();
+        } else {
+          update_sketch_preview();
+        }
+      }
+      return;
+    }
+    default:
+      return;
+  }
+}
+
+void VtkViewer::sketch_move(const SketchPoint2d& pt) {
+  sketch_cursor_ = pt;
+  emit sketch_cursor_moved(pt.x, pt.y);
+  if (sketch_stage_ > 0) {
+    update_sketch_preview();
+  }
+}
+
+void VtkViewer::sketch_delete_selected() {
+  if (!sketch_doc_ || sketch_selection_.isEmpty()) {
+    return;
+  }
+  bool removed = false;
+  for (const int id : sketch_selection_) {
+    removed = sketch_doc_->remove_entity(id) || removed;
+  }
+  sketch_selection_.clear();
+  emit sketch_selection_changed();
+  if (removed) {
+    rebuild_sketch_actors();
+    emit sketch_modified();
+  }
+}
+
+void VtkViewer::solve_sketch_and_refresh() {
+  if (sketch_doc_) {
+    // WS2 实装前 solve 为桩(返回 false), 这里容忍失败, 仅作尝试
+    SketchSolver solver;
+    QString err;
+    solver.solve(*sketch_doc_, &err);
+  }
+  rebuild_sketch_actors();
+  emit sketch_modified();
+}
+
+void VtkViewer::add_constraint_for_selection(int type) {
+  if (!sketch_doc_) {
+    return;
+  }
+  set_sketch_selection(sketch_selection_);  // 剔除失效 id
+  const QList<int> sel = sketch_selection_;
+  SketchConstraint c;
+  c.type = static_cast<SketchConstraintType>(type);
+  auto first_of = [&](bool (*pred)(SketchEntityType)) -> const SketchEntity* {
+    for (const int id : sel) {
+      if (const SketchEntity* e = sketch_doc_->entity(id); e && pred(e->type)) {
+        return e;
+      }
+    }
+    return nullptr;
+  };
+  auto is_line = [](SketchEntityType t) { return t == SketchEntityType::Line; };
+  auto is_round = [](SketchEntityType t) {
+    return t == SketchEntityType::Circle || t == SketchEntityType::Arc;
+  };
+  switch (c.type) {
+    case SketchConstraintType::Horizontal:
+    case SketchConstraintType::Vertical: {
+      const SketchEntity* e = first_of(is_line);
+      if (!e) {
+        return;
+      }
+      c.entity1 = e->id;
+      break;
+    }
+    case SketchConstraintType::Parallel:
+    case SketchConstraintType::Perpendicular:
+    case SketchConstraintType::EqualLength: {
+      const SketchEntity* a = first_of(is_line);
+      if (!a) {
+        return;
+      }
+      const SketchEntity* b = nullptr;
+      for (const int id : sel) {
+        const SketchEntity* e = sketch_doc_->entity(id);
+        if (e && e->type == SketchEntityType::Line && e->id != a->id) {
+          b = e;
+          break;
+        }
+      }
+      if (!b) {
+        return;
+      }
+      c.entity1 = a->id;
+      c.entity2 = b->id;
+      break;
+    }
+    case SketchConstraintType::EqualRadius: {
+      const SketchEntity* a = first_of(is_round);
+      if (!a) {
+        return;
+      }
+      const SketchEntity* b = nullptr;
+      for (const int id : sel) {
+        const SketchEntity* e = sketch_doc_->entity(id);
+        if (e && is_round(e->type) && e->id != a->id) {
+          b = e;
+          break;
+        }
+      }
+      if (!b) {
+        return;
+      }
+      c.entity1 = a->id;
+      c.entity2 = b->id;
+      break;
+    }
+    case SketchConstraintType::Coincident: {
+      if (sel.size() < 2) {
+        return;
+      }
+      const SketchEntity* a = sketch_doc_->entity(sel[0]);
+      const SketchEntity* b = sketch_doc_->entity(sel[1]);
+      if (!a || !b) {
+        return;
+      }
+      // 找两图元间距离最近的角色点对
+      double best = std::numeric_limits<double>::max();
+      SketchPointRole ra = SketchPointRole::None, rb = SketchPointRole::None;
+      for (const SketchPointRole r1 : snap_roles_for(*a)) {
+        SketchPoint2d p1;
+        if (!SketchDocument::point_at_role(*a, r1, &p1)) {
+          continue;
+        }
+        for (const SketchPointRole r2 : snap_roles_for(*b)) {
+          SketchPoint2d p2;
+          if (!SketchDocument::point_at_role(*b, r2, &p2)) {
+            continue;
+          }
+          const double d = dist2d(p1, p2);
+          if (d < best) {
+            best = d;
+            ra = r1;
+            rb = r2;
+          }
+        }
+      }
+      if (ra == SketchPointRole::None) {
+        return;
+      }
+      c.entity1 = a->id;
+      c.entity2 = b->id;
+      c.role1 = ra;
+      c.role2 = rb;
+      break;
+    }
+    default:
+      return;  // 尺寸类请走 add_dimension_for_selection
+  }
+  sketch_doc_->add_constraint(c);
+  solve_sketch_and_refresh();
+}
+
+void VtkViewer::add_dimension_for_selection(int type, double value) {
+  if (!sketch_doc_ || value <= 0.0) {
+    return;
+  }
+  set_sketch_selection(sketch_selection_);
+  SketchConstraint c;
+  c.type = static_cast<SketchConstraintType>(type);
+  c.value = value;
+  c.driving = true;  // driving 尺寸: 改值改图
+  if (c.type == SketchConstraintType::Distance) {
+    for (const int id : sketch_selection_) {
+      if (const SketchEntity* e = sketch_doc_->entity(id);
+          e && e->type == SketchEntityType::Line) {
+        c.entity1 = e->id;  // 线长 (entity1, 无 role)
+        break;
+      }
+    }
+  } else if (c.type == SketchConstraintType::Radius) {
+    for (const int id : sketch_selection_) {
+      if (const SketchEntity* e = sketch_doc_->entity(id);
+          e && (e->type == SketchEntityType::Circle ||
+                e->type == SketchEntityType::Arc)) {
+        c.entity1 = e->id;
+        break;
+      }
+    }
+  } else {
+    return;
+  }
+  if (c.entity1 < 0) {
+    return;
+  }
+  sketch_doc_->add_constraint(c);
+  solve_sketch_and_refresh();
 }
 
 }  // namespace gmp
