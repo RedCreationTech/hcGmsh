@@ -6,3 +6,4 @@
 *.zip
 .DS_Store
 bug/logs_*/
+/build-ws0/
