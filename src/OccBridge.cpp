@@ -194,7 +194,8 @@ bool order_path_chain(const SketchDocument& path,
   }
 
   constexpr double kTol = 1e-6;
-  auto near = [](const SketchPoint2d& a, const SketchPoint2d& b) {
+  // 注意: 不能命名 near/far, Windows 头文件把它们定义为空的宏 (MSVC 编译炸)
+  auto points_near = [](const SketchPoint2d& a, const SketchPoint2d& b) {
     return std::hypot(a.x - b.x, a.y - b.y) <= kTol;
   };
 
@@ -210,9 +211,9 @@ bool order_path_chain(const SketchDocument& path,
       SketchPoint2d s, t;
       SketchDocument::point_at_role(pool[i], SketchPointRole::Start, &s);
       SketchDocument::point_at_role(pool[i], SketchPointRole::End, &t);
-      if (near(s, tail)) {
+      if (points_near(s, tail)) {
         chain->push_back(pool[i]);
-      } else if (near(t, head)) {
+      } else if (points_near(t, head)) {
         chain->insert(chain->begin(), pool[i]);
       } else {
         continue;
