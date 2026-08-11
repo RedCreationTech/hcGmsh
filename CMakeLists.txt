@@ -51,12 +51,29 @@ if(GMP_ENABLE_GMSH_GUI)
   # commit 以保证可复现。依赖 Eigen3 (brew eigen) 与 Boost graph (brew boost)。
   # 若网络拉取失败, 可回退为: git submodule add <url> external/planegcs,
   # 并改用 add_subdirectory(external/planegcs)。
+  #
+  # 不引入上游 CMakeLists (SOURCE_SUBDIR 指向不存在目录即跳过): 上游强制
+  # add_library(SHARED) 且无任何 __declspec(dllexport) 导出宏, Windows/MSVC
+  # 下 DLL 零导出 -> 不生成导入库 planegcs.lib -> LNK1181。改为自建 STATIC
+  # 目标 (源文件清单同上游 CMakeLists), 也免去 Windows 打包再部署一个 DLL。
   include(FetchContent)
   FetchContent_Declare(planegcs
     GIT_REPOSITORY https://github.com/marcuswu/libplanegcs.git
     GIT_TAG        e6e749d0771a9b36604bf56a15e675d164ed4a7c # master
+    SOURCE_SUBDIR  _skip_upstream_cmake_
   )
   FetchContent_MakeAvailable(planegcs)
+  find_package(Eigen3 REQUIRED)
+  find_package(Boost REQUIRED)  # planegcs 仅用 boost::graph, 头文件即可
+  add_library(planegcs STATIC
+    ${planegcs_SOURCE_DIR}/src/GCS.cpp
+    ${planegcs_SOURCE_DIR}/src/Geo.cpp
+    ${planegcs_SOURCE_DIR}/src/Constraints.cpp
+    ${planegcs_SOURCE_DIR}/src/SubSystem.cpp
+    ${planegcs_SOURCE_DIR}/src/qp_eq.cpp
+  )
+  target_include_directories(planegcs PUBLIC ${planegcs_SOURCE_DIR}/src)
+  target_link_libraries(planegcs PUBLIC Eigen3::Eigen Boost::headers)
 endif()
 
 add_executable(gmp_ise
@@ -108,9 +125,8 @@ if(GMP_ENABLE_GMSH_GUI)
   # TKOffset 提供 BRepOffsetAPI_ThruSections, 其余传递依赖由目标自动带出
   target_link_libraries(gmp_ise PRIVATE
     TKernel TKMath TKBRep TKPrim TKBO TKTopAlgo TKGeomAlgo TKFillet TKOffset)
-  # WS0-A: planegcs (FetchContent 目标名为小写 planegcs), 头文件在其 src/ 下
+  # WS0-A: planegcs (上方自建的 STATIC 目标, PUBLIC 传递头文件目录)
   target_link_libraries(gmp_ise PRIVATE planegcs)
-  target_include_directories(gmp_ise PRIVATE ${planegcs_SOURCE_DIR}/src)
 endif()
 
 if(GMP_ENABLE_VTK_VIEWER)
