@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QStringList>
 #include <QVariantMap>
 
 class QPlainTextEdit;
@@ -23,6 +24,9 @@ class MoosePanel;
 class VtkViewer;
 class PropertyEditor;
 class GmshPanel;
+class SketchPanel;
+class PartFeaturePanel;
+class SketchDocument;
 
 class MainWindow : public QMainWindow {
   Q_OBJECT
@@ -118,6 +122,15 @@ class MainWindow : public QMainWindow {
   int active_job_row_ = -1;
   MoosePanel* moose_panel_ = nullptr;
   GmshPanel* gmsh_panel_ = nullptr;
+  SketchPanel* sketch_panel_ = nullptr;
+  PartFeaturePanel* part_feature_panel_ = nullptr;
+  // 草图编辑会话状态: 正在编辑的文档 (拥有) 与对应模型树节点
+  SketchDocument* active_sketch_doc_ = nullptr;
+  QTreeWidgetItem* active_sketch_item_ = nullptr;
+  // 撤销/重做: YAML 快照栈 (粒度 = 一次 sketch_modified)
+  QStringList sketch_undo_stack_;
+  QStringList sketch_redo_stack_;
+  QString active_sketch_yaml_;  // 最近一次已同步的文档快照
 
   QMenu* recent_menu_ = nullptr;
   QAction* action_new_ = nullptr;

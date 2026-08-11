@@ -37,6 +37,26 @@ if(GMP_ENABLE_GMSH_GUI)
     # (D:/bld/.../*.lib), 链接共享库无需传递依赖, 直接清空规避
     set_target_properties(gmsh::shared PROPERTIES INTERFACE_LINK_LIBRARIES "")
   endif()
+
+  # --- WS0-A: OpenCASCADE 直调通道 ---
+  # brew 的 cmake 配置位于 $(brew --prefix opencascade)/lib/cmake/opencascade;
+  # /usr/local 在 CMake 默认搜索前缀内, 通常可直接找到。若找不到, 配置时显式加:
+  #   -DOpenCASCADE_DIR="$(brew --prefix opencascade)/lib/cmake/opencascade"
+  find_package(OpenCASCADE REQUIRED)
+
+  # --- WS0-A: planegcs 约束求解器 (FetchContent) ---
+  # 注: 原定的 https://github.com/FreeCAD/planegcs 已不存在 (404),
+  # 改用等价的独立抽取库 marcuswu/libplanegcs (PlaneGCS from FreeCAD as a
+  # standalone library)。该仓库无 release tag, 仅有 master 分支, 固定到当前
+  # commit 以保证可复现。依赖 Eigen3 (brew eigen) 与 Boost graph (brew boost)。
+  # 若网络拉取失败, 可回退为: git submodule add <url> external/planegcs,
+  # 并改用 add_subdirectory(external/planegcs)。
+  include(FetchContent)
+  FetchContent_Declare(planegcs
+    GIT_REPOSITORY https://github.com/marcuswu/libplanegcs.git
+    GIT_TAG        e6e749d0771a9b36604bf56a15e675d164ed4a7c # master
+  )
+  FetchContent_MakeAvailable(planegcs)
 endif()
 
 add_executable(gmp_ise
@@ -44,6 +64,12 @@ add_executable(gmp_ise
   resources/icons.qrc
   src/MainWindow.cpp
   src/GmshPanel.cpp
+  src/SketchPanel.cpp
+  include/gmp/SketchPanel.h
+  src/SketchDocument.cpp
+  include/gmp/SketchDocument.h
+  src/PartFeaturePanel.cpp
+  include/gmp/PartFeaturePanel.h
   src/L10n.cpp
   src/MoosePanel.cpp
   src/VtkViewer.cpp
@@ -72,9 +98,19 @@ target_link_libraries(gmp_ise PRIVATE yaml-cpp)
 
 if(GMP_ENABLE_GMSH_GUI)
   target_compile_definitions(gmp_ise PRIVATE GMP_ENABLE_GMSH_GUI)
+  target_sources(gmp_ise PRIVATE src/OccBridge.cpp include/gmp/OccBridge.h)
+  # SketchSolver 依赖 planegcs 头文件 (见下方 include_directories), 一并归入此块
+  target_sources(gmp_ise PRIVATE src/SketchSolver.cpp include/gmp/SketchSolver.h)
   if(TARGET gmsh::shared)
     target_link_libraries(gmp_ise PRIVATE gmsh::shared)
   endif()
+  # WS0-A: OCC 直调链接 TK 系列目标 (由 OpenCASCADEConfig 导出);
+  # TKOffset 提供 BRepOffsetAPI_ThruSections, 其余传递依赖由目标自动带出
+  target_link_libraries(gmp_ise PRIVATE
+    TKernel TKMath TKBRep TKPrim TKBO TKTopAlgo TKGeomAlgo TKFillet TKOffset)
+  # WS0-A: planegcs (FetchContent 目标名为小写 planegcs), 头文件在其 src/ 下
+  target_link_libraries(gmp_ise PRIVATE planegcs)
+  target_include_directories(gmp_ise PRIVATE ${planegcs_SOURCE_DIR}/src)
 endif()
 
 if(GMP_ENABLE_VTK_VIEWER)

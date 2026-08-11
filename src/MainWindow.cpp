@@ -23,6 +23,7 @@
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QFrame>
+#include <QGroupBox>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QToolBar>
@@ -32,6 +33,7 @@
 #include <QStyle>
 #include <QStyleFactory>
 #include <QKeySequence>
+#include <QShortcut>
 #include <QApplication>
 #include <QGuiApplication>
 #include <QFont>
@@ -56,7 +58,11 @@
 
 #include "gmp/GmshPanel.h"
 #include "gmp/MoosePanel.h"
+#include "gmp/OccBridge.h"
+#include "gmp/PartFeaturePanel.h"
 #include "gmp/PropertyEditor.h"
+#include "gmp/SketchDocument.h"
+#include "gmp/SketchPanel.h"
 #include "gmp/VtkViewer.h"
 
 namespace gmp {
@@ -310,6 +316,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   module_bar_layout->setSpacing(2);
 
   module_tabs_ = new QTabBar(module_bar);
+  module_tabs_->addTab("Sketch");
   module_tabs_->addTab("Part");
   module_tabs_->addTab("Property");
   module_tabs_->addTab("Material");
@@ -360,7 +367,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     return -1;
   };
   std::vector<std::vector<std::pair<QString, std::function<void()>>>>
-      module_toolbar_actions(12);
+      module_toolbar_actions(13);
 
   const auto part_tab = module_tab_index("Part");
   const auto property_tab = module_tab_index("Property");
@@ -370,6 +377,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   const auto step_tab = module_tab_index("Step");
   const auto interaction_tab = module_tab_index("Interaction");
   const auto load_tab = module_tab_index("Load");
+  const auto sketch_tab = module_tab_index("Sketch");
   const auto mesh_tab = module_tab_index("Mesh");
   const auto job_tab = module_tab_index("Job");
   const auto viz_tab = module_tab_index("Visualization");
@@ -805,9 +813,41 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   job_split->setStretchFactor(1, 1);
   job_layout->addWidget(job_split, 1);
 
+  // 新建部件: 有草图时弹框选择草图; 无草图时跳到草图页签提示先建草图
+  std::function<void()> create_part_from_sketch = [this, module_tab_index]() {
+    auto* sketches_root = find_root_item("Sketches");
+    if (!sketches_root || sketches_root->childCount() == 0) {
+      QMessageBox::information(
+          this, "New Part",
+          "No sketches yet. Create a sketch in the Sketch module first.");
+      const int target = module_tab_index("Sketch");
+      if (target >= 0) {
+        module_tabs_->setCurrentIndex(target);
+      }
+      return;
+    }
+    QStringList names;
+    for (int i = 0; i < sketches_root->childCount(); ++i) {
+      if (auto* child = sketches_root->child(i)) {
+        names << child->text(0);
+      }
+    }
+    bool ok = false;
+    const QString chosen =
+        QInputDialog::getItem(this, "New Part", "Select sketch for the new part:",
+                              names, 0, false, &ok);
+    if (!ok || chosen.isEmpty()) {
+      return;
+    }
+    if (auto* root = find_root_item("Parts")) {
+      add_child_item(root, QString("part_%1").arg(root->childCount() + 1),
+                     "Parts", {{"type", "Part"}, {"sketch", chosen}});
+    }
+  };
+
   auto* part_page = make_module_node_page(
       "Part",
-      "Define geometric primitives and manage part-level entities. Parts are a user-facing grouping for your geometry and mesh assignments.",
+      "Manage part-level entities. Use Part Features below to turn a sketch into 3D (extrude, revolve, loft, sweep); the result is meshed and shown in the viewport.",
       "Parts",
       module_part_list_,
       "No parts yet. Create one from this module or Gmsh panel.",
@@ -822,10 +862,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
              }
            }},
           {"New Part",
-            [this]() {
-             if (auto* root = find_root_item("Parts")) {
-               add_item_under_root(root);
-             }
+            [create_part_from_sketch]() {
+             create_part_from_sketch();
            }},
           {"Open Gmsh Panel",
            [this, module_tab_index]() {
@@ -835,6 +873,190 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
              }
            }},
       });
+
+  // 特征操作区 (WS3): PartFeaturePanel -> OccBridge 特征函数 -> Features 根节点
+  // 注意: 部件页外层 layout 无滚动余量, 面板需插进页内嵌套滚动区
+  // (make_module_page 的内部 QScrollArea); 位置紧跟说明文字之后(按钮之前),
+  // 打开部件页即可看到 2D->3D 特征操作入口
+  part_feature_panel_ = new PartFeaturePanel(part_page);
+  if (auto* inner_scroll = part_page->findChild<QScrollArea*>()) {
+    if (auto* inner = inner_scroll->widget()) {
+      if (auto* inner_layout = qobject_cast<QVBoxLayout*>(inner->layout())) {
+        // 内层布局: 0=标题 1=说明 2=按钮组 末尾=stretch
+        inner_layout->insertWidget(2, part_feature_panel_);
+      }
+    }
+  }
+
+  // 按草图名从模型树加载草图文档 (params["data"] 为 YAML 字符串)
+  auto load_sketch_doc = [this](const QString& name, SketchDocument* out,
+                                QString* error) -> bool {
+    auto* root = find_root_item("Sketches");
+    for (int i = 0; root && i < root->childCount(); ++i) {
+      auto* child = root->child(i);
+      if (child && child->text(0) == name) {
+        const QVariantMap params =
+            child->data(0, PropertyEditor::kParamsRole).toMap();
+        const QString data = params.value("data").toString();
+        if (data.trimmed().isEmpty()) {
+          if (error) {
+            *error = QString("Sketch '%1' is empty.").arg(name);
+          }
+          return false;
+        }
+        return out->from_yaml_string(data, error);
+      }
+    }
+    if (error) {
+      *error = QString("Sketch '%1' not found.").arg(name);
+    }
+    return false;
+  };
+
+  // 特征 brep 落盘目录: 项目已保存则放项目旁 features/, 否则用临时目录
+  auto feature_out_dir = [this]() -> QString {
+    QDir base(project_path_.isEmpty()
+                  ? QDir::tempPath() + "/gmp_features"
+                  : QFileInfo(project_path_).absoluteDir().absoluteFilePath(
+                        "features"));
+    base.mkpath(".");
+    return base.absolutePath();
+  };
+
+  // 特征结果统一处理: 失败弹框; 成功挂 Features 根 + 自动划分网格显示 + 控制台提示
+  auto handle_feature_result = [this, feature_out_dir](
+                                   const QString& type,
+                                   const QVariantMap& params,
+                                   const FeatureResult& res) {
+    if (!res.ok) {
+      QMessageBox::warning(this, type, res.error);
+      return;
+    }
+    if (auto* root = find_root_item("Features")) {
+      QVariantMap p = params;
+      p.insert("type", type);
+      p.insert("gmsh_volume_tag", res.gmsh_volume_tag);
+      if (!res.brep_path.isEmpty()) {
+        p.insert("brep", res.brep_path);
+      }
+      add_child_item(root, QString("feature_%1").arg(root->childCount() + 1),
+                     "Features", p);
+    }
+    // 即时可视化: 对刚导入的模型划分网格并加载到视口
+    QString msh;
+    if (!res.brep_path.isEmpty() && res.brep_path.endsWith(".brep")) {
+      msh = res.brep_path;
+      msh.chop(5);
+      msh += ".msh";
+    } else {
+      msh = QString("%1/feature_%2.msh")
+                .arg(feature_out_dir())
+                .arg(QDateTime::currentMSecsSinceEpoch());
+    }
+    QString mesh_err;
+    QString msg =
+        QString("%1 ok: imported to gmsh as volume %2 (brep: %3).")
+            .arg(type)
+            .arg(res.gmsh_volume_tag)
+            .arg(res.brep_path.isEmpty() ? "-" : res.brep_path);
+    if (mesh_current_model(msh, &mesh_err)) {
+      if (viewer_) {
+        viewer_->set_mesh_file(msh);
+      }
+      msg += QString(" Meshed and shown in viewport (mesh: %1).").arg(msh);
+    } else {
+      msg += QString(" Auto mesh failed (%1); mesh it manually in the Mesh "
+                     "module to visualize.")
+                 .arg(mesh_err);
+    }
+    console_->appendPlainText(msg);
+    statusBar()->showMessage(msg, 5000);
+  };
+
+#ifdef GMP_ENABLE_GMSH_GUI
+  connect(part_feature_panel_, &PartFeaturePanel::extrude_requested, this,
+          [this, load_sketch_doc, feature_out_dir,
+           handle_feature_result](const QString& sketch, double distance) {
+            SketchDocument doc;
+            QString err;
+            if (!load_sketch_doc(sketch, &doc, &err)) {
+              QMessageBox::warning(this, "Extrude", err);
+              return;
+            }
+            const QString brep =
+                QString("%1/extrude_%2.brep")
+                    .arg(feature_out_dir())
+                    .arg(QDateTime::currentMSecsSinceEpoch());
+            handle_feature_result(
+                "Extrude", {{"sketch", sketch}, {"distance", distance}},
+                extrude_sketch(doc, distance, brep));
+          });
+  connect(part_feature_panel_, &PartFeaturePanel::revolve_requested, this,
+          [this, load_sketch_doc, feature_out_dir,
+           handle_feature_result](const QString& sketch, double angle_deg) {
+            SketchDocument doc;
+            QString err;
+            if (!load_sketch_doc(sketch, &doc, &err)) {
+              QMessageBox::warning(this, "Revolve", err);
+              return;
+            }
+            const QString brep =
+                QString("%1/revolve_%2.brep")
+                    .arg(feature_out_dir())
+                    .arg(QDateTime::currentMSecsSinceEpoch());
+            handle_feature_result(
+                "Revolve", {{"sketch", sketch}, {"angle_deg", angle_deg}},
+                revolve_sketch(doc, angle_deg, brep));
+          });
+  connect(part_feature_panel_, &PartFeaturePanel::loft_requested, this,
+          [this, load_sketch_doc, feature_out_dir,
+           handle_feature_result](const QStringList& sketches) {
+            if (sketches.size() != 2) {
+              return;
+            }
+            SketchDocument doc1, doc2;
+            QString err;
+            if (!load_sketch_doc(sketches.at(0), &doc1, &err) ||
+                !load_sketch_doc(sketches.at(1), &doc2, &err)) {
+              QMessageBox::warning(this, "Loft", err);
+              return;
+            }
+            const double z2 = part_feature_panel_->loft_second_z();
+            const QString brep =
+                QString("%1/loft_%2.brep")
+                    .arg(feature_out_dir())
+                    .arg(QDateTime::currentMSecsSinceEpoch());
+            const std::vector<std::pair<const SketchDocument*, double>>
+                sections{{&doc1, 0.0}, {&doc2, z2}};
+            handle_feature_result(
+                "Loft",
+                {{"sketch", sketches.at(0)},
+                 {"sketch2", sketches.at(1)},
+                 {"z2", z2}},
+                loft_sketches(sections, /*solid=*/true, brep));
+          });
+  connect(part_feature_panel_, &PartFeaturePanel::sweep_requested, this,
+          [this, load_sketch_doc, feature_out_dir,
+           handle_feature_result](const QString& profile, const QString& path) {
+            SketchDocument prof_doc, path_doc;
+            QString err;
+            if (!load_sketch_doc(profile, &prof_doc, &err) ||
+                !load_sketch_doc(path, &path_doc, &err)) {
+              QMessageBox::warning(this, "Sweep", err);
+              return;
+            }
+            const QString brep =
+                QString("%1/sweep_%2.brep")
+                    .arg(feature_out_dir())
+                    .arg(QDateTime::currentMSecsSinceEpoch());
+            handle_feature_result(
+                "Sweep", {{"sketch", profile}, {"path", path}},
+                sweep_sketch(prof_doc, path_doc, brep));
+          });
+#else
+  // 无 Gmsh/OCC 构建下特征不可用
+  part_feature_panel_->setEnabled(false);
+#endif
 
   auto* material_page = make_module_node_page(
       "Material",
@@ -1024,6 +1246,215 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
              }
            }},
       });
+
+  // 草图模块页: v1 骨架, 行为接线到模型树 Sketches 根与视口 2D 模式
+  sketch_panel_ = new SketchPanel(property_stack_);
+  // 列表行号与 Sketches 根下子节点一一对应
+  auto resolve_selected_sketch = [this]() -> QTreeWidgetItem* {
+    if (!sketch_panel_ || !model_tree_) {
+      return nullptr;
+    }
+    auto* list = sketch_panel_->sketch_list();
+    const int row = list ? list->currentRow() : -1;
+    auto* root = find_root_item("Sketches");
+    if (!root || row < 0 || row >= root->childCount()) {
+      return nullptr;
+    }
+    return root->child(row);
+  };
+  connect(sketch_panel_, &SketchPanel::new_sketch_requested, this, [this]() {
+    if (auto* root = find_root_item("Sketches")) {
+      add_child_item(root, QString("sketch_%1").arg(root->childCount() + 1),
+                     "Sketches", {{"type", "Sketch2D"}, {"plane", "XY"}});
+    }
+  });
+  // 草图编辑会话: 序列化当前编辑中的草图回模型树 params["data"]
+  auto save_active_sketch = [this]() {
+    if (!active_sketch_doc_ || !active_sketch_item_) {
+      return;
+    }
+    QVariantMap params =
+        active_sketch_item_->data(0, PropertyEditor::kParamsRole).toMap();
+    params.insert("data", active_sketch_doc_->to_yaml_string());
+    active_sketch_item_->setData(0, PropertyEditor::kParamsRole, params);
+    set_project_dirty(true);
+  };
+  // 退出编辑: 保存 -> 视口退出草图层 -> 面板退出编辑态
+  auto close_sketch_editor = [this, save_active_sketch]() {
+    if (!active_sketch_doc_) {
+      return;
+    }
+    save_active_sketch();
+    if (viewer_) {
+      viewer_->set_sketch_document(nullptr);
+    }
+    if (sketch_panel_) {
+      sketch_panel_->set_editing(false);
+    }
+    delete active_sketch_doc_;
+    active_sketch_doc_ = nullptr;
+    active_sketch_item_ = nullptr;
+    sketch_undo_stack_.clear();
+    sketch_redo_stack_.clear();
+    active_sketch_yaml_.clear();
+  };
+  connect(sketch_panel_, &SketchPanel::open_edit_requested, this,
+          [this, resolve_selected_sketch, close_sketch_editor]() {
+            auto* target = resolve_selected_sketch();
+            if (!target) {
+              statusBar()->showMessage("Select a sketch first.", 2000);
+              return;
+            }
+            close_sketch_editor();  // 先保存并退出正在编辑的草图
+            auto* doc = new SketchDocument();
+            const QVariantMap params =
+                target->data(0, PropertyEditor::kParamsRole).toMap();
+            const QString data = params.value("data").toString();
+            if (!data.trimmed().isEmpty()) {
+              QString err;
+              if (!doc->from_yaml_string(data, &err)) {
+                QMessageBox::warning(this, "Open Sketch",
+                                     "Failed to parse sketch data: " + err);
+                delete doc;
+                return;
+              }
+            }
+            active_sketch_doc_ = doc;
+            active_sketch_item_ = target;
+            sketch_undo_stack_.clear();
+            sketch_redo_stack_.clear();
+            active_sketch_yaml_ = doc->to_yaml_string();
+            sketch_panel_->set_undo_redo_state(false, false);
+            model_tree_->setCurrentItem(target);
+            if (viewer_) {
+              viewer_->set_sketch_document(doc);  // 自动进入 2D 模式并渲染
+            }
+            sketch_panel_->set_editing(true, target->text(0));
+            statusBar()->showMessage(
+                QString("Editing sketch '%1'.").arg(target->text(0)), 4000);
+          });
+  connect(sketch_panel_, &SketchPanel::rename_requested, this,
+          [resolve_selected_sketch]() {
+            if (auto* target = resolve_selected_sketch()) {
+              target->setFlags(target->flags() | Qt::ItemIsEditable);
+              if (auto* view = target->treeWidget()) {
+                view->editItem(target, 0);
+              }
+            }
+          });
+  connect(sketch_panel_, &SketchPanel::duplicate_requested, this,
+          [this, resolve_selected_sketch]() {
+            duplicate_item(resolve_selected_sketch());
+          });
+  connect(sketch_panel_, &SketchPanel::remove_requested, this,
+          [this, resolve_selected_sketch]() {
+            remove_item(resolve_selected_sketch());
+          });
+  connect(sketch_panel_, &SketchPanel::refresh_requested, this,
+          [this]() { refresh_module_pages(); });
+  // 编辑工具区接线: 工具/约束/尺寸 -> 视口; 视口回调 -> 面板/持久化
+  connect(sketch_panel_, &SketchPanel::tool_selected, this, [this](int tool) {
+    if (viewer_) {
+      viewer_->set_sketch_tool(tool);
+    }
+  });
+  connect(sketch_panel_, &SketchPanel::constraint_requested, this,
+          [this](int type) {
+            if (viewer_) {
+              viewer_->add_constraint_for_selection(type);
+            }
+          });
+  connect(sketch_panel_, &SketchPanel::dimension_requested, this,
+          [this](int type, double value) {
+            if (viewer_) {
+              viewer_->add_dimension_for_selection(type, value);
+            }
+          });
+  connect(sketch_panel_, &SketchPanel::finish_edit_requested, this,
+          close_sketch_editor);
+  // 撤销/重做: 以 YAML 快照为步进单位, 每次修改信号 = 一步
+  auto update_ur_state = [this]() {
+    if (sketch_panel_) {
+      sketch_panel_->set_undo_redo_state(!sketch_undo_stack_.isEmpty(),
+                                         !sketch_redo_stack_.isEmpty());
+    }
+  };
+  auto sketch_undo = [this, save_active_sketch, update_ur_state]() {
+    if (!active_sketch_doc_ || sketch_undo_stack_.isEmpty()) {
+      return;
+    }
+    sketch_redo_stack_.append(active_sketch_yaml_);
+    const QString yaml = sketch_undo_stack_.takeLast();
+    QString err;
+    if (active_sketch_doc_->from_yaml_string(yaml, &err)) {
+      active_sketch_yaml_ = yaml;
+      if (viewer_) {
+        viewer_->refresh_sketch();
+      }
+      save_active_sketch();  // 同步回模型树 (不再入栈)
+    }
+    update_ur_state();
+  };
+  auto sketch_redo = [this, save_active_sketch, update_ur_state]() {
+    if (!active_sketch_doc_ || sketch_redo_stack_.isEmpty()) {
+      return;
+    }
+    sketch_undo_stack_.append(active_sketch_yaml_);
+    const QString yaml = sketch_redo_stack_.takeLast();
+    QString err;
+    if (active_sketch_doc_->from_yaml_string(yaml, &err)) {
+      active_sketch_yaml_ = yaml;
+      if (viewer_) {
+        viewer_->refresh_sketch();
+      }
+      save_active_sketch();
+    }
+    update_ur_state();
+  };
+  connect(sketch_panel_, &SketchPanel::undo_requested, this, sketch_undo);
+  connect(sketch_panel_, &SketchPanel::redo_requested, this, sketch_redo);
+  auto* undo_sc = new QShortcut(QKeySequence::Undo, this);
+  undo_sc->setContext(Qt::WindowShortcut);
+  connect(undo_sc, &QShortcut::activated, this, sketch_undo);
+  auto* redo_sc = new QShortcut(QKeySequence::Redo, this);
+  redo_sc->setContext(Qt::WindowShortcut);
+  connect(redo_sc, &QShortcut::activated, this, sketch_redo);
+  connect(viewer_, &VtkViewer::sketch_modified, this,
+          [this, save_active_sketch, update_ur_state]() {
+            if (!active_sketch_doc_) {
+              return;
+            }
+            // 修改前的快照入撤销栈 (redo 清空), 再保存新状态
+            sketch_undo_stack_.append(active_sketch_yaml_);
+            sketch_redo_stack_.clear();
+            save_active_sketch();
+            active_sketch_yaml_ = active_sketch_doc_->to_yaml_string();
+            update_ur_state();
+          });
+  connect(viewer_, &VtkViewer::sketch_cursor_moved, this,
+          [this](double x, double y) {
+            if (sketch_panel_) {
+              sketch_panel_->set_cursor_pos(x, y);
+            }
+          });
+  connect(viewer_, &VtkViewer::sketch_selection_changed, this, [this]() {
+    if (sketch_panel_ && viewer_) {
+      const int n = viewer_->sketch_selection().size();
+      sketch_panel_->set_status_text(n > 0 ? QString("Selected: %1").arg(n)
+                                           : QString());
+    }
+  });
+  connect(sketch_panel_->sketch_list(), &QListWidget::itemDoubleClicked, this,
+          [this, resolve_selected_sketch, module_tab_index](QListWidgetItem*) {
+            if (auto* target = resolve_selected_sketch()) {
+              model_tree_->setCurrentItem(target);
+              const int prop_tab = module_tab_index("Property");
+              if (prop_tab >= 0) {
+                module_tabs_->setCurrentIndex(prop_tab);
+              }
+              property_editor_->set_item(target);
+            }
+          });
 
   auto* step_preview_label = new QLabel(
       "Step sequence preview (Executioner uses first step; remaining shown for check):",
@@ -1454,6 +1885,25 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                            }},
                        });
 
+  assign_module_actions(sketch_tab,
+                       {
+                           {"New Sketch", [this]() {
+                             if (auto* root = find_root_item("Sketches")) {
+                               add_child_item(
+                                   root,
+                                   QString("sketch_%1").arg(root->childCount() + 1),
+                                   "Sketches",
+                                   {{"type", "Sketch2D"}, {"plane", "XY"}});
+                             }
+                           }},
+                           {"Open Sketches Root", [this]() {
+                             if (auto* root = find_root_item("Sketches")) {
+                               model_tree_->setCurrentItem(root);
+                               root->setExpanded(true);
+                             }
+                           }},
+                       });
+
   assign_module_actions(mesh_tab,
                        {
                            {"Generate Mesh", [this]() {
@@ -1652,6 +2102,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   property_stack_->addWidget(step_page);
   property_stack_->addWidget(interaction_page);
   property_stack_->addWidget(load_page);
+  property_stack_->addWidget(wrap_scroll(sketch_panel_));
   property_stack_->addWidget(mesh_page);
   property_stack_->addWidget(wrap_scroll(job_container));
   property_stack_->addWidget(visualization_page);
@@ -1684,8 +2135,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   connect(module_tabs_, &QTabBar::currentChanged, this,
           [this, apply_toolbar_actions, results_tab](
               int index) {
-            static constexpr int module_to_property[] = {1, 0, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11};
-            constexpr int module_count = 12;
+            // 页签顺序: Sketch, Part, Property, Material, Section, Assembly,
+            // Step, Interaction, Load, Mesh, Job, Visualization, Results
+            // 右侧堆栈顺序: property_editor, part, material, section, assembly,
+            // step, interaction, load, sketch, mesh, job, viz, results
+            static constexpr int module_to_property[] = {8, 1, 0, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12};
+            constexpr int module_count = 13;
             const int target =
                 (index >= 0 && index < module_count) ? module_to_property[index] : 0;
             refresh_module_pages();
@@ -2453,6 +2908,9 @@ QToolTip {
 void MainWindow::build_model_tree() {
   const QStringList root_nodes = {
       "Parts",
+      "Sketches",
+      "Features",
+      "Datums",
       "Materials",
       "Sections",
       "Steps",
@@ -2474,6 +2932,12 @@ void MainWindow::build_model_tree() {
     QIcon icon;
     if (name == "Parts") {
       icon = MakeIcon(IconGlyph::Part);
+    } else if (name == "Sketches") {
+      icon = MakeIcon(IconGlyph::Section);
+    } else if (name == "Features") {
+      icon = MakeIcon(IconGlyph::Part);
+    } else if (name == "Datums") {
+      icon = MakeIcon(IconGlyph::Variable);
     } else if (name == "Materials") {
       icon = MakeIcon(IconGlyph::Material);
     } else if (name == "Sections") {
@@ -2622,6 +3086,21 @@ void MainWindow::refresh_module_pages() {
   refresh_module_node_list(module_interaction_list_, "Interactions",
                           "No interactions yet.");
   refresh_module_node_list(module_load_list_, "Loads", "No loads yet.");
+  if (sketch_panel_) {
+    refresh_module_node_list(sketch_panel_->sketch_list(), "Sketches",
+                            "No sketches yet.");
+  }
+  if (part_feature_panel_) {
+    QStringList sketch_names;
+    if (auto* root = find_root_item("Sketches")) {
+      for (int i = 0; i < root->childCount(); ++i) {
+        if (auto* child = root->child(i)) {
+          sketch_names << child->text(0);
+        }
+      }
+    }
+    part_feature_panel_->set_sketch_names(sketch_names);
+  }
   if (step_sequence_preview_) {
     step_sequence_preview_->setPlainText(build_step_sequence_preview());
   }
@@ -4063,7 +4542,13 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
           nav_combo->setCurrentIndex(QString::fromLocal8Bit(nav).toInt());
         }
       }
-      module_tabs_->setCurrentIndex(10);  // Visualization
+      // 按名查找 Visualization 页签, 避免页签顺序调整时失效
+      for (int i = 0; i < module_tabs_->count(); ++i) {
+        if (module_tabs_->tabText(i) == "Visualization") {
+          module_tabs_->setCurrentIndex(i);
+          break;
+        }
+      }
     });
     // 直接用 VTK 离屏渲染导出一张视口图（绕过 Qt grab 的时机问题）
     QTimer::singleShot(6000, this, [this, dir]() {
@@ -4074,10 +4559,11 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
   }
 
   QList<QPair<QString, std::function<void()>>> steps;
-  const QStringList modules = {"Part",     "Property", "Material",
-                               "Section",  "Assembly", "Step",
-                               "Interaction", "Load",   "Mesh",
-                               "Job",      "Visualization", "Results"};
+  const QStringList modules = {"Sketch",   "Part",     "Property",
+                               "Material", "Section",  "Assembly",
+                               "Step",     "Interaction", "Load",
+                               "Mesh",     "Job",      "Visualization",
+                               "Results"};
   for (int i = 0; i < modules.size() && i < module_tabs_->count(); ++i) {
     steps.append({QString("module_%1_%2")
                       .arg(i, 2, 10, QLatin1Char('0'))

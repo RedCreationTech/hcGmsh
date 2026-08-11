@@ -1,10 +1,15 @@
 #include <QApplication>
+#include <QDebug>
 #include <QString>
 #include <QTimer>
 
 #ifdef GMP_ENABLE_VTK_VIEWER
 #include <QSurfaceFormat>
 #include <QVTKOpenGLNativeWidget.h>
+#endif
+
+#ifdef GMP_ENABLE_GMSH_GUI
+#include "gmp/OccBridge.h"
 #endif
 
 #include "gmp/MainWindow.h"
@@ -14,6 +19,14 @@ int main(int argc, char** argv) {
   QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
 #endif
   QApplication app(argc, argv);
+
+#ifdef GMP_ENABLE_GMSH_GUI
+  // WS0-A 冒烟测试: GMP_WS0_SMOKE=1 时在 GUI 启动前运行, 不影响正常启动
+  if (qgetenv("GMP_WS0_SMOKE") == "1") {
+    qInfo() << "[WS0] occ_direct_call_smoke:" << gmp::occ_direct_call_smoke();
+    qInfo() << "[WS0] planegcs_smoke:" << gmp::planegcs_smoke();
+  }
+#endif
 
   gmp::MainWindow window;
   window.show();
