@@ -939,8 +939,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       if (!res.brep_path.isEmpty()) {
         p.insert("brep", res.brep_path);
       }
-      add_child_item(root, QString("feature_%1").arg(root->childCount() + 1),
-                     "Features", p);
+      const QString feature_name =
+          QString("feature_%1").arg(root->childCount() + 1);
+      add_child_item(root, feature_name, "Features", p);
+      // 语义: Feature = 建模历史 (操作+参数), Part = 最终 3D 部件产物。
+      // 特征成功后自动产出关联的 Part 条目, 两者通过 feature 参数关联
+      if (auto* parts_root = find_root_item("Parts")) {
+        QVariantMap pp{{"type", "Part"},
+                       {"sketch", params.value("sketch")},
+                       {"feature", feature_name}};
+        pp.insert("gmsh_volume_tag", res.gmsh_volume_tag);
+        if (!res.brep_path.isEmpty()) {
+          pp.insert("brep", res.brep_path);
+        }
+        add_child_item(parts_root,
+                       QString("part_%1").arg(parts_root->childCount() + 1),
+                       "Parts", pp);
+      }
     }
     // 即时可视化: 对刚导入的模型划分网格并加载到视口
     QString msh;
@@ -1298,40 +1313,43 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     sketch_redo_stack_.clear();
     active_sketch_yaml_.clear();
   };
+  // 打开指定草图节点进入编辑会话 (供"打开编辑"按钮与页签切换复用)
+  auto open_sketch_editor = [this, close_sketch_editor](QTreeWidgetItem* target) {
+    if (!target) {
+      statusBar()->showMessage("Select a sketch first.", 2000);
+      return;
+    }
+    close_sketch_editor();  // 先保存并退出正在编辑的草图
+    auto* doc = new SketchDocument();
+    const QVariantMap params =
+        target->data(0, PropertyEditor::kParamsRole).toMap();
+    const QString data = params.value("data").toString();
+    if (!data.trimmed().isEmpty()) {
+      QString err;
+      if (!doc->from_yaml_string(data, &err)) {
+        QMessageBox::warning(this, "Open Sketch",
+                             "Failed to parse sketch data: " + err);
+        delete doc;
+        return;
+      }
+    }
+    active_sketch_doc_ = doc;
+    active_sketch_item_ = target;
+    sketch_undo_stack_.clear();
+    sketch_redo_stack_.clear();
+    active_sketch_yaml_ = doc->to_yaml_string();
+    sketch_panel_->set_undo_redo_state(false, false);
+    model_tree_->setCurrentItem(target);
+    if (viewer_) {
+      viewer_->set_sketch_document(doc);  // 自动进入 2D 模式并渲染
+    }
+    sketch_panel_->set_editing(true, target->text(0));
+    statusBar()->showMessage(
+        QString("Editing sketch '%1'.").arg(target->text(0)), 4000);
+  };
   connect(sketch_panel_, &SketchPanel::open_edit_requested, this,
-          [this, resolve_selected_sketch, close_sketch_editor]() {
-            auto* target = resolve_selected_sketch();
-            if (!target) {
-              statusBar()->showMessage("Select a sketch first.", 2000);
-              return;
-            }
-            close_sketch_editor();  // 先保存并退出正在编辑的草图
-            auto* doc = new SketchDocument();
-            const QVariantMap params =
-                target->data(0, PropertyEditor::kParamsRole).toMap();
-            const QString data = params.value("data").toString();
-            if (!data.trimmed().isEmpty()) {
-              QString err;
-              if (!doc->from_yaml_string(data, &err)) {
-                QMessageBox::warning(this, "Open Sketch",
-                                     "Failed to parse sketch data: " + err);
-                delete doc;
-                return;
-              }
-            }
-            active_sketch_doc_ = doc;
-            active_sketch_item_ = target;
-            sketch_undo_stack_.clear();
-            sketch_redo_stack_.clear();
-            active_sketch_yaml_ = doc->to_yaml_string();
-            sketch_panel_->set_undo_redo_state(false, false);
-            model_tree_->setCurrentItem(target);
-            if (viewer_) {
-              viewer_->set_sketch_document(doc);  // 自动进入 2D 模式并渲染
-            }
-            sketch_panel_->set_editing(true, target->text(0));
-            statusBar()->showMessage(
-                QString("Editing sketch '%1'.").arg(target->text(0)), 4000);
+          [resolve_selected_sketch, open_sketch_editor]() {
+            open_sketch_editor(resolve_selected_sketch());
           });
   connect(sketch_panel_, &SketchPanel::rename_requested, this,
           [resolve_selected_sketch]() {
@@ -2133,7 +2151,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   main_split->setSizes({left_w, center_w, right_w});
 
   connect(module_tabs_, &QTabBar::currentChanged, this,
-          [this, apply_toolbar_actions, results_tab](
+          [this, apply_toolbar_actions, results_tab, sketch_tab,
+           close_sketch_editor, open_sketch_editor](
               int index) {
             // 页签顺序: Sketch, Part, Property, Material, Section, Assembly,
             // Step, Interaction, Load, Mesh, Job, Visualization, Results
@@ -2143,6 +2162,31 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             constexpr int module_count = 13;
             const int target =
                 (index >= 0 && index < module_count) ? module_to_property[index] : 0;
+            // 中央舞台跟随页签: 进草图页签 -> 进入 2D 草图编辑 (未编辑时自动
+            // 打开当前选中/首个草图); 离开草图页签 -> 保存退出 2D, 恢复 3D 场景
+            // 注: 用构造期解析的 sketch_tab 索引比较, 不能用 tabText
+            // (中文界面下 tabText 已被翻译)
+            if (index == sketch_tab) {
+              if (!active_sketch_doc_ && sketch_panel_) {
+                auto* root = find_root_item("Sketches");
+                if (root && root->childCount() > 0) {
+                  auto* list = sketch_panel_->sketch_list();
+                  int row = list ? list->currentRow() : -1;
+                  if (row < 0 || row >= root->childCount()) {
+                    row = 0;
+                    if (list) {
+                      list->setCurrentRow(0);
+                    }
+                  }
+                  open_sketch_editor(root->child(row));
+                } else {
+                  statusBar()->showMessage(
+                      "No sketches yet. Create one with New Sketch.", 2500);
+                }
+              }
+            } else if (active_sketch_doc_) {
+              close_sketch_editor();
+            }
             refresh_module_pages();
             if (target >= 0 && target < property_stack_->count()) {
               property_stack_->setCurrentIndex(target);
@@ -2356,9 +2400,65 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   connect(job_table_, &QTableWidget::currentCellChanged, this,
           [this](int row, int, int, int) { update_job_detail(row); });
 
-  connect(model_tree_, &QTreeWidget::itemSelectionChanged, this, [this]() {
+  connect(model_tree_, &QTreeWidget::itemSelectionChanged, this,
+          [this, sketch_tab, part_tab, property_tab, material_tab, section_tab,
+           step_tab, interaction_tab, load_tab, mesh_tab, job_tab, results_tab,
+           open_sketch_editor]() {
     auto* item = model_tree_->currentItem();
     property_editor_->set_item(item);
+    // 模型树驱动模块联动: 点击节点时页签/右侧栏/中央舞台一并跟随
+    // (页签切换回调里含草图 2D 会话的自动进出)
+    // 注: 必须用构造期解析的页签索引, 不能用 module_tab_index/tabText
+    // (中文界面下 tabText 已被翻译, 运行期按名查找会失败)
+    if (item) {
+      const QString kind = item->data(0, PropertyEditor::kKindRole).toString();
+      int tab = -1;
+      if (kind == "Sketches") {
+        tab = sketch_tab;
+      } else if (kind == "Parts" || kind == "Datums") {
+        tab = part_tab;
+      } else if (kind == "Features") {
+        // 特征节点是建模历史记录, 点选后看参数 -> 属性页签
+        tab = property_tab;
+      } else if (kind == "Materials") {
+        tab = material_tab;
+      } else if (kind == "Sections") {
+        tab = section_tab;
+      } else if (kind == "Steps") {
+        tab = step_tab;
+      } else if (kind == "Interactions") {
+        tab = interaction_tab;
+      } else if (kind == "Loads") {
+        tab = load_tab;
+      } else if (kind == "Mesh") {
+        tab = mesh_tab;
+      } else if (kind == "Jobs") {
+        tab = job_tab;
+      } else if (kind == "Results") {
+        tab = results_tab;
+      } else if (kind == "BC" || kind == "Functions" || kind == "Variables" ||
+                 kind == "Outputs") {
+        tab = property_tab;
+      }
+      if (tab >= 0) {
+        if (kind == "Sketches" && sketch_panel_ && item->parent()) {
+          // 点草图子节点: 先同步面板列表选中行, 再确保编辑该草图
+          if (auto* list = sketch_panel_->sketch_list()) {
+            list->setCurrentRow(item->parent()->indexOfChild(item));
+          }
+          if (tab == module_tabs_->currentIndex()) {
+            // 已在草图页签: 页签切换回调不会触发, 直接切换编辑对象
+            // (setCurrentItem 不变时不复发信号, 不会递归)
+            open_sketch_editor(item);
+          } else {
+            // 切页签, 由页签回调自动打开编辑 (命中刚同步的列表行)
+            module_tabs_->setCurrentIndex(tab);
+          }
+        } else if (tab != module_tabs_->currentIndex()) {
+          module_tabs_->setCurrentIndex(tab);
+        }
+      }
+    }
     // PropertyEditor 表单是动态重建的, 中文模式下需重新翻译
     if (l10n::current_language() == l10n::Language::Chinese) {
       QTimer::singleShot(0, this, [this]() { l10n::apply(this); });

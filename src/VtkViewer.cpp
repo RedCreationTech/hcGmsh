@@ -3960,11 +3960,37 @@ void VtkViewer::set_sketch_document(SketchDocument* doc) {
     refresh_sketch();
     return;
   }
+  const bool had_doc = (sketch_doc_ != nullptr);
   sketch_doc_ = doc;
   sketch_selection_.clear();
   sketch_stage_ = 0;
 #ifdef GMP_ENABLE_VTK_VIEWER
   if (doc) {
+    // 进入草图会话: 隐藏 3D 场景内容并暂存其可见性 (退出时恢复),
+    // 避免 2D 草图与 3D 网格/结果叠显。仅在新会话 (之前无 doc) 时暂存,
+    // 直接切换草图 (doc->doc) 保留首次暂存值。
+    if (!had_doc) {
+      if (actor_) {
+        pre_sketch_vis_main_ = actor_->GetVisibility() != 0;
+        actor_->SetVisibility(0);
+      }
+      if (nodes_actor_) {
+        pre_sketch_vis_nodes_ = nodes_actor_->GetVisibility() != 0;
+        nodes_actor_->SetVisibility(0);
+      }
+      if (outline_actor_) {
+        pre_sketch_vis_outline_ = outline_actor_->GetVisibility() != 0;
+        outline_actor_->SetVisibility(0);
+      }
+      if (scalar_bar_) {
+        pre_sketch_vis_scalar_bar_ = scalar_bar_->GetVisibility() != 0;
+        scalar_bar_->SetVisibility(0);
+      }
+      if (mesh_select_actor_) {
+        pre_sketch_vis_select_ = mesh_select_actor_->GetVisibility() != 0;
+        mesh_select_actor_->SetVisibility(0);
+      }
+    }
     // 一次性创建草图 actor: 底层图元 / 选中高亮 / 橡皮筋预览
     if (!sketch_actor_ && renderer_) {
       sketch_mapper_ = vtkSmartPointer<vtkPolyDataMapper>::New();
@@ -4034,11 +4060,26 @@ void VtkViewer::set_sketch_document(SketchDocument* doc) {
       }
     }
   } else {
-    // 退出草图编辑: 隐藏草图 actor 并恢复 3D 视图
+    // 退出草图编辑: 隐藏草图 actor, 恢复 3D 场景可见性与 3D 视图
     if (sketch_actor_) {
       sketch_actor_->SetVisibility(0);
       sketch_sel_actor_->SetVisibility(0);
       sketch_preview_actor_->SetVisibility(0);
+    }
+    if (actor_) {
+      actor_->SetVisibility(pre_sketch_vis_main_ ? 1 : 0);
+    }
+    if (nodes_actor_) {
+      nodes_actor_->SetVisibility(pre_sketch_vis_nodes_ ? 1 : 0);
+    }
+    if (outline_actor_) {
+      outline_actor_->SetVisibility(pre_sketch_vis_outline_ ? 1 : 0);
+    }
+    if (scalar_bar_) {
+      scalar_bar_->SetVisibility(pre_sketch_vis_scalar_bar_ ? 1 : 0);
+    }
+    if (mesh_select_actor_) {
+      mesh_select_actor_->SetVisibility(pre_sketch_vis_select_ ? 1 : 0);
     }
     set_2d_mode(false);
   }
@@ -4443,10 +4484,14 @@ void VtkViewer::sketch_delete_selected() {
 
 void VtkViewer::solve_sketch_and_refresh() {
   if (sketch_doc_) {
-    // WS2 实装前 solve 为桩(返回 false), 这里容忍失败, 仅作尝试
-    SketchSolver solver;
-    QString err;
-    solver.solve(*sketch_doc_, &err);
+    // 求解失败(含矛盾约束)容忍, 仅作尝试; 异常双保险(SketchSolver 内部已
+    // 兜底, 这里再防一层, 绝不让异常逃逸进事件循环)
+    try {
+      SketchSolver solver;
+      QString err;
+      solver.solve(*sketch_doc_, &err);
+    } catch (...) {
+    }
   }
   rebuild_sketch_actors();
   emit sketch_modified();

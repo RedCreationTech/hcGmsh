@@ -218,6 +218,7 @@ const QHash<QString, QString>& zh_dict() {
       {"Kind", "类型"},
       {"Status", "状态"},
       {"Name", "名称"},
+      {"Summary", "摘要"},
       {"Quick Parameters", "快捷参数"},
       {"Advanced Parameters", "高级参数"},
       {"Add Param", "添加参数"},

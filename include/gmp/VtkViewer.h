@@ -342,6 +342,13 @@ signals:
   vtkSmartPointer<vtkActor> sketch_preview_actor_;
   vtkSmartPointer<vtkCallbackCommand> sketch_move_callback_; // 鼠标移动观察器
   vtkSmartPointer<vtkCallbackCommand> sketch_key_callback_;  // Delete 键观察器
+  // 草图会话期间暂存的 3D 场景 actor 可见性 (退出会话时恢复),
+  // 避免 2D 草图与 3D 网格/结果叠显
+  bool pre_sketch_vis_main_ = false;
+  bool pre_sketch_vis_nodes_ = false;
+  bool pre_sketch_vis_outline_ = false;
+  bool pre_sketch_vis_scalar_bar_ = false;
+  bool pre_sketch_vis_select_ = false;
   bool first_render_ = true;
   bool pipeline_ready_ = false;
   bool actor_added_ = false;

@@ -1,5 +1,7 @@
 #include "gmp/PropertyEditor.h"
 
+#include "gmp/SketchDocument.h"
+
 #include <QFormLayout>
 #include <QHeaderView>
 #include <QLabel>
@@ -38,12 +40,18 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
 
   general_tab_ = new QWidget(this);
   auto* general_layout = new QFormLayout(general_tab_);
+  // macOS 的 QMacStyle 默认把 QFormLayout 强制 WrapAllRows (标签在字段上方),
+  // 看起来像"空行", 显式改回标签与值同行
+  general_layout->setRowWrapPolicy(QFormLayout::DontWrapRows);
   kind_label_ = new QLabel("-", general_tab_);
   status_label_ = new QLabel("-", general_tab_);
   name_edit_ = new QLineEdit(general_tab_);
+  summary_label_ = new QLabel("-", general_tab_);
+  summary_label_->setWordWrap(true);
   general_layout->addRow("Kind", kind_label_);
   general_layout->addRow("Status", status_label_);
   general_layout->addRow("Name", name_edit_);
+  general_layout->addRow("Summary", summary_label_);
   tabs_->addTab(general_tab_, "General");
 
   params_tab_ = new QWidget(this);
@@ -208,8 +216,12 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
             &PropertyEditor::refresh_validation_summary);
   }
 
-  // 右侧边栏宽度有限: 表单标签换行到控件上方(垂直布局), 减少横向溢出
+  // 右侧边栏宽度有限: 表单标签换行到控件上方(垂直布局), 减少横向溢出。
+  // 常规页(身份信息, 值都较短)例外, 保持标签与值同行, 避免看起来像"空行"
   for (auto* f : findChildren<QFormLayout*>()) {
+    if (general_tab_ && f == qobject_cast<QFormLayout*>(general_tab_->layout())) {
+      continue;
+    }
     f->setRowWrapPolicy(QFormLayout::WrapAllRows);
   }
 
@@ -261,6 +273,7 @@ void PropertyEditor::load_from_item() {
     header_label_->setText("No Selection");
     kind_label_->setText("-");
     status_label_->setText("-");
+    summary_label_->setText("-");
     name_edit_->setText("");
     params_table_->setRowCount(0);
     clear_form();
@@ -305,6 +318,7 @@ void PropertyEditor::load_from_item() {
                              ? params.value("state").toString()
                              : params.value("status").toString();
   status_label_->setText(status.isEmpty() ? "-" : status);
+  summary_label_->setText(build_node_summary(kind, params));
   int row = 0;
   for (auto it = params.begin(); it != params.end(); ++it) {
     params_table_->insertRow(row);
@@ -1005,8 +1019,59 @@ void PropertyEditor::refresh_preview() {
                                               issues.join(", "));
 
   preview_summary_label_->setText(
-      QString("Preview: %1 (%2)").arg(current_item_->text(0), kind));
+      QString("Preview: %1 (%2) — node data, not MOOSE input")
+          .arg(current_item_->text(0), kind));
   preview_text_->setPlainText(lines.join("\n"));
+}
+
+QString PropertyEditor::build_node_summary(const QString& kind,
+                                           const QVariantMap& params) const {
+  if (kind == "Features") {
+    // 特征 = 建模历史: 操作类型 + 来源草图 + 关键参数
+    QStringList parts;
+    if (!params.value("type").toString().isEmpty()) {
+      parts << params.value("type").toString();
+    }
+    if (!params.value("sketch").toString().isEmpty()) {
+      parts << QString("sketch: %1").arg(params.value("sketch").toString());
+    }
+    for (const char* k : {"distance", "angle_deg", "z2", "sketch2", "path"}) {
+      if (params.contains(k)) {
+        parts << QString("%1=%2").arg(QLatin1String(k),
+                                      params.value(k).toString());
+      }
+    }
+    return parts.isEmpty() ? QString("-") : parts.join(", ");
+  }
+  if (kind == "Parts") {
+    // 部件 = 3D 产物: 来源草图 + 产出它的特征历史
+    QStringList parts;
+    if (!params.value("sketch").toString().isEmpty()) {
+      parts << QString("sketch: %1").arg(params.value("sketch").toString());
+    }
+    if (!params.value("feature").toString().isEmpty()) {
+      parts << QString("feature: %1").arg(params.value("feature").toString());
+    }
+    if (!params.value("gmsh_volume_tag").toString().isEmpty()) {
+      parts << QString("gmsh volume %1")
+                   .arg(params.value("gmsh_volume_tag").toString());
+    }
+    return parts.isEmpty() ? QString("-") : parts.join(", ");
+  }
+  if (kind == "Sketches") {
+    const QString data = params.value("data").toString();
+    if (data.trimmed().isEmpty()) {
+      return QString("plane: XY, empty sketch");
+    }
+    SketchDocument doc;
+    if (doc.from_yaml_string(data, nullptr)) {
+      return QString("plane: XY, entities: %1, constraints: %2")
+          .arg(doc.entity_count())
+          .arg(doc.constraints().size());
+    }
+    return QString("plane: XY (data parse error)");
+  }
+  return QString("-");
 }
 
 void PropertyEditor::build_form_for_kind(const QString& kind) {

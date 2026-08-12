@@ -47,6 +47,9 @@ class PropertyEditor : public QWidget {
   void load_from_item();
   void save_params_to_item();
   bool is_root_item() const;
+  // 常规页摘要: 按节点类型给出关键信息 (如 Features 的来源草图/参数)
+  QString build_node_summary(const QString& kind,
+                             const QVariantMap& params) const;
   void update_group_widget_for_kind(const QString& kind);
   void update_validation();
   void build_form_for_kind(const QString& kind);
@@ -67,6 +70,7 @@ class PropertyEditor : public QWidget {
   QLabel* header_label_ = nullptr;
   QLabel* kind_label_ = nullptr;
   QLabel* status_label_ = nullptr;
+  QLabel* summary_label_ = nullptr;
   QLabel* validation_label_ = nullptr;
   QPushButton* validate_model_btn_ = nullptr;
   QLineEdit* name_edit_ = nullptr;
