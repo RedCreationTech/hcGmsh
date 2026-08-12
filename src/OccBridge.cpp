@@ -19,10 +19,12 @@
 #include <BRepPrimAPI_MakePrism.hxx>
 #include <BRepPrimAPI_MakeRevol.hxx>
 #include <BRepTools.hxx>
+#include <BRep_Builder.hxx>
 #include <GC_MakeArcOfCircle.hxx>
 #include <GC_MakeSegment.hxx>
 #include <Standard_Failure.hxx>
 #include <TopoDS.hxx>
+#include <TopoDS_Compound.hxx>
 #include <TopoDS_Edge.hxx>
 #include <TopoDS_Face.hxx>
 #include <TopoDS_Shape.hxx>
@@ -100,22 +102,158 @@ TopoDS_Wire wire_from_loop(const SketchDocument& doc,
   return mw.Wire();
 }
 
-// 草图 -> 轮廓 face。
-// v1 限制: 多环草图仅使用 closed_loops() 返回的第一个闭环作为轮廓,
-// 暂不支持"外轮廓 + 内孔" (孔会被忽略)。
-TopoDS_Face face_from_sketch(const SketchDocument& doc, QString* error) {
+// 采样一个闭环为 2D 多边形 (用于环间包含关系判断)
+std::vector<SketchPoint2d> sample_loop_polygon(const SketchDocument& doc,
+                                               const std::vector<int>& loop) {
+  std::vector<SketchPoint2d> poly;
+  for (const int id : loop) {
+    const SketchEntity* e = doc.entity(id);
+    if (!e) {
+      continue;
+    }
+    if (e->type == SketchEntityType::Line) {
+      poly.push_back(e->p1);
+    } else if (e->type == SketchEntityType::Circle) {
+      for (int i = 0; i < 36; ++i) {
+        const double a = kTwoPi * i / 36.0;
+        poly.push_back({e->center.x + e->radius * std::cos(a),
+                        e->center.y + e->radius * std::sin(a)});
+      }
+    } else {  // Arc: 起止角之间采样
+      double span = std::fmod(e->end_angle - e->start_angle, kTwoPi);
+      if (span <= 0.0) {
+        span += kTwoPi;
+      }
+      for (int i = 0; i < 24; ++i) {
+        const double a = e->start_angle + span * i / 24.0;
+        poly.push_back({e->center.x + e->radius * std::cos(a),
+                        e->center.y + e->radius * std::sin(a)});
+      }
+    }
+  }
+  return poly;
+}
+
+// 射线法: 点是否在多边形内
+bool point_in_polygon(const SketchPoint2d& p,
+                      const std::vector<SketchPoint2d>& poly) {
+  bool inside = false;
+  const size_t n = poly.size();
+  for (size_t i = 0, j = n - 1; i < n; j = i++) {
+    const auto& a = poly[i];
+    const auto& b = poly[j];
+    if ((a.y > p.y) != (b.y > p.y) &&
+        p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+// 草图 -> 轮廓 face 列表。
+// 支持多闭环: 相离的环各自成面 (如两个圆 -> 拉伸得到两个圆柱);
+// 嵌套环按奇偶层: 偶数层为实体区域, 奇数层作其最近偶数层容器的内孔。
+std::vector<TopoDS_Face> faces_from_sketch(const SketchDocument& doc,
+                                           QString* error) {
   const auto loops = doc.closed_loops();
   if (loops.empty()) {
     *error = "no closed profile in sketch";
-    return TopoDS_Face();
+    return {};
   }
-  const TopoDS_Wire wire = wire_from_loop(doc, loops.front());
-  BRepBuilderAPI_MakeFace mf(wire, /*OnlyPlane=*/Standard_True);
-  if (!mf.IsDone()) {
-    *error = "failed to build a planar face from the closed profile";
-    return TopoDS_Face();
+  struct LoopInfo {
+    std::vector<int> ids;
+    std::vector<SketchPoint2d> poly;
+    double area = 0.0;
+    int depth = 0;
+  };
+  std::vector<LoopInfo> infos(loops.size());
+  for (size_t i = 0; i < loops.size(); ++i) {
+    infos[i].ids = loops[i];
+    infos[i].poly = sample_loop_polygon(doc, loops[i]);
+    if (infos[i].poly.empty()) {
+      *error = "internal error: empty loop polygon";
+      return {};
+    }
+    double area2 = 0.0;
+    const auto& pl = infos[i].poly;
+    for (size_t k = 0, j = pl.size() - 1; k < pl.size(); j = k++) {
+      area2 += pl[j].x * pl[k].y - pl[k].x * pl[j].y;  // 鞋带公式
+    }
+    infos[i].area = std::fabs(area2) / 2.0;
   }
-  return mf.Face();
+  // 包含深度: 用各环边界上的采样点 (不能用质心——质心可能恰落在别的环内,
+  // 例如矩形质心恰为内孔圆心, 会造成双向包含误判)。取各环首个采样点
+  // (位于该环边界上), 统计它落在多少其他环内部。
+  for (size_t i = 0; i < infos.size(); ++i) {
+    for (size_t j = 0; j < infos.size(); ++j) {
+      if (i != j && point_in_polygon(infos[i].poly.front(), infos[j].poly)) {
+        ++infos[i].depth;
+      }
+    }
+  }
+  // 偶数层 -> 外轮廓 face
+  std::vector<TopoDS_Face> faces;
+  std::vector<int> face_index(infos.size(), -1);
+  for (size_t i = 0; i < infos.size(); ++i) {
+    if (infos[i].depth % 2 != 0) {
+      continue;
+    }
+    BRepBuilderAPI_MakeFace mf(wire_from_loop(doc, infos[i].ids),
+                               /*OnlyPlane=*/Standard_True);
+    if (!mf.IsDone()) {
+      *error = "failed to build a planar face from the closed profile";
+      return {};
+    }
+    face_index[i] = static_cast<int>(faces.size());
+    faces.push_back(mf.Face());
+  }
+  // 奇数层 -> 内孔, 加入最近偶数层容器 (孔线框取反向)
+  for (size_t i = 0; i < infos.size(); ++i) {
+    if (infos[i].depth % 2 == 0) {
+      continue;
+    }
+    int parent = -1;
+    for (size_t j = 0; j < infos.size(); ++j) {
+      if (i == j || infos[j].depth != infos[i].depth - 1) {
+        continue;
+      }
+      if (point_in_polygon(infos[i].poly.front(), infos[j].poly) &&
+          (parent < 0 || infos[j].area < infos[parent].area)) {
+        parent = static_cast<int>(j);
+      }
+    }
+    if (parent < 0 || face_index[parent] < 0) {
+      continue;
+    }
+    TopoDS_Wire hole = wire_from_loop(doc, infos[i].ids);
+    BRepBuilderAPI_MakeFace adder(faces[face_index[parent]],
+                                  TopoDS::Wire(hole.Reversed()));
+    if (adder.IsDone()) {
+      faces[face_index[parent]] = adder.Face();
+    }
+  }
+  if (faces.empty() && error->isEmpty()) {
+    *error = "no valid outer profile found";
+  }
+  return faces;
+}
+
+// 多个特征结果合并: 单个直接返回, 多个打成 Compound
+// (importShapes 会把 Compound 里的每个实体各自导入 gmsh)
+TopoDS_Shape combine_shapes(const std::vector<TopoDS_Shape>& shapes) {
+  if (shapes.empty()) {
+    return TopoDS_Shape();
+  }
+  if (shapes.size() == 1) {
+    return shapes.front();
+  }
+  TopoDS_Compound comp;
+  BRep_Builder builder;
+  builder.MakeCompound(comp);
+  for (const auto& s : shapes) {
+    builder.Add(comp, s);
+  }
+  return comp;
 }
 
 // 特征结果收尾: 可选落盘 brep + 临时 brep 回注 gmsh (brew gmsh 的
@@ -330,19 +468,23 @@ FeatureResult extrude_sketch(const SketchDocument& doc, double distance,
       return res;
     }
     QString err;
-    const TopoDS_Face face = face_from_sketch(doc, &err);
-    if (face.IsNull()) {
+    const auto faces = faces_from_sketch(doc, &err);
+    if (faces.empty()) {
       res.error = err;
       return res;
     }
-    // 沿 +Z 拉伸; 负值自动反向
-    BRepPrimAPI_MakePrism prism(face, gp_Vec(0.0, 0.0, distance));
-    prism.Build();
-    if (!prism.IsDone()) {
-      res.error = "extrude failed (invalid prism)";
-      return res;
+    // 沿 +Z 拉伸; 负值自动反向。每个闭环轮廓各自成体, 多体合并 Compound
+    std::vector<TopoDS_Shape> solids;
+    for (const auto& f : faces) {
+      BRepPrimAPI_MakePrism prism(f, gp_Vec(0.0, 0.0, distance));
+      prism.Build();
+      if (!prism.IsDone()) {
+        res.error = "extrude failed (invalid prism)";
+        return res;
+      }
+      solids.push_back(prism.Shape());
     }
-    finalize_feature(prism.Shape(), brep_out_path, &res);
+    finalize_feature(combine_shapes(solids), brep_out_path, &res);
   } catch (const Standard_Failure& f) {
     res.error = occ_error(f, "extrude failed");
   } catch (const std::exception& e) {
@@ -360,21 +502,25 @@ FeatureResult revolve_sketch(const SketchDocument& doc, double angle_deg,
       return res;
     }
     QString err;
-    const TopoDS_Face face = face_from_sketch(doc, &err);
-    if (face.IsNull()) {
+    const auto faces = faces_from_sketch(doc, &err);
+    if (faces.empty()) {
       res.error = err;
       return res;
     }
-    // 绕 Y 轴 (过原点, 草图平面内) 旋转; 角度转弧度
+    // 绕 Y 轴 (过原点, 草图平面内) 旋转; 角度转弧度。多闭环各自成体后合并
     const gp_Ax1 axis(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 1.0, 0.0));
     const double angle_rad = angle_deg * 3.14159265358979323846 / 180.0;
-    BRepPrimAPI_MakeRevol revol(face, axis, angle_rad);
-    revol.Build();
-    if (!revol.IsDone()) {
-      res.error = "revolve failed (invalid revolved shape)";
-      return res;
+    std::vector<TopoDS_Shape> solids;
+    for (const auto& f : faces) {
+      BRepPrimAPI_MakeRevol revol(f, axis, angle_rad);
+      revol.Build();
+      if (!revol.IsDone()) {
+        res.error = "revolve failed (invalid revolved shape)";
+        return res;
+      }
+      solids.push_back(revol.Shape());
     }
-    finalize_feature(revol.Shape(), brep_out_path, &res);
+    finalize_feature(combine_shapes(solids), brep_out_path, &res);
   } catch (const Standard_Failure& f) {
     // 轮廓与旋转轴相交时 OCC 通常在此抛异常
     res.error = occ_error(
@@ -409,7 +555,7 @@ FeatureResult loft_sketches(
         res.error = QString("loft section %1: no closed profile").arg(index);
         return res;
       }
-      // v1 限制: 同 face_from_sketch, 每个截面只取第一个闭环
+      // v1 限制: 放样每个截面只取第一个闭环 (多闭环截面间的配对规则暂不支持)
       TopoDS_Wire wire = wire_from_loop(*doc, loops.front());
       if (z_offset != 0.0) {
         gp_Trsf lift;
@@ -439,8 +585,8 @@ FeatureResult sweep_sketch(const SketchDocument& profile,
   FeatureResult res;
   try {
     QString err;
-    const TopoDS_Face face = face_from_sketch(profile, &err);
-    if (face.IsNull()) {
+    const auto faces = faces_from_sketch(profile, &err);
+    if (faces.empty()) {
       res.error = err;
       return res;
     }
@@ -457,13 +603,18 @@ FeatureResult sweep_sketch(const SketchDocument& profile,
         return res;
       }
     }
-    BRepOffsetAPI_MakePipe pipe(mw.Wire(), face);
-    pipe.Build();
-    if (!pipe.IsDone()) {
-      res.error = "sweep failed (invalid pipe)";
-      return res;
+    // 每个轮廓面各自沿路径扫掠, 多体合并
+    std::vector<TopoDS_Shape> solids;
+    for (const auto& f : faces) {
+      BRepOffsetAPI_MakePipe pipe(mw.Wire(), f);
+      pipe.Build();
+      if (!pipe.IsDone()) {
+        res.error = "sweep failed (invalid pipe)";
+        return res;
+      }
+      solids.push_back(pipe.Shape());
     }
-    finalize_feature(pipe.Shape(), brep_out_path, &res);
+    finalize_feature(combine_shapes(solids), brep_out_path, &res);
   } catch (const Standard_Failure& f) {
     res.error = occ_error(f, "sweep failed");
   } catch (const std::exception& e) {

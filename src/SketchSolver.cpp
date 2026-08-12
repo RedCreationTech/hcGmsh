@@ -258,7 +258,9 @@ SketchSolver::~SketchSolver() = default;
 bool SketchSolver::solve(SketchDocument& doc, QString* error) {
   last_dof_ = -1;
   last_conflicts_ = 0;
-
+  // 求解发生在鼠标/按钮事件处理链路上, 异常若逃逸进 Qt/AppKit 事件循环
+  // 会经 objc_exception_rethrow 直接 terminate (SIGABRT), 这里兜底全捕获
+  try {
   SolveContext ctx;
   GCS::System sys;
 
@@ -351,6 +353,17 @@ bool SketchSolver::solve(SketchDocument& doc, QString* error) {
   // 冗余约束不算失败, 但把冗余数记入冲突计数供 UI 提示? 不: 语义分开,
   // last_conflicts_ 仅在失败时填冲突数, 成功时保持 0。
   return true;
+  } catch (const std::exception& e) {
+    if (error) {
+      *error = QStringLiteral("求解器异常: %1").arg(QString::fromUtf8(e.what()));
+    }
+    return false;
+  } catch (...) {
+    if (error) {
+      *error = QStringLiteral("求解器未知异常");
+    }
+    return false;
+  }
 }
 
 bool SketchSolver::set_driving_value(SketchDocument& doc, int constraint_id,
