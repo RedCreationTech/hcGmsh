@@ -27,6 +27,7 @@ class vtkGenericOpenGLRenderWindow;
 class vtkRenderer;
 class vtkExodusIIReader;
 class vtkCompositeDataGeometryFilter;
+class vtkMultiBlockDataSetAlgorithm;
 class vtkDataSetSurfaceFilter;
 class vtkUnstructuredGrid;
 class vtkVertexGlyphFilter;
@@ -296,6 +297,8 @@ signals:
   vtkSmartPointer<vtkGenericOpenGLRenderWindow> render_window_;
   vtkSmartPointer<vtkRenderer> renderer_;
   vtkSmartPointer<vtkExodusIIReader> reader_;
+  // Exodus 多块输出在扁平化前补齐"部分块变量"（0 填充缺失块），见实现注释
+  vtkSmartPointer<vtkMultiBlockDataSetAlgorithm> block_pad_;
   vtkSmartPointer<vtkCompositeDataGeometryFilter> geom_;
   vtkSmartPointer<vtkUnstructuredGrid> mesh_grid_;
   vtkSmartPointer<vtkDataSetSurfaceFilter> mesh_geom_;

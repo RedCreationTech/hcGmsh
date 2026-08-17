@@ -27,6 +27,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <unordered_map>
 
 #include "gmp/ComboPopupFix.h"
@@ -37,12 +38,17 @@
 #include <vtkActor.h>
 #include <vtkCellData.h>
 #include <vtkCompositeDataGeometryFilter.h>
+#include <vtkCompositeDataIterator.h>
 #include <vtkDataArray.h>
 #include <vtkDataObject.h>
 #include <vtkDataSet.h>
 #include <vtkDataSetSurfaceFilter.h>
 #include <vtkDataSetMapper.h>
 #include <vtkExodusIIReader.h>
+#include <vtkFieldData.h>
+#include <vtkMultiBlockDataSet.h>
+#include <vtkMultiBlockDataSetAlgorithm.h>
+#include <vtkObjectFactory.h>
 #include <vtkGenericOpenGLRenderWindow.h>
 #include <vtkCamera.h>
 #include <vtkInformation.h>
@@ -96,7 +102,10 @@ void style_scalar_bar(vtkScalarBarActor* bar) {
     return;
   }
   bar->SetUnconstrainedFontSize(1);
-  bar->SetWidth(0.08);
+  // 宽度 0.08 时指数形式刻度（如 -2.00e+07）会被裁掉指数位；
+  // 改用紧凑格式（-2e+07）并略加宽。
+  bar->SetLabelFormat("%.3g");
+  bar->SetWidth(0.10);
   bar->SetHeight(0.55);
   bar->SetNumberOfLabels(5);
   bar->SetBarRatio(0.35);
@@ -121,6 +130,108 @@ void position_scalar_bar(vtkScalarBarActor* bar, int corner) {
   const double y = (corner == 0 || corner == 2) ? my : 1.0 - h - my;
   bar->SetPosition(x, y);
 }
+
+// Exodus 按 element block 分块输出，MOOSE 只把部分变量（如 ASR_*）写在
+// 定义了对应材料的块上；vtkCompositeDataGeometryFilter 扁平化多块数据时只保留
+// 所有块共有的数组，导致这些"部分块变量"整体丢失。该过滤器在扁平化前把每个块
+// 缺失的点/单元数组用 0 填充补齐，保证变量列表与云图数据完整。
+class vtkPadPartialBlockArrays : public vtkMultiBlockDataSetAlgorithm {
+ public:
+  static vtkPadPartialBlockArrays* New();
+  vtkTypeMacro(vtkPadPartialBlockArrays, vtkMultiBlockDataSetAlgorithm);
+
+ protected:
+  vtkPadPartialBlockArrays() = default;
+
+  int RequestData(vtkInformation*, vtkInformationVector** input_vector,
+                  vtkInformationVector* output_vector) override {
+    auto* input = vtkMultiBlockDataSet::GetData(input_vector[0], 0);
+    auto* output = vtkMultiBlockDataSet::GetData(output_vector, 0);
+    if (!input || !output) {
+      return 0;
+    }
+    output->CopyStructure(input);
+
+    struct ArrayProto {
+      std::string name;
+      int data_type = VTK_DOUBLE;
+      int components = 1;
+    };
+    auto collect = [](vtkFieldData* fd, std::vector<ArrayProto>& protos) {
+      for (int i = 0; i < fd->GetNumberOfArrays(); ++i) {
+        vtkDataArray* arr = fd->GetArray(i);
+        if (!arr || !arr->GetName()) {
+          continue;
+        }
+        const std::string name = arr->GetName();
+        bool known = false;
+        for (const auto& p : protos) {
+          known = known || p.name == name;
+        }
+        if (!known) {
+          protos.push_back({name, arr->GetDataType(),
+                            arr->GetNumberOfComponents()});
+        }
+      }
+    };
+
+    // 第一遍：收集所有叶子块点/单元数组的并集原型。
+    std::vector<ArrayProto> point_protos;
+    std::vector<ArrayProto> cell_protos;
+    auto* scan = input->NewIterator();
+    for (scan->InitTraversal(); !scan->IsDoneWithTraversal();
+         scan->GoToNextItem()) {
+      auto* ds = vtkDataSet::SafeDownCast(scan->GetCurrentDataObject());
+      if (!ds) {
+        continue;
+      }
+      collect(ds->GetPointData(), point_protos);
+      collect(ds->GetCellData(), cell_protos);
+    }
+    scan->Delete();
+
+    // 第二遍：浅拷贝叶子块（拥有自己的字段列表），缺失数组补 0。
+    auto pad = [](vtkFieldData* fd, vtkIdType tuples,
+                  const std::vector<ArrayProto>& protos) {
+      for (const auto& p : protos) {
+        if (fd->GetArray(p.name.c_str())) {
+          continue;
+        }
+        auto* arr = vtkDataArray::CreateDataArray(p.data_type);
+        arr->SetNumberOfComponents(p.components);
+        arr->SetNumberOfTuples(tuples);
+        arr->Fill(0.0);
+        arr->SetName(p.name.c_str());
+        fd->AddArray(arr);
+        arr->Delete();
+      }
+    };
+    auto* in_it = input->NewIterator();
+    auto* out_it = output->NewIterator();
+    // 关闭空节点跳过：CopyStructure 后输出叶子暂为空，且两个迭代器必须
+    // 按相同顺序对齐遍历（输入的空叶子保持为空即可）。
+    in_it->SkipEmptyNodesOff();
+    out_it->SkipEmptyNodesOff();
+    for (in_it->InitTraversal(), out_it->InitTraversal();
+         !in_it->IsDoneWithTraversal() && !out_it->IsDoneWithTraversal();
+         in_it->GoToNextItem(), out_it->GoToNextItem()) {
+      auto* ds = vtkDataSet::SafeDownCast(in_it->GetCurrentDataObject());
+      if (!ds) {
+        continue;
+      }
+      auto* copy = static_cast<vtkDataSet*>(ds->NewInstance());
+      copy->ShallowCopy(ds);
+      pad(copy->GetPointData(), copy->GetNumberOfPoints(), point_protos);
+      pad(copy->GetCellData(), copy->GetNumberOfCells(), cell_protos);
+      output->SetDataSet(out_it, copy);
+      copy->Delete();
+    }
+    in_it->Delete();
+    out_it->Delete();
+    return 1;
+  }
+};
+vtkStandardNewMacro(vtkPadPartialBlockArrays);
 
 struct VectorStats {
   bool has_data = false;
@@ -1076,6 +1187,9 @@ void VtkViewer::set_exodus_file(const QString& path) {
   if (!geom_) {
     geom_ = vtkSmartPointer<vtkCompositeDataGeometryFilter>::New();
   }
+  if (!block_pad_) {
+    block_pad_ = vtkSmartPointer<vtkPadPartialBlockArrays>::New();
+  }
   if (!mapper_) {
     mapper_ = vtkSmartPointer<vtkDataSetMapper>::New();
   }
@@ -1093,7 +1207,8 @@ void VtkViewer::set_exodus_file(const QString& path) {
     position_scalar_bar(scalar_bar_, scalar_bar_pos_);
   }
   mapper_->SetLookupTable(lut_);
-  geom_->SetInputConnection(reader_->GetOutputPort());
+  block_pad_->SetInputConnection(reader_->GetOutputPort());
+  geom_->SetInputConnection(block_pad_->GetOutputPort());
   mapper_->SetInputConnection(geom_->GetOutputPort());
   actor_->SetMapper(mapper_);
   if (renderer_ && !actor_added_) {
@@ -1734,8 +1849,10 @@ void VtkViewer::on_array_changed(int index) {
       range_min_->setValue(range[0]);
       range_max_->setValue(range[1]);
     }
-    apply_lookup_table();
+    // 先应用范围（mapper + LUT），再建表渲染；
+    // 反过来的话 apply_lookup_table 内部的 Render 会用旧范围画一帧。
     on_apply_range();
+    apply_lookup_table();
     if (scalar_bar_) {
       scalar_bar_->SetTitle(name.toUtf8().constData());
       scalar_bar_->SetLookupTable(mapper_->GetLookupTable());
@@ -1886,6 +2003,11 @@ void VtkViewer::update_pipeline() {
       }
     }
     reader_->Update();
+    // reader 输出对象被原地复用，下游执行器检测不到时间步变化；
+    // 显式标脏中间过滤器，强制整条链路按新时间步重新执行。
+    if (block_pad_) {
+      block_pad_->Modified();
+    }
     geom_->Update();
     update_deformation_pipeline();
   } else if (mode_ == DataMode::Mesh) {
@@ -2591,10 +2713,13 @@ void VtkViewer::on_apply_range() {
   const bool auto_range = auto_range_->isChecked();
   range_min_->setEnabled(!auto_range);
   range_max_->setEnabled(!auto_range);
-  if (auto_range) {
-    // Range already updated in on_array_changed.
-  } else {
-    mapper_->SetScalarRange(range_min_->value(), range_max_->value());
+  // 自动范围时 on_array_changed 已把当前数组范围写入 range_min_/range_max_。
+  // 这里必须同步到 mapper，否则 LUT 停留在默认 0-1，云图恒为均匀色。
+  mapper_->SetScalarRange(range_min_->value(), range_max_->value());
+  if (lut_) {
+    // 色标刻度取自 LUT 自身的 Range；渲染时 painter 回写 Range 的时机
+    // 晚于色标的刻度布局，会导致切换变量后刻度滞后一帧，这里显式同步。
+    lut_->SetRange(range_min_->value(), range_max_->value());
   }
   if (render_window_) {
     render_window_->Render();
@@ -2767,7 +2892,17 @@ void VtkViewer::refresh_time_only() {
     }
   }
   reader_->Update();
+  // 同 update_pipeline：强制下游随新时间步重新执行（reader 输出原地复用，
+  // 仅 reader->Update() 不会触发 geom 重算）。
+  if (block_pad_) {
+    block_pad_->Modified();
+  }
   geom_->Update();
+  // 时间步变化后场数据已更新，必须重算当前数组范围并刷新映射，
+  // 否则色标仍停留在旧时间步（加载时 t=0 全为 0，云图恒为均匀色）。
+  if (array_combo_ && array_combo_->count() > 0) {
+    on_array_changed(array_combo_->currentIndex());
+  }
   render_window_->Render();
 #endif
 }
@@ -2778,6 +2913,11 @@ void VtkViewer::update_time_steps_from_reader(bool keep_index) {
     return;
   }
   const int prev_index = time_slider_->value();
+  // 暂存当前时间步：文件被重写过程中 UpdateInformation 可能瞬时读不到
+  // TIME_STEPS，若此时清空滑块状态，setRange(0,0) 会把当前值钳到 0 且
+  // 无法恢复（后续 keep_index 只能保住已经被钳掉的 0）。
+  std::vector<double> prev_steps;
+  prev_steps.swap(time_steps_);
   reader_->UpdateInformation();
 
   time_steps_.clear();
@@ -2792,18 +2932,28 @@ void VtkViewer::update_time_steps_from_reader(bool keep_index) {
   }
 
   if (time_steps_.empty()) {
+    if (!prev_steps.empty()) {
+      // 瞬时读取失败：恢复原时间步状态，等下一次 watcher/refresh 事件再试。
+      time_steps_.swap(prev_steps);
+      return;
+    }
+    time_slider_->blockSignals(true);
     time_slider_->setRange(0, 0);
+    time_slider_->setValue(0);
+    time_slider_->blockSignals(false);
     time_slider_->setEnabled(false);
     time_label_->setText("t=0");
     return;
   }
 
   time_slider_->setEnabled(true);
-  time_slider_->setRange(0, static_cast<int>(time_steps_.size()) - 1);
   const int idx = keep_index && prev_index < static_cast<int>(time_steps_.size())
                       ? prev_index
                       : 0;
+  // setRange 可能在钳位时触发 valueChanged，必须一并屏蔽，
+  // 否则会伪发一次 on_time_changed 把时间步打回 0。
   time_slider_->blockSignals(true);
+  time_slider_->setRange(0, static_cast<int>(time_steps_.size()) - 1);
   time_slider_->setValue(idx);
   time_slider_->blockSignals(false);
   time_label_->setText(QString("t=%1").arg(time_steps_[idx]));
