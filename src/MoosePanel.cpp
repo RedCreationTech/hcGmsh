@@ -26,8 +26,10 @@
 
 #include "gmp/ComboPopupFix.h"
 
+#include "gmp/ArtifactDialog.h"
 #include "gmp/MooseSnapshot.h"
 #include "gmp/RunSpec.h"
+#include "gmp/SimClient.h"
 
 #ifdef GMP_ENABLE_GMSH_GUI
 #include <gmsh.h>
@@ -162,6 +164,43 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   run_form->addRow("Extra Args", extra_args_);
 
   layout->addWidget(run_box);
+
+  // TASK-E2E-11: 作业提交入口（经 LIMS Facade, 不直连 C06, 不保存凭据）
+  auto* remote_box = new QGroupBox("Remote Job (via LIMS Facade)");
+  auto* remote_form = new QFormLayout(remote_box);
+  sim_server_ = new QLineEdit();
+  sim_server_->setPlaceholderText("http://127.0.0.1:8200");
+  sim_server_->setToolTip("LIMS Facade base URL");
+  remote_form->addRow("Server", sim_server_);
+  sim_project_ = new QLineEdit();
+  sim_project_->setPlaceholderText("gmp-ise");
+  remote_form->addRow("Project ID", sim_project_);
+  auto* sim_btn_row = new QHBoxLayout();
+  auto* submit_btn = new QPushButton("Submit Job");
+  submit_btn->setToolTip("Submit latest exported snapshot via LIMS Facade");
+  auto* refresh_btn = new QPushButton("Refresh Status");
+  auto* artifacts_btn = new QPushButton("Open Remote Artifact");
+  connect(submit_btn, &QPushButton::clicked, this, &MoosePanel::on_submit_job);
+  connect(refresh_btn, &QPushButton::clicked, this,
+          &MoosePanel::on_refresh_job);
+  connect(artifacts_btn, &QPushButton::clicked, this,
+          &MoosePanel::on_open_artifacts);
+  sim_btn_row->addWidget(submit_btn);
+  sim_btn_row->addWidget(refresh_btn);
+  sim_btn_row->addWidget(artifacts_btn);
+  sim_btn_row->addStretch(1);
+  auto* sim_btn_container = new QWidget();
+  sim_btn_container->setLayout(sim_btn_row);
+  remote_form->addRow("", sim_btn_container);
+  sim_status_label_ = new QLabel("(no job submitted)");
+  remote_form->addRow("Job", sim_status_label_);
+  layout->addWidget(remote_box);
+
+  sim_client_ = new SimClient(this);
+  connect(sim_client_, &SimClient::submit_finished, this,
+          &MoosePanel::on_sim_submit_finished);
+  connect(sim_client_, &SimClient::job_fetched, this,
+          &MoosePanel::on_sim_job_fetched);
 
   auto* io_box = new QGroupBox("Input Editor");
   auto* io_layout = new QVBoxLayout(io_box);
@@ -624,6 +663,7 @@ void MoosePanel::on_export_snapshot() {
     append_log("Snapshot export failed: " + result.error);
     return;
   }
+  last_snapshot_dir_ = result.dir;
   append_log("Job snapshot exported to: " + result.dir);
   append_log("  input: " + result.input_file +
              " sha256=" + result.input_sha256);
@@ -640,6 +680,110 @@ void MoosePanel::on_export_snapshot() {
   if (current_template_.valid && current_template_.status == "prototype") {
     append_log("  NOTE: prototype template - snapshot marked accordingly.");
   }
+}
+
+void MoosePanel::on_submit_job() {
+  QString dir = last_snapshot_dir_;
+  if (dir.isEmpty() || !QFileInfo::exists(dir + "/manifest.json")) {
+    dir = QFileDialog::getExistingDirectory(
+        this, "Select exported snapshot directory",
+        workdir_path_ && !workdir_path_->text().isEmpty()
+            ? workdir_path_->text()
+            : QDir::currentPath());
+    if (dir.isEmpty()) {
+      return;
+    }
+  }
+  const QString server = sim_server_->text().trimmed().isEmpty()
+                             ? sim_server_->placeholderText()
+                             : sim_server_->text().trimmed();
+  const QString project = sim_project_->text().trimmed().isEmpty()
+                              ? sim_project_->placeholderText()
+                              : sim_project_->text().trimmed();
+  sim_client_->set_base_url(server);
+  sim_status_label_->setText("submitting...");
+  append_log("Submitting snapshot via LIMS Facade: " + server);
+  append_log("  snapshot: " + dir + " project: " + project);
+  sim_client_->submit_snapshot(dir, project);
+  save_settings();
+}
+
+void MoosePanel::on_refresh_job() {
+  if (last_job_id_.isEmpty()) {
+    append_log("No submitted job in this session.");
+    return;
+  }
+  sim_client_->fetch_job(last_job_id_);
+}
+
+void MoosePanel::on_sim_submit_finished(bool ok, const QJsonObject& body,
+                                        const QString& error) {
+  if (!ok) {
+    sim_status_label_->setText("submit failed");
+    append_log("Job submit failed: " + error);
+    return;
+  }
+  last_job_id_ = body.value("job_id").toString();
+  const QString state = body.value("state").toString();
+  sim_status_label_->setText(last_job_id_ + " : " + state);
+  append_log("Job submitted: " + last_job_id_ + " state=" + state);
+}
+
+void MoosePanel::on_sim_job_fetched(bool ok, const QJsonObject& body,
+                                    const QString& error) {
+  if (!ok) {
+    append_log("Job status refresh failed: " + error);
+    return;
+  }
+  const QString state = body.value("state").toString();
+  QString text = last_job_id_ + " : " + state;
+  const QJsonObject progress = body.value("progress").toObject();
+  if (!progress.isEmpty()) {
+    QStringList parts;
+    if (progress.value("percent").isDouble()) {
+      parts << QString("percent=%1")
+                   .arg(progress.value("percent").toDouble(), 0, 'f', 1);
+    }
+    const int step_cur = progress.value("step_current").toInt(-1);
+    if (step_cur >= 0) {
+      QString step = QString("step=%1").arg(step_cur);
+      if (progress.value("step_total").isDouble()) {
+        step += QString("/%1").arg(progress.value("step_total").toInt());
+      }
+      parts << step;
+    }
+    if (progress.value("time_current").isDouble()) {
+      QString time =
+          QString("time=%1").arg(progress.value("time_current").toDouble());
+      if (progress.value("time_total").isDouble()) {
+        time += QString("/%1").arg(progress.value("time_total").toDouble());
+      }
+      parts << time;
+    }
+    if (!parts.isEmpty()) {
+      text += "  (" + parts.join(", ") + ")";
+    }
+  }
+  sim_status_label_->setText(text);
+  append_log("Job status: " + text);
+  if (state == "failed") {
+    const QJsonObject failure = body.value("failure").toObject();
+    append_log("  failure: " + failure.value("code").toString() + " - " +
+               failure.value("message").toString());
+  }
+}
+
+void MoosePanel::on_open_artifacts() {
+  const QString server = sim_server_->text().trimmed().isEmpty()
+                             ? sim_server_->placeholderText()
+                             : sim_server_->text().trimmed();
+  ArtifactDialog dialog(server, this);
+  connect(&dialog, &ArtifactDialog::exodus_artifact_ready, this,
+          [this](const QString& path) {
+            append_log("Remote artifact ready: " + path);
+            maybe_emit_exodus(path);
+          });
+  dialog.exec();
 }
 
 void MoosePanel::on_insert_mesh_block() {
@@ -1631,6 +1775,10 @@ void MoosePanel::load_settings() {
           .toInt());
   extra_args_->setText(
       settings.value("moose/extra_args", extra_args_->text()).toString());
+  sim_server_->setText(
+      settings.value("moose/sim_server", sim_server_->text()).toString());
+  sim_project_->setText(
+      settings.value("moose/sim_project", sim_project_->text()).toString());
 
   if (exec_path_->currentText().trimmed().isEmpty()) {
     const QString detected = auto_detect_exec();
@@ -1651,6 +1799,8 @@ void MoosePanel::save_settings() const {
   settings.setValue("moose/runner_kind", runner_kind_->currentIndex());
   settings.setValue("moose/template_kind", template_kind_->currentIndex());
   settings.setValue("moose/extra_args", extra_args_->text());
+  settings.setValue("moose/sim_server", sim_server_->text());
+  settings.setValue("moose/sim_project", sim_project_->text());
   QStringList history;
   for (int i = 0; i < exec_path_->count(); ++i) {
     history << exec_path_->itemText(i);

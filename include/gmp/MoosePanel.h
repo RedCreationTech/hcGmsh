@@ -12,6 +12,8 @@
 #include "gmp/RunnerFactory.h"
 #include "gmp/MooseTemplates.h"
 
+#include <QJsonObject>
+
 class QCheckBox;
 class QComboBox;
 class QLabel;
@@ -21,6 +23,8 @@ class QPushButton;
 class QSpinBox;
 
 namespace gmp {
+
+class SimClient;
 
 class MoosePanel : public QWidget {
   Q_OBJECT
@@ -63,6 +67,13 @@ class MoosePanel : public QWidget {
   void on_check_input();
   void on_apply_template();
   void on_export_snapshot();
+  void on_submit_job();
+  void on_refresh_job();
+  void on_open_artifacts();
+  void on_sim_submit_finished(bool ok, const QJsonObject& body,
+                              const QString& error);
+  void on_sim_job_fetched(bool ok, const QJsonObject& body,
+                          const QString& error);
   void on_insert_mesh_block();
   void on_insert_bcs_block();
 
@@ -114,6 +125,9 @@ class MoosePanel : public QWidget {
   QPlainTextEdit* log_ = nullptr;
   QPlainTextEdit* boundary_list_ = nullptr;
   QLabel* template_status_label_ = nullptr;
+  QLineEdit* sim_server_ = nullptr;
+  QLineEdit* sim_project_ = nullptr;
+  QLabel* sim_status_label_ = nullptr;
   QPushButton* run_btn_ = nullptr;
   QPushButton* check_btn_ = nullptr;
   QPushButton* stop_btn_ = nullptr;
@@ -123,6 +137,9 @@ class MoosePanel : public QWidget {
   QString output_buffer_;
   QString last_exodus_;
   MooseTemplateInfo current_template_;
+  SimClient* sim_client_ = nullptr;
+  QString last_snapshot_dir_;
+  QString last_job_id_;
 };
 
 }  // namespace gmp
