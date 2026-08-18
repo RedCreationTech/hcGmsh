@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GMP-ISE 生成 .i 与远程作业操作指南（模板库）</title>
+<style>
+  :root { --blue:#1f5fa8; --ok:#1a7f37; --warn:#b26a00; --bad:#b3312d; --bg:#f6f8fa; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", sans-serif;
+         margin: 0; color: #24292f; line-height: 1.75; background: #fff; }
+  header { background: linear-gradient(135deg, #123a66, #1f5fa8); color: #fff; padding: 36px 48px; }
+  header h1 { margin: 0 0 8px; font-size: 26px; }
+  header p { margin: 4px 0; opacity: .92; font-size: 14px; }
+  nav { background: #0f2d4e; padding: 10px 48px; position: sticky; top: 0; z-index: 9; }
+  nav a { color: #cfe2f5; text-decoration: none; margin-right: 18px; font-size: 13px; }
+  nav a:hover { color: #fff; }
+  main { max-width: 1080px; margin: 0 auto; padding: 24px 48px 80px; }
+  h2 { border-left: 5px solid var(--blue); padding-left: 12px; margin-top: 48px; font-size: 22px; }
+  h3 { color: var(--blue); margin-top: 32px; font-size: 17px; }
+  table { border-collapse: collapse; width: 100%; margin: 12px 0; font-size: 13.5px; }
+  th, td { border: 1px solid #d0d7de; padding: 6px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--bg); }
+  tr:nth-child(even) td { background: #fbfcfd; }
+  code { background: #eff1f3; border-radius: 4px; padding: 1px 5px; font-size: 12.5px;
+         font-family: "SF Mono", Menlo, Consolas, monospace; }
+  .shot { margin: 14px 0 6px; text-align: center; }
+  .shot img { max-width: 100%; border: 1px solid #d0d7de; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,.08); }
+  .shot .cap { font-size: 12.5px; color: #57606a; margin-top: 6px; }
+  .tag { display: inline-block; border-radius: 10px; padding: 0 8px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+  .ok   { background: #dafbe1; color: var(--ok); }
+  .warn { background: #fff1d6; color: var(--warn); }
+  .note { background: #ddf4ff; border: 1px solid #9cd2f0; border-radius: 8px; padding: 10px 14px; font-size: 13.5px; margin: 12px 0; }
+  .warnbox { background: #fff8e6; border: 1px solid #ecd9a0; border-radius: 8px; padding: 10px 14px; font-size: 13.5px; margin: 12px 0; }
+  ol.steps > li { margin: 14px 0; }
+  kbd { background:#f6f8fa; border:1px solid #d0d7de; border-bottom-width:2px; border-radius:4px; padding:0 5px; font-size:12.5px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>GMP-ISE 生成 .i 与远程作业操作指南</h1>
+  <p>模板库位置 · 生成 .i 的两种方式 · 导出任务快照 · 提交 138 计算 · 打开远程制品</p>
+  <p>适用版本：Gmsh-moose-parview @ bab1240 及以上（TASK-E2E-10/11/12）</p>
+</header>
+<nav>
+  <a href="#where">模板库在哪里</a>
+  <a href="#templates">4 个内置模板</a>
+  <a href="#gen">生成 .i 步骤</a>
+  <a href="#submit">提交远程计算</a>
+  <a href="#artifact">打开远程制品</a>
+  <a href="#faq">常见问题</a>
+</nav>
+<main>
+
+<div class="warnbox">
+  <b>先澄清一个容易找错的地方：</b>菜单栏的 <b>"演示案例"</b>（载入瞬态扩散 / 热-力耦合 / 非线性热传导）是早期的完整演示算例，<b>不包含模板库</b>。
+  模板库在 <b>"作业"页签 → 右侧 MOOSE 面板 → "输入编辑器"分组 → "模板"下拉</b> 中。
+</div>
+
+<h2 id="where">1. 模板库在哪里</h2>
+<ol class="steps">
+  <li>启动应用：<code>cd /Users/a123/Desktop/code/Gmsh-moose-parview && ./build/gmp_ise</code></li>
+  <li>点击顶部模块页签 <kbd>作业</kbd>（第 11 个页签，"网格"和"可视化"之间）。</li>
+  <li>右侧 <b>MOOSE 面板</b> 滚动到最底部的 <b>"输入编辑器"</b> 分组，即可看到 <b>"模板"</b> 下拉框和 <kbd>应用模板</kbd> 按钮。</li>
+</ol>
+<div class="shot"><img src="screenshots/guide_01_job_tab.png" alt="作业页签">
+  <div class="cap">图 1：点击"作业"页签，右侧即 MOOSE 面板（顶部是路径/输入文件等，模板在面板最底部）</div></div>
+<div class="shot"><img src="screenshots/guide_02_template_dropdown.png" alt="模板下拉">
+  <div class="cap">图 2："输入编辑器"分组的模板下拉——上方 5 项是旧内置示例，下方 4 项是新模板库（ASR × 2、2D 坝 × 2）</div></div>
+
+<h2 id="templates">2. 4 个内置模板</h2>
+<table>
+  <tr><th>模板名（下拉中显示）</th><th>key</th><th>状态</th><th>规模/用途</th></tr>
+  <tr><td>ASR 约束膨胀（小算例）</td><td>tpl-asr-strip</td><td><span class="tag ok">verified</span></td><td>秒级，主链冒烟/联调默认；官方回归 test_strip 派生</td></tr>
+  <tr><td>ASR 约束膨胀（完整算例）</td><td>tpl-asr-full</td><td><span class="tag ok">verified</span></td><td>小时级，正式演示；官方 HEAVY test_full 派生</td></tr>
+  <tr><td>2D 坝静力预载</td><td>tpl-dam-2d-static</td><td><span class="tag warn">prototype</span></td><td>分钟级，静力结果快速查验</td></tr>
+  <tr><td>2D 坝静力—动力两阶段</td><td>tpl-dam-2d-dyn</td><td><span class="tag warn">prototype</span></td><td>十分钟级，地震时程演示（Newmark γ/β 可改）</td></tr>
+</table>
+<div class="note">
+  <b>状态含义：</b><span class="tag ok">verified</span> 模板派生自官方回归且结果与金标准在官方容差内一致；
+  <span class="tag warn">prototype</span> 模板仅为原型（未经官方回归对照），界面橙色标注，<b>不作为工程结论</b>。
+  每个模板头注释都记录了来源仓库、来源文件、SHA-256 和提取日期。
+</div>
+
+<h2 id="gen">3. 生成 .i 的两种方式</h2>
+<h3>3.1 加载模板</h3>
+<ol class="steps">
+  <li>在"模板"下拉中选中目标模板（如 <b>ASR 约束膨胀（小算例）</b>），点击 <kbd>应用模板</kbd>。</li>
+  <li>模板行右侧出现状态标签（绿色 <code>[verified]</code> / 橙色 <code>[prototype]</code>），编辑区载入完整的 .i 内容，下方日志打印 <code>Template loaded: tpl-asr-strip [verified] source: blackbear ...</code>。</li>
+  <li><b>手工修订</b>：编辑区就是纯文本，可直接改任何参数（例如把 <code>num_steps</code> 改小做快速试算）。改错也没关系——提交时远端会做 <code>--check-input</code> 预检并返回错误原因。</li>
+</ol>
+<div class="shot"><img src="screenshots/guide_03_template_applied.png" alt="模板已应用">
+  <div class="cap">图 3：应用模板后——绿色 [verified] 标签、编辑区载入模板头注释、日志记录来源与 SHA</div></div>
+
+<h3>3.2 方式一：写出输入（只要一个 .i 文件）</h3>
+<ol class="steps">
+  <li>点击 <kbd>写出输入</kbd>，选择保存位置，即得到当前编辑区内容的 <code>.i</code> 文件。</li>
+  <li>适合：本地试算、把 .i 拷给同事、手工放到其他环境运行。<b>注意</b>：如果模板引用了外部网格文件（如 mesh_contact_strip.e），需要自行一并拷贝。</li>
+</ol>
+
+<h3>3.3 方式二：导出任务快照（推荐，远程计算用）</h3>
+<ol class="steps">
+  <li>点击 <kbd>导出任务快照</kbd>，选择一个<b>空目录</b>。</li>
+  <li>导出结果 = 当前 .i + 所有引用的网格/附件文件 + <code>manifest.json</code>（含每个文件的 SHA-256 和 CONTRACT-JOB 契约字段）。日志会逐项打印文件哈希。</li>
+  <li>特性：<b>确定性</b>——同一内容两次导出，所有文件哈希完全一致；manifest 可直接用于 C06 作业提交，也是计算结果反查输入的凭证。</li>
+</ol>
+
+<h2 id="submit">4. 提交到 138 远程计算</h2>
+<div class="note"><b>前提服务</b>（缺一个就连不上，详见 damASR《端到端主链人工验证指南》第 1 节）：
+138 代理 <code>start-138.sh start</code> 、SSH 隧道 <code>ssh -N -L 8357:127.0.0.1:8357 demo-process-138</code> 、LIMS API（8200）。</div>
+<ol class="steps">
+  <li>MOOSE 面板 <b>"远程作业（经 LIMS Facade 提交）"</b> 分组：服务器保持 <code>http://127.0.0.1:8200</code>，项目 ID 默认 <code>gmp-ise</code>（会记住，下次不用改）。</li>
+  <li>点击 <kbd>提交作业</kbd>：默认使用<b>最近一次导出的快照目录</b>（没导出过则弹窗让你选目录）。成功后状态标签显示 <code>job_… : queued</code>。</li>
+  <li>点击 <kbd>刷新状态</kbd>：可见 <code>preparing → running → succeeded</code>（小算例约 4 秒），以及 percent / step / 物理时间。</li>
+  <li>失败时：状态区显示 <code>check_input_failed</code> 等错误码与原因；LIMS 页面同步可见（红色 failed 徽标）。</li>
+</ol>
+<div class="shot"><img src="screenshots/guide_04_remote_job.png" alt="远程作业分组">
+  <div class="cap">图 4：远程作业分组（服务器/项目 ID/提交/刷新/打开制品）与输入编辑器（模板/应用模板/写出输入/导出任务快照）</div></div>
+
+<h2 id="artifact">5. 打开远程制品（.e 可视化）</h2>
+<ol class="steps">
+  <li>作业 succeeded 后，点击 <kbd>打开远程制品</kbd>。</li>
+  <li>对话框列出 LIMS 固定目录中的制品包（invalid 包置灰并显示原因），展开选择 <code>results/…_out.e</code>，双击或确认后自动下载（显示进度）并在可视化页打开。</li>
+  <li>同一文件再次打开秒开（本地缓存 + SHA-256 校验命中）。</li>
+  <li>可视化页操作：标量选 <code>Cell: stress_yy</code>、时间条拖到最后一步；该 ASR 算例空间近均匀，看点是<b>时间演化</b>（t=0 全 0 → t=500000 混凝土深蓝、钢套红）。</li>
+  <li>同一制品也能在 LIMS 页面"数字孪生与混合仿真平台 → 远程实时仿真 → 制品库"中查看/下载。</li>
+</ol>
+
+<h2 id="faq">6. 常见问题</h2>
+<table>
+  <tr><th>现象</th><th>原因与处理</th></tr>
+  <tr><td>模板下拉里没有 ASR / 2D 坝模板</td><td>应用版本过旧。在仓根执行 <code>cmake --build build -j8</code> 后重启；模板目录也可用环境变量 <code>GMP_MOOSE_TEMPLATES</code> 显式指定</td></tr>
+  <tr><td>"演示案例"菜单里找不到模板</td><td>演示案例是旧的完整演示，不是模板库；模板在"作业 → MOOSE 面板 → 输入编辑器"</td></tr>
+  <tr><td>提交作业无反应/报网络错误</td><td>检查 LIMS API（8200）与 SSH 隧道是否在运行；面板日志有详细错误</td></tr>
+  <tr><td>提交返回 check_input_failed</td><td>手工修订引入了语法错误；按返回信息修正后重新导出快照再提交</td></tr>
+  <tr><td>制品对话框里包是灰色</td><td>该包未通过完整性校验（invalid），原因显示在条目上；valid 包才能下载</td></tr>
+</table>
+
+<div class="note" style="margin-top:32px">
+  相关文档：damASR 仓 <code>docs/verification/端到端主链人工验证指南.md</code>（服务启动与完整验收场景）、
+  <code>docs/plans/端到端主链贯通实施计划.md</code> §5.2.1（模板清单与状态口径）。
+</div>
+
+</main>
+</body>
+</html>
