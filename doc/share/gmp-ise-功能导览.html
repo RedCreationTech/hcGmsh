@@ -222,6 +222,22 @@
 
 <h2 id="solve">二、有限元计算（Solving）</h2>
 <p>本阶段的核心是：<b>模型树 → MOOSE <code>.i</code> → Runner 调度独立计算进程 → 回收 <code>.e</code></b>。MOOSE 以独立进程运行（MPI 需要），UI 只负责生成输入、调度与监控。</p>
+<details class="tech-note">
+  <summary>备注：什么是「MOOSE（外部进程，MPI）」？（点击展开）</summary>
+  <div class="tech-body">
+    <p><b>MOOSE（Multiphysics Object-Oriented Simulation Environment）</b>是由美国爱达荷国家实验室（INL）开源的强大的有限元求解框架。在本架构中，它扮演的是<b>“中央处理器 / 求解器”</b>的角色。</p>
+    <h4>它是做什么的？</h4>
+    <p>偏微分方程（比如 <code>-∇·∇u = 0</code>）的弱形式转换、HHT 时间积分……所有这些“高难度数学与物理计算”全部由 MOOSE 负责。它底层封装了顶级的数学库（libMesh 和 PETSc），专门用来组装海量的刚度矩阵（<code>KU=F</code>）并进行求解。</p>
+    <h4>什么是 MPI（Message Passing Interface）？</h4>
+    <p>面对几十上百万个网格，单核 CPU 是算不动的。MPI 是一种<b>分布式并行计算协议</b>：借助 MPI，MOOSE 可以把一个大网格“撕”成好几块，分配给电脑的多个 CPU 核心、甚至局域网内的多台服务器同时并行计算，算完后再把结果拼装起来。</p>
+    <h4>为什么要作为“外部进程”运行？</h4>
+    <p>这是非常成熟的软件工程设计——有限元计算非常耗费系统资源（CPU 满载、内存狂飙）：</p>
+    <ul>
+      <li><b>防假死</b>：如果把 MOOSE 和 Qt UI 编译在同一个进程里，一旦开始计算，界面的主线程就会被阻塞，导致软件“无响应”。</li>
+      <li><b>防崩溃隔离</b>：如果某个非线性算例因为参数设置不当（比如 HHT 参数设错导致矩阵发散）而引发求解器崩溃（核心转储），作为外部独立进程的 MOOSE 崩溃不会带着 Qt 界面一起闪退——Qt 端只需捕获进程异常状态，弹出“计算发散失败”的友好提示即可。</li>
+    </ul>
+  </div>
+</details>
 
 <h3>2.1 模型树 → .i 自动生成</h3>
 <p>“Sync Model -&gt; MOOSE Input”（Ctrl+Shift+R）把模型树节点翻译为 MOOSE 输入块并注入输入编辑器：</p>
@@ -263,6 +279,18 @@
 <div class="shot"><img src="screenshots/module_10_Job.png" alt="Job"><div class="cap">图 2-1　Job 模块页：作业表 + MOOSE 面板（路径 / 网格 / 物理组 / 运行参数 / 输入编辑器 / 日志）</div></div>
 
 <h2 id="post">三、后处理（Postprocessing）</h2>
+<details class="tech-note">
+  <summary>备注：什么是「VTK（ExodusII 可视化）」？（点击展开）</summary>
+  <div class="tech-body">
+    <p><b>VTK（Visualization Toolkit）</b>是一个开源的、用于三维计算机图形学、图像处理和可视化的 C++ 软件系统。在本架构中，它扮演的是<b>“后处理器 / 渲染器”</b>的角色。</p>
+    <h4>什么是 ExodusII 格式？</h4>
+    <p>当 MOOSE 经过漫长的计算，得出每个网格节点上的温度 <code>u</code> 或位移数据后，需要把这些结果保存到硬盘上。<b>ExodusII</b> 是目前有限元领域（尤其是北美体系）最流行的二进制输出格式，能非常高效地存储网格拓扑结构以及随时间变化的物理量。</p>
+    <h4>VTK 在这里的作用</h4>
+    <p>计算结果只是一堆冷冰冰的数字（比如“节点 1024 在第 5 秒的温度是 85.3 度”）。VTK 的任务是读取这些 ExodusII 文件，并把它们渲染成工程人员能看懂的<b>云图</b>（高温区域显示为红色、低温显示为蓝色）、<b>等值线</b>或<b>形变动画</b>。</p>
+    <h4>如何与 Qt 6 结合？</h4>
+    <p>VTK 原生支持与 Qt 集成：通过 <code>QVTKOpenGLNativeWidget</code> 这样的控件，直接在 Qt 的窗口框架内嵌入一个 3D 渲染画布——GMP-ISE 中央的视口正是这样做的。用户可以用鼠标旋转、缩放、剖切查看仿真结果。</p>
+  </div>
+</details>
 
 <h3>3.1 结果管理 Results</h3>
 <ul>
@@ -296,6 +324,15 @@
 
 <h2 id="abaqus">四、与 Abaqus 功能对照（基于参考文档）</h2>
 <p>参考《草图和零部件部分文档》《有限元前处理功能说明》梳理当前覆盖度：</p>
+<h3>4.1 参考文档工具栏提炼（草图与零部件）</h3>
+<p>《草图和零部件部分文档》以工具栏形式给出了 Sketcher 与 Part 模块的完整功能面，提炼如下（<b>加粗项</b>为当前已覆盖，其余列入自检表作为待补充功能）：</p>
+<table>
+  <tr><th>工具栏</th><th>功能项（提炼）</th></tr>
+  <tr><td>草图工具栏（Sketcher）</td><td>点、<b>直线/线段</b>、多段线、<b>圆</b>、<b>圆弧</b>（圆心-起点-终点 / 三点弧 / 切点弧线）、椭圆、样条曲线、<b>矩形</b>、构造线（两点构造线、曲线变构造线）、修剪与延伸、偏移、镜像、线性/圆周阵列、移动/复制、倒角、<b>添加约束</b>、<b>添加尺寸</b>、修改尺寸、参数管理器、投影、<b>撤销 / 重做</b>、<b>保存 / 打开草图</b>、<b>删除</b></td></tr>
+  <tr><td>零部件工具栏（Part）</td><td>创建部件、部件管理器、<b>拉伸</b>、<b>旋转</b>、<b>扫掠</b>、<b>放样</b>、创建切削（切除）、创建壳（抽壳）、圆角、创建倒角、镜像、编辑特征、禁用特征、删除特征、拆分边、拆分面、拆分体、创建基准面、创建基准轴、创建基准点、创建局部坐标系（基准坐标系）</td></tr>
+</table>
+<p class="small">约束能力对照：文档要求的几何约束为 重合 / 水平 / 垂直 / 平行 / 相交 / 相切 / 同心 / 等长 / 对称 9 种，尺寸约束为 长度 / 距离 / 半径 / 直径 / 角度 5 种；当前 UI 暴露 5 种几何约束（水平/竖直/平行/垂直/重合）+ 距离/半径两种尺寸，求解器另支持等长 / 等半径 / 固定 / 角度（无界面入口）。</p>
+<h3>4.2 模块级覆盖度对照</h3>
 <table>
   <tr><th>Abaqus 模块</th><th>文档能力项</th><th>GMP-ISE 现状</th></tr>
   <tr><td>Sketcher 草图</td><td>线/圆/弧/矩形、约束、尺寸、撤销重做</td><td><span class="tag ok">主干可用</span> 多段线/椭圆/样条/修剪/偏移/镜像/阵列未实现；约束仅 5 种有 UI</td></tr>
@@ -325,86 +362,91 @@
   <tr><td>3</td><td>等长/等半径/固定/角度约束</td><td><span class="tag warn">半成品</span></td><td>求解器已支持，无 UI 入口</td></tr>
   <tr><td>4</td><td>尺寸约束（距离/半径驱动）</td><td><span class="tag ok">已实现</span></td><td>改值重解；参考尺寸仅存档</td></tr>
   <tr><td>5</td><td>草图撤销/重做、复制、重命名</td><td><span class="tag ok">已实现</span></td><td>YAML 快照粒度，限草图会话</td></tr>
-  <tr><td>6</td><td>多段线/椭圆/样条/修剪/偏移/镜像/阵列</td><td><span class="tag bad">占位</span></td><td>Abaqus Sketcher 对照缺口</td></tr>
-  <tr><td>7</td><td>约束标记可视化、图元拖拽</td><td><span class="tag bad">占位</span></td><td>画布只画图元</td></tr>
-  <tr><td>8</td><td>拉伸 / 旋转 / 放样 / 扫掠特征</td><td><span class="tag ok">已实现</span></td><td>OCC 内核；轴向固定（+Z / Y 轴）、放样取首闭环、扫掠路径需单连通</td></tr>
-  <tr><td>9</td><td>特征自动成 Part + 自动网格 + 视口显示</td><td><span class="tag ok">已实现</span></td><td>.brep 落盘 features/ 目录</td></tr>
-  <tr><td>10</td><td>切除 / 圆角 / 倒角</td><td><span class="tag bad">占位</span></td><td>按钮禁用，规划 WS3</td></tr>
-  <tr><td>11</td><td>基准面/轴/点、局部坐标系、拆分边/面/体、特征编辑/禁用</td><td><span class="tag bad">占位</span></td><td>Datums 根节点无任何创建入口</td></tr>
+  <tr><td>6</td><td>多段线/椭圆/样条/点/三点弧/切点弧线/修剪延伸/偏移/镜像/阵列</td><td><span class="tag bad">占位</span></td><td>Abaqus Sketcher 工具栏对照缺口</td></tr>
+  <tr><td>7</td><td>构造线 / 投影（两点构造线、曲线变构造线、投影参考）</td><td><span class="tag bad">占位</span></td><td>Sketcher 工具栏提炼，辅助绘图能力</td></tr>
+  <tr><td>8</td><td>草图倒角、移动/复制图元</td><td><span class="tag bad">占位</span></td><td>画布不支持拖拽移动，无倒角工具</td></tr>
+  <tr><td>9</td><td>参数管理器 / 修改已有尺寸</td><td><span class="tag warn">半成品</span></td><td>求解器支持改尺寸值重解；UI 仅有“添加尺寸”，集中参数管理待补</td></tr>
+  <tr><td>10</td><td>约束标记可视化、图元拖拽</td><td><span class="tag bad">占位</span></td><td>画布只画图元</td></tr>
+  <tr><td>11</td><td>拉伸 / 旋转 / 放样 / 扫掠特征</td><td><span class="tag ok">已实现</span></td><td>OCC 内核；轴向固定（+Z / Y 轴）、放样取首闭环、扫掠路径需单连通</td></tr>
+  <tr><td>12</td><td>特征自动成 Part + 自动网格 + 视口显示</td><td><span class="tag ok">已实现</span></td><td>.brep 落盘 features/ 目录</td></tr>
+  <tr><td>13</td><td>切除 / 圆角 / 倒角</td><td><span class="tag bad">占位</span></td><td>按钮禁用，规划 WS3</td></tr>
+  <tr><td>14</td><td>部件镜像、创建壳（抽壳）</td><td><span class="tag bad">占位</span></td><td>Part 工具栏提炼，待补充</td></tr>
+  <tr><td>15</td><td>基准面/轴/点、局部坐标系、拆分边/面/体、特征编辑/禁用/删除</td><td><span class="tag bad">占位</span></td><td>Datums 根节点无任何创建入口；特征删除仅能删树节点，不重算模型</td></tr>
+  <tr><td>16</td><td>部件管理器（部件列表：重命名/复制/删除/刷新）</td><td><span class="tag ok">已实现</span></td><td>Part 页基础版可用；无特征级抑制/激活</td></tr>
 </table>
 
 <h3>5.2 预处理 — 几何与网格（Gmsh 面板）</h3>
 <table>
   <tr><th>#</th><th>功能</th><th>状态</th><th>说明 / 限制</th></tr>
-  <tr><td>12</td><td>STEP / IGES / BREP / .geo 导入</td><td><span class="tag ok">已实现</span></td><td>OCC importShapes；可导入后自动剖分</td></tr>
-  <tr><td>13</td><td>几何基元（Box/Cylinder/Sphere）</td><td><span class="tag ok">已实现</span></td><td>仅 3 种；示例盒自动建物理组</td></tr>
-  <tr><td>14</td><td>平移 / 旋转 / 缩放</td><td><span class="tag ok">已实现</span></td><td>仅 OCC 内核实体；支持拾取回灌</td></tr>
-  <tr><td>15</td><td>布尔 Fuse / Cut / Intersect</td><td><span class="tag warn">半成品</span></td><td>布尔后物理组实体 tag 不自动迁移，需手动重建</td></tr>
-  <tr><td>16</td><td>物理组管理 + 统计 + 视口高亮联动</td><td><span class="tag ok">已实现</span></td><td>分组同步给求解侧（边界/体组）</td></tr>
-  <tr><td>17</td><td>尺寸场（Distance→Threshold）</td><td><span class="tag warn">半成品</span></td><td>仅单一模板，无多场组合、无参数回显编辑</td></tr>
-  <tr><td>18</td><td>实体尺寸 Entity Size</td><td><span class="tag warn">半成品</span></td><td>仅支持 0 维点；1/2/3 维选项为空操作</td></tr>
-  <tr><td>19</td><td>2D/3D 算法、1–4 阶、高阶优化、重组、光顺</td><td><span class="tag ok">已实现</span></td><td>HXT 依赖 Gmsh 编译开关</td></tr>
-  <tr><td>20</td><td>网格生成 + .msh 写出 + 视口实时预览</td><td><span class="tag ok">已实现</span></td><td>同步 Job 网格路径与模型树</td></tr>
-  <tr><td>21</td><td>质量检查（minSICN 统计）</td><td><span class="tag warn">半成品</span></td><td>仅日志文本；无色标/阈值告警/独立入口（视口侧有 Quality 色标）</td></tr>
-  <tr><td>22</td><td>几何导出 STEP/IGES</td><td><span class="tag bad">占位</span></td><td>仅 BREP/GEO</td></tr>
-  <tr><td>23</td><td>几何随项目持久化</td><td><span class="tag warn">半成品</span></td><td>项目只存几何路径，操作历史不保存</td></tr>
+  <tr><td>17</td><td>STEP / IGES / BREP / .geo 导入</td><td><span class="tag ok">已实现</span></td><td>OCC importShapes；可导入后自动剖分</td></tr>
+  <tr><td>18</td><td>几何基元（Box/Cylinder/Sphere）</td><td><span class="tag ok">已实现</span></td><td>仅 3 种；示例盒自动建物理组</td></tr>
+  <tr><td>19</td><td>平移 / 旋转 / 缩放</td><td><span class="tag ok">已实现</span></td><td>仅 OCC 内核实体；支持拾取回灌</td></tr>
+  <tr><td>20</td><td>布尔 Fuse / Cut / Intersect</td><td><span class="tag warn">半成品</span></td><td>布尔后物理组实体 tag 不自动迁移，需手动重建</td></tr>
+  <tr><td>21</td><td>物理组管理 + 统计 + 视口高亮联动</td><td><span class="tag ok">已实现</span></td><td>分组同步给求解侧（边界/体组）</td></tr>
+  <tr><td>22</td><td>尺寸场（Distance→Threshold）</td><td><span class="tag warn">半成品</span></td><td>仅单一模板，无多场组合、无参数回显编辑</td></tr>
+  <tr><td>23</td><td>实体尺寸 Entity Size</td><td><span class="tag warn">半成品</span></td><td>仅支持 0 维点；1/2/3 维选项为空操作</td></tr>
+  <tr><td>24</td><td>2D/3D 算法、1–4 阶、高阶优化、重组、光顺</td><td><span class="tag ok">已实现</span></td><td>HXT 依赖 Gmsh 编译开关</td></tr>
+  <tr><td>25</td><td>网格生成 + .msh 写出 + 视口实时预览</td><td><span class="tag ok">已实现</span></td><td>同步 Job 网格路径与模型树</td></tr>
+  <tr><td>26</td><td>质量检查（minSICN 统计）</td><td><span class="tag warn">半成品</span></td><td>仅日志文本；无色标/阈值告警/独立入口（视口侧有 Quality 色标）</td></tr>
+  <tr><td>27</td><td>几何导出 STEP/IGES</td><td><span class="tag bad">占位</span></td><td>仅 BREP/GEO</td></tr>
+  <tr><td>28</td><td>几何随项目持久化</td><td><span class="tag warn">半成品</span></td><td>项目只存几何路径，操作历史不保存</td></tr>
 </table>
 
 <h3>5.3 预处理 — 材料 / 截面 / 分析步 / 相互作用 / 载荷</h3>
 <table>
   <tr><th>#</th><th>功能</th><th>状态</th><th>说明 / 限制</th></tr>
-  <tr><td>24</td><td>材料创建 + 模板 + 参数校验</td><td><span class="tag ok">已实现</span></td><td>GenericConstant / Parsed k(T) / 线弹性 / 热膨胀等模板</td></tr>
-  <tr><td>25</td><td>截面 Solid Section</td><td><span class="tag warn">半成品</span></td><td>节点可建可编辑，但不进入 MOOSE 输入</td></tr>
-  <tr><td>26</td><td>壳/梁截面、铺层、材料库、属性赋予着色</td><td><span class="tag bad">占位</span></td><td>Abaqus Property 对照缺口</td></tr>
-  <tr><td>27</td><td>装配 Assembly</td><td><span class="tag bad">占位</span></td><td>仅“别名”节点，无实例化/约束/阵列</td></tr>
-  <tr><td>28</td><td>分析步 Static/Transient/Steady</td><td><span class="tag warn">半成品</span></td><td>仅第一个 Step 生成 [Executioner]</td></tr>
-  <tr><td>29</td><td>增量控制、Amplitude、Field/History Output</td><td><span class="tag bad">占位</span></td><td>—</td></tr>
-  <tr><td>30</td><td>相互作用 Interaction / Tie</td><td><span class="tag bad">占位</span></td><td>节点不进 MOOSE 输入</td></tr>
-  <tr><td>31</td><td>边界 Dirichlet / Neumann + 物理组绑定</td><td><span class="tag ok">已实现</span></td><td>可从物理组一键生成边界块（默认 u=0 需手改）</td></tr>
-  <tr><td>32</td><td>载荷 BodyForce / 热源</td><td><span class="tag ok">已实现</span></td><td>Loads 根映射为 [Kernels]（语义错位待理顺）</td></tr>
-  <tr><td>33</td><td>集中力、压力、对称边界、随步激活</td><td><span class="tag bad">占位</span></td><td>—</td></tr>
+  <tr><td>29</td><td>材料创建 + 模板 + 参数校验</td><td><span class="tag ok">已实现</span></td><td>GenericConstant / Parsed k(T) / 线弹性 / 热膨胀等模板</td></tr>
+  <tr><td>30</td><td>截面 Solid Section</td><td><span class="tag warn">半成品</span></td><td>节点可建可编辑，但不进入 MOOSE 输入</td></tr>
+  <tr><td>31</td><td>壳/梁截面、铺层、材料库、属性赋予着色</td><td><span class="tag bad">占位</span></td><td>Abaqus Property 对照缺口</td></tr>
+  <tr><td>32</td><td>装配 Assembly</td><td><span class="tag bad">占位</span></td><td>仅“别名”节点，无实例化/约束/阵列</td></tr>
+  <tr><td>33</td><td>分析步 Static/Transient/Steady</td><td><span class="tag warn">半成品</span></td><td>仅第一个 Step 生成 [Executioner]</td></tr>
+  <tr><td>34</td><td>增量控制、Amplitude、Field/History Output</td><td><span class="tag bad">占位</span></td><td>—</td></tr>
+  <tr><td>35</td><td>相互作用 Interaction / Tie</td><td><span class="tag bad">占位</span></td><td>节点不进 MOOSE 输入</td></tr>
+  <tr><td>36</td><td>边界 Dirichlet / Neumann + 物理组绑定</td><td><span class="tag ok">已实现</span></td><td>可从物理组一键生成边界块（默认 u=0 需手改）</td></tr>
+  <tr><td>37</td><td>载荷 BodyForce / 热源</td><td><span class="tag ok">已实现</span></td><td>Loads 根映射为 [Kernels]（语义错位待理顺）</td></tr>
+  <tr><td>38</td><td>集中力、压力、对称边界、随步激活</td><td><span class="tag bad">占位</span></td><td>—</td></tr>
 </table>
 
 <h3>5.4 有限元计算 — 输入生成与作业调度</h3>
 <table>
   <tr><th>#</th><th>功能</th><th>状态</th><th>说明 / 限制</th></tr>
-  <tr><td>34</td><td>模型树 → .i 同步（7 类 block）</td><td><span class="tag ok">已实现</span></td><td>通用 key=value 直出，无语法校验</td></tr>
-  <tr><td>35</td><td>5 套内置模板（扩散/非线性热/热-力耦合）</td><td><span class="tag ok">已实现</span></td><td>热-力模板自动切换 combined-opt</td></tr>
-  <tr><td>36</td><td>输入编辑器 + 网格块/边界注入</td><td><span class="tag ok">已实现</span></td><td>边界自动覆盖依赖启发式判断</td></tr>
-  <tr><td>37</td><td>Local Runner（mpiexec / QProcess）</td><td><span class="tag ok">已实现</span></td><td>日志实时显示，.e 自动回收</td></tr>
-  <tr><td>38</td><td>WSL Runner</td><td><span class="tag warn">半成品</span></td><td>无路径转换，仅 Windows 场景可用</td></tr>
-  <tr><td>39</td><td>Remote (SSH) Runner —— 投递到独立计算节点</td><td><span class="tag bad">占位</span></td><td>选 Remote 实际静默本地执行，链路待接通</td></tr>
-  <tr><td>40</td><td>作业表 / 日志 / Stop / Check Input</td><td><span class="tag ok">已实现</span></td><td>Retry=重跑；Stop 为强杀 kill()</td></tr>
-  <tr><td>41</td><td>一步提交（Generate &amp; Submit）</td><td><span class="tag ok">已实现</span></td><td>补齐节点→网格→同步→运行全自动</td></tr>
-  <tr><td>42</td><td>演示案例（3 套载入/运行）</td><td><span class="tag ok">已实现</span></td><td>端到端验证入口</td></tr>
+  <tr><td>39</td><td>模型树 → .i 同步（7 类 block）</td><td><span class="tag ok">已实现</span></td><td>通用 key=value 直出，无语法校验</td></tr>
+  <tr><td>40</td><td>5 套内置模板（扩散/非线性热/热-力耦合）</td><td><span class="tag ok">已实现</span></td><td>热-力模板自动切换 combined-opt</td></tr>
+  <tr><td>41</td><td>输入编辑器 + 网格块/边界注入</td><td><span class="tag ok">已实现</span></td><td>边界自动覆盖依赖启发式判断</td></tr>
+  <tr><td>42</td><td>Local Runner（mpiexec / QProcess）</td><td><span class="tag ok">已实现</span></td><td>日志实时显示，.e 自动回收</td></tr>
+  <tr><td>43</td><td>WSL Runner</td><td><span class="tag warn">半成品</span></td><td>无路径转换，仅 Windows 场景可用</td></tr>
+  <tr><td>44</td><td>Remote (SSH) Runner —— 投递到独立计算节点</td><td><span class="tag bad">占位</span></td><td>选 Remote 实际静默本地执行，链路待接通</td></tr>
+  <tr><td>45</td><td>作业表 / 日志 / Stop / Check Input</td><td><span class="tag ok">已实现</span></td><td>Retry=重跑；Stop 为强杀 kill()</td></tr>
+  <tr><td>46</td><td>一步提交（Generate &amp; Submit）</td><td><span class="tag ok">已实现</span></td><td>补齐节点→网格→同步→运行全自动</td></tr>
+  <tr><td>47</td><td>演示案例（3 套载入/运行）</td><td><span class="tag ok">已实现</span></td><td>端到端验证入口</td></tr>
 </table>
 
 <h3>5.5 后处理 — 结果与可视化</h3>
 <table>
   <tr><th>#</th><th>功能</th><th>状态</th><th>说明 / 限制</th></tr>
-  <tr><td>43</td><td>.e ExodusII 加载（含部分块变量修复）</td><td><span class="tag ok">已实现</span></td><td>节点/单元/全局数组全开</td></tr>
-  <tr><td>44</td><td>标量云图 + 色标 + 范围控制</td><td><span class="tag ok">已实现</span></td><td>Blue-Red 预设参数与 Rainbow 重复（缺陷）</td></tr>
-  <tr><td>45</td><td>时间序列</td><td><span class="tag warn">半成品</span></td><td>手动滑块 + 文件变更监控；无动画播放</td></tr>
-  <tr><td>46</td><td>变形显示（位移向量缩放）</td><td><span class="tag ok">已实现</span></td><td>仅 Exodus 模式</td></tr>
-  <tr><td>47</td><td>向量场</td><td><span class="tag warn">半成品</span></td><td>仅模长统计，无箭头/字形渲染</td></tr>
-  <tr><td>48</td><td>切片</td><td><span class="tag warn">半成品</span></td><td>仅网格模式；Exodus 结果切片未实现</td></tr>
-  <tr><td>49</td><td>探针</td><td><span class="tag warn">半成品</span></td><td>单次点击单行文本；无历程曲线/多点</td></tr>
-  <tr><td>50</td><td>曲线 Plot</td><td><span class="tag warn">半成品</span></td><td>文本转储，无图表绘制</td></tr>
-  <tr><td>51</td><td>表格 Table</td><td><span class="tag ok">已实现</span></td><td>前 N 行 + 模长列，功能较基础</td></tr>
-  <tr><td>52</td><td>网格 .msh 预览 + 过滤 + 拾取联动</td><td><span class="tag ok">已实现</span></td><td>Group/Entity/Cell 拾取回灌 Gmsh 面板</td></tr>
-  <tr><td>53</td><td>视角预设 / 坐标轴 / 外框 / 截图</td><td><span class="tag ok">已实现</span></td><td>Ctrl+Shift+P 存 PNG</td></tr>
-  <tr><td>54</td><td>视图状态随项目持久化</td><td><span class="tag ok">已实现</span></td><td>—</td></tr>
-  <tr><td>55</td><td>ParaView SDK / Catalyst 原位分析</td><td><span class="tag bad">占位</span></td><td>Roadmap Phase 4</td></tr>
+  <tr><td>48</td><td>.e ExodusII 加载（含部分块变量修复）</td><td><span class="tag ok">已实现</span></td><td>节点/单元/全局数组全开</td></tr>
+  <tr><td>49</td><td>标量云图 + 色标 + 范围控制</td><td><span class="tag ok">已实现</span></td><td>Blue-Red 预设参数与 Rainbow 重复（缺陷）</td></tr>
+  <tr><td>50</td><td>时间序列</td><td><span class="tag warn">半成品</span></td><td>手动滑块 + 文件变更监控；无动画播放</td></tr>
+  <tr><td>51</td><td>变形显示（位移向量缩放）</td><td><span class="tag ok">已实现</span></td><td>仅 Exodus 模式</td></tr>
+  <tr><td>52</td><td>向量场</td><td><span class="tag warn">半成品</span></td><td>仅模长统计，无箭头/字形渲染</td></tr>
+  <tr><td>53</td><td>切片</td><td><span class="tag warn">半成品</span></td><td>仅网格模式；Exodus 结果切片未实现</td></tr>
+  <tr><td>54</td><td>探针</td><td><span class="tag warn">半成品</span></td><td>单次点击单行文本；无历程曲线/多点</td></tr>
+  <tr><td>55</td><td>曲线 Plot</td><td><span class="tag warn">半成品</span></td><td>文本转储，无图表绘制</td></tr>
+  <tr><td>56</td><td>表格 Table</td><td><span class="tag ok">已实现</span></td><td>前 N 行 + 模长列，功能较基础</td></tr>
+  <tr><td>57</td><td>网格 .msh 预览 + 过滤 + 拾取联动</td><td><span class="tag ok">已实现</span></td><td>Group/Entity/Cell 拾取回灌 Gmsh 面板</td></tr>
+  <tr><td>58</td><td>视角预设 / 坐标轴 / 外框 / 截图</td><td><span class="tag ok">已实现</span></td><td>Ctrl+Shift+P 存 PNG</td></tr>
+  <tr><td>59</td><td>视图状态随项目持久化</td><td><span class="tag ok">已实现</span></td><td>—</td></tr>
+  <tr><td>60</td><td>ParaView SDK / Catalyst 原位分析</td><td><span class="tag bad">占位</span></td><td>Roadmap Phase 4</td></tr>
 </table>
 
 <h3>5.6 框架与工程化</h3>
 <table>
   <tr><th>#</th><th>功能</th><th>状态</th><th>说明 / 限制</th></tr>
-  <tr><td>56</td><td>项目保存/打开（.gmp.yaml）+ 最近项目</td><td><span class="tag ok">已实现</span></td><td>New Project 无未保存确认</td></tr>
-  <tr><td>57</td><td>中英文界面切换（L10n）</td><td><span class="tag warn">半成品</span></td><td>部分树根名/动态字符串未收录词条</td></tr>
-  <tr><td>58</td><td>导出调试包 Debug Bundle</td><td><span class="tag ok">已实现</span></td><td>项目 + 日志 + 输入 + 网格/结果打包</td></tr>
-  <tr><td>59</td><td>全局撤销/重做（模型树级）</td><td><span class="tag bad">占位</span></td><td>仅草图会话有快照撤销</td></tr>
-  <tr><td>60</td><td>Plot/Table 预览页（中央页签）</td><td><span class="tag warn">半成品</span></td><td>文本快照，非图表控件</td></tr>
+  <tr><td>61</td><td>项目保存/打开（.gmp.yaml）+ 最近项目</td><td><span class="tag ok">已实现</span></td><td>New Project 无未保存确认</td></tr>
+  <tr><td>62</td><td>中英文界面切换（L10n）</td><td><span class="tag warn">半成品</span></td><td>部分树根名/动态字符串未收录词条</td></tr>
+  <tr><td>63</td><td>导出调试包 Debug Bundle</td><td><span class="tag ok">已实现</span></td><td>项目 + 日志 + 输入 + 网格/结果打包</td></tr>
+  <tr><td>64</td><td>全局撤销/重做（模型树级）</td><td><span class="tag bad">占位</span></td><td>仅草图会话有快照撤销</td></tr>
+  <tr><td>65</td><td>Plot/Table 预览页（中央页签）</td><td><span class="tag warn">半成品</span></td><td>文本快照，非图表控件</td></tr>
 </table>
 
 <div class="note"><b>下一步建议优先级</b>：① 接通 Remote(SSH) Runner，兑现“.i 下发计算节点、.e 回收”的完整链路；② Assembly 实例化与 Interaction 进入输入文件；③ Section 指派进入 [Materials]/[Kernels] 关联；④ 多分析步与 Field/History Output；⑤ 结果切片、向量字形、曲线图表等后处理短板。</div>
