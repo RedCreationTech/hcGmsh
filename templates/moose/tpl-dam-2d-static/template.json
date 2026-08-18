@@ -1,0 +1,29 @@
+{
+  "key": "tpl-dam-2d-static",
+  "display_name": "2D 坝静力预载（prototype）",
+  "status": "prototype",
+  "status_note": "不作为工程结论：未经官方回归对照的线弹性平面应力重解释",
+  "source": {
+    "repo": "DamSafetyApp",
+    "commit": "69e99d74064a22adbdda0eb17d3c14ce096b7e57",
+    "path": ".build/cases/abaqus-2d-dam-p0/full-static-dynamic-v1/generated/dam_2d_full_static.i",
+    "note": "tools/abaqus/gen_dam_two_step_case.py 由 Abaqus dam-2b.inp 转换报告生成；网格路径 ../converted/dam-2b.e 已改为同目录 dam-2b.e",
+    "input_sha256": "ff30af208ad9b95a9adb7eeb88b173ac4b0c3439f3ed13e05bfb14f5b80c08ed",
+    "extracted": "2026-08-18",
+    "evidence": "DamSafetyApp doc/prototypes/abaqus-2d-static-dynamic-rerun.md"
+  },
+  "solver": "blackbear-opt（BlackBear@1c190fd3 / MOOSE@4bce02d 锁定基线）",
+  "mesh_files": ["dam-2b.e"],
+  "extra_files": [],
+  "file_sha256": {
+    "dam-2b.e": "21a1e7a333b995e33e4bd0bae216b8ab8bbf2530799abc124e560e4d5bce462b"
+  },
+  "scale": "分钟级，静力结果快速查验",
+  "form_parameters": [
+    {"path": "Materials/elasticity/youngs_modulus", "label": "弹性模量 (Pa)"},
+    {"path": "Materials/elasticity/poissons_ratio", "label": "泊松比"},
+    {"path": "Materials/density/prop_values", "label": "密度 (kg/m³)"},
+    {"path": "Kernels/gravity_y/value", "label": "重力加速度"},
+    {"path": "Functions/hydrostatic_pressure/expression", "label": "静水压力函数"}
+  ]
+}

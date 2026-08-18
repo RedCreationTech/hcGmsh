@@ -1,0 +1,28 @@
+{
+  "key": "tpl-asr-strip",
+  "display_name": "ASR 约束膨胀（小算例）",
+  "status": "verified",
+  "source": {
+    "repo": "blackbear",
+    "commit": "1c190fd3d2b5f06a3518923f550a0e0a90b015d4",
+    "path": "test/tests/concrete_ASR_swelling/asr_confined.i",
+    "note": "tests 中 test_strip 配置（无 cli_args），输入本体与官方回归一致",
+    "input_sha256": "b7ca1382d2497d77a5c50059f3757ad18a316fdc16c7dd80b352a68fc421b3c2",
+    "extracted": "2026-08-18",
+    "evidence": "DamSafetyApp doc/p1/TASK-MOOSE-007-A-asr-confined.md（Exodiff 通过官方 gold）"
+  },
+  "solver": "blackbear-opt（BlackBear@1c190fd3 / MOOSE@4bce02d / NEML@a01a27b 锁定基线）",
+  "mesh_files": ["mesh_contact_strip.e"],
+  "extra_files": [],
+  "file_sha256": {
+    "mesh_contact_strip.e": "671535949082bd63637dee67a69f816055c33d9230c0a4ef2bfa4f70efdf14f4"
+  },
+  "scale": "分钟级，主链冒烟/联调默认算例",
+  "form_parameters": [
+    {"path": "Executioner/dt", "label": "时间步长 dt"},
+    {"path": "Executioner/num_steps", "label": "步数"},
+    {"path": "AuxVariables/T/initial_condition", "label": "初始温度 (°C)"},
+    {"path": "Materials/ASR_expansion/max_volumetric_expansion", "label": "ASR 最大体积膨胀"},
+    {"path": "Outputs/exodus", "label": "Exodus 输出开关"}
+  ]
+}

@@ -26,6 +26,7 @@
 
 #include "gmp/ComboPopupFix.h"
 
+#include "gmp/MooseSnapshot.h"
 #include "gmp/RunSpec.h"
 
 #ifdef GMP_ENABLE_GMSH_GUI
@@ -172,12 +173,20 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   template_kind_->addItem("GeneratedMesh (Nonlinear Heat)", "heat_generated");
   template_kind_->addItem("GeneratedMesh (Thermo-Mechanics)", "tm_generated");
   template_kind_->addItem("FileMesh (Thermo-Mechanics)", "tm_filemesh");
+  // TASK-E2E-10 模板库（templates/moose/<key>/，见 template.json 来源记录）
+  template_kind_->addItem("ASR 约束膨胀（小算例）", "tpl-asr-strip");
+  template_kind_->addItem("ASR 约束膨胀（完整算例）", "tpl-asr-full");
+  template_kind_->addItem("2D 坝静力预载 [prototype]", "tpl-dam-2d-static");
+  template_kind_->addItem("2D 坝静力—动力两阶段 [prototype]",
+                          "tpl-dam-2d-dyn");
   auto* apply_template = new QPushButton("Apply Template");
   connect(apply_template, &QPushButton::clicked, this,
           &MoosePanel::on_apply_template);
   template_row->addWidget(new QLabel("Template"));
   template_row->addWidget(template_kind_);
   template_row->addWidget(apply_template);
+  template_status_label_ = new QLabel();
+  template_row->addWidget(template_status_label_);
   template_row->addStretch(1);
   io_layout->addLayout(template_row);
 
@@ -189,6 +198,13 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   auto* write_btn = new QPushButton("Write Input");
   connect(write_btn, &QPushButton::clicked, this, &MoosePanel::on_write_input);
   io_actions->addWidget(write_btn);
+  auto* export_btn = new QPushButton("Export Job Snapshot");
+  export_btn->setToolTip(
+      "Export .i + referenced mesh/extra files + manifest.json "
+      "(CONTRACT-JOB input_snapshot)");
+  connect(export_btn, &QPushButton::clicked, this,
+          &MoosePanel::on_export_snapshot);
+  io_actions->addWidget(export_btn);
   io_actions->addStretch(1);
   io_layout->addLayout(io_actions);
 
@@ -496,6 +512,13 @@ void MoosePanel::set_template_by_key(const QString& key, bool apply_now) {
 
 void MoosePanel::on_apply_template() {
   const QString key = template_kind_->currentData().toString();
+  if (key.startsWith("tpl-")) {
+    apply_library_template(key);
+    save_settings();
+    return;
+  }
+  current_template_ = MooseTemplateInfo();
+  update_template_status_label();
   if (key == "filemesh") {
     const QString path =
         mesh_path_->text().isEmpty() ? "path/to/mesh.msh" : mesh_path_->text();
@@ -523,6 +546,100 @@ void MoosePanel::on_apply_template() {
     }
   }
   save_settings();
+}
+
+void MoosePanel::apply_library_template(const QString& key) {
+  const QString root = moose_templates_root();
+  if (root.isEmpty()) {
+    append_log("Template library not found (set GMP_MOOSE_TEMPLATES).");
+    return;
+  }
+  const MooseTemplateInfo info = load_moose_template(root, key);
+  if (!info.valid) {
+    append_log("Template not found or invalid: " + key + " under " + root);
+    return;
+  }
+  QFile file(info.input_path);
+  if (!file.open(QIODevice::ReadOnly)) {
+    append_log("Failed to read template input: " + info.input_path);
+    return;
+  }
+  input_editor_->setPlainText(QString::fromUtf8(file.readAll()));
+  current_template_ = info;
+  update_template_status_label();
+  append_log("Template loaded: " + key + " [" + info.status + "]");
+  if (!info.source_desc.isEmpty()) {
+    append_log("  source: " + info.source_desc);
+  }
+  if (info.status == "prototype") {
+    append_log(
+        "  WARNING: prototype template - 不作为工程结论 (not for "
+        "engineering conclusions).");
+  }
+}
+
+void MoosePanel::update_template_status_label() {
+  if (!template_status_label_) {
+    return;
+  }
+  if (!current_template_.valid) {
+    template_status_label_->clear();
+    template_status_label_->setStyleSheet(QString());
+    return;
+  }
+  template_status_label_->setText(
+      QString("[%1] %2").arg(current_template_.status,
+                             current_template_.display_name));
+  if (current_template_.status == "prototype") {
+    template_status_label_->setStyleSheet(
+        "color: #b26a00; font-weight: bold;");
+  } else {
+    template_status_label_->setStyleSheet("color: #2e7d32;");
+  }
+}
+
+void MoosePanel::on_export_snapshot() {
+  const QString start_dir = workdir_path_ && !workdir_path_->text().isEmpty()
+                                ? workdir_path_->text()
+                                : QDir::currentPath();
+  const QString dest = QFileDialog::getExistingDirectory(
+      this, "Select snapshot export directory", start_dir);
+  if (dest.isEmpty()) {
+    return;
+  }
+
+  QString input_name;
+  if (current_template_.valid) {
+    input_name = current_template_.key + ".i";
+  } else {
+    input_name = QFileInfo(input_path_->text()).fileName();
+    if (!input_name.endsWith(".i")) {
+      input_name = "custom.i";
+    }
+  }
+
+  const SnapshotExportResult result = export_job_snapshot(
+      dest, input_editor_->toPlainText(), input_name, current_template_);
+  if (!result.ok) {
+    append_log("Snapshot export failed: " + result.error);
+    return;
+  }
+  append_log("Job snapshot exported to: " + result.dir);
+  append_log("  input: " + result.input_file +
+             " sha256=" + result.input_sha256);
+  for (const auto& name : result.mesh_files) {
+    append_log("  mesh: " + name);
+  }
+  for (const auto& name : result.extra_files) {
+    append_log("  extra: " + name);
+  }
+  for (const auto& ref : result.missing_files) {
+    append_log("  WARNING: referenced file not found, not exported: " + ref);
+  }
+  append_log("  manifest: " + result.manifest_path);
+  if (current_template_.valid && current_template_.status == "prototype") {
+    append_log("  NOTE: prototype template - snapshot marked accordingly.");
+  }
 }
 
 void MoosePanel::on_insert_mesh_block() {

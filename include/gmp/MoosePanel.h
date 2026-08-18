@@ -10,9 +10,11 @@
 
 #include "gmp/Runner.h"
 #include "gmp/RunnerFactory.h"
+#include "gmp/MooseTemplates.h"
 
 class QCheckBox;
 class QComboBox;
+class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
 class QPushButton;
@@ -60,11 +62,14 @@ class MoosePanel : public QWidget {
   void on_stop();
   void on_check_input();
   void on_apply_template();
+  void on_export_snapshot();
   void on_insert_mesh_block();
   void on_insert_bcs_block();
 
  private:
   void append_log(const QString& text);
+  void apply_library_template(const QString& key);
+  void update_template_status_label();
   void handle_output(const QString& text);
   void flush_output();
   void set_running(bool running);
@@ -108,6 +113,7 @@ class MoosePanel : public QWidget {
   QPlainTextEdit* input_editor_ = nullptr;
   QPlainTextEdit* log_ = nullptr;
   QPlainTextEdit* boundary_list_ = nullptr;
+  QLabel* template_status_label_ = nullptr;
   QPushButton* run_btn_ = nullptr;
   QPushButton* check_btn_ = nullptr;
   QPushButton* stop_btn_ = nullptr;
@@ -116,6 +122,7 @@ class MoosePanel : public QWidget {
   QStringList boundary_names_;
   QString output_buffer_;
   QString last_exodus_;
+  MooseTemplateInfo current_template_;
 };
 
 }  // namespace gmp

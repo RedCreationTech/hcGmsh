@@ -288,6 +288,7 @@ const QHash<QString, QString>& zh_dict() {
       {"Extra Args", "额外参数"},
       {"Input Editor", "输入编辑器"},
       {"Write Input", "写出输入"},
+      {"Export Job Snapshot", "导出任务快照"},
       // ===== VtkViewer =====
       {"Scalar", "标量"},
       {"View", "视图"},

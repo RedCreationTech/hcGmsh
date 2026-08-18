@@ -1,0 +1,36 @@
+{
+  "key": "tpl-dam-2d-dyn",
+  "display_name": "2D 坝静力—动力两阶段（prototype）",
+  "status": "prototype",
+  "status_note": "不作为工程结论：Newmark 阻尼参数按客户反馈标定中，未与 Abaqus ODB 对标；未迁移 CDP/Lanczos 模态步",
+  "source": {
+    "repo": "DamSafetyApp",
+    "commit": "69e99d74064a22adbdda0eb17d3c14ce096b7e57",
+    "path": ".build/cases/abaqus-2d-dam-p0/full-static-dynamic-v1/generated/dam_2d_full_dynamic.i",
+    "note": "Newmark γ/β 参数化参考 c58229f085b05ff7d4868bb2a54f8a0c5f54f6fb（面向 beam_field_solver.py 外部求解器案例）；本模板为 MOOSE 输入，γ/β 直接改 newmark_gamma/newmark_beta 与 NodalKernels/BCs 中 gamma/beta 参数；静力结果与附加质量路径已改为同目录平铺",
+    "input_sha256": "e5553fd2b230013c2df11f1028585a04baf0f5e47fe3c0d3c7e6da0d4f30ff8c",
+    "extracted": "2026-08-18",
+    "evidence": "DamSafetyApp doc/prototypes/abaqus-2d-static-dynamic-rerun.md"
+  },
+  "solver": "blackbear-opt（BlackBear@1c190fd3 / MOOSE@4bce02d 锁定基线）",
+  "mesh_files": ["dam_2d_full_static.e"],
+  "mesh_note": "dam_2d_full_static.e 为 tpl-dam-2d-static 的静力求解结果（Exodus restart 网格与初值来源）；若修改静力参数，需先重跑静力模板并替换本文件",
+  "extra_files": ["dam_2d_full_acceleration.csv", "added-mass_x.csv", "added-mass_y.csv"],
+  "file_sha256": {
+    "dam_2d_full_static.e": "0f95890caa226d35a28318623b1de473f0c3e0f66e56d4021284b883a7679c26",
+    "dam_2d_full_acceleration.csv": "91c34fe2d8c3f6830270a9d05e3a541383b328ee3979b03aced1959a0f39f2ad",
+    "added-mass_x.csv": "b50db5df3bcf01bda10ac09ad60b30d21c1c54f72f5bb6bd757b74bc369bf42a",
+    "added-mass_y.csv": "99d140392fcef85315169bb4364b057b4acb5a9762b92c54d8ee888f8a235719"
+  },
+  "scale": "十分钟级，动力时程演示（5000 步/50 s）",
+  "form_parameters": [
+    {"path": "Functions/base_acceleration/data_file", "label": "地震波文件 (CSV)"},
+    {"path": "Physics/SolidMechanics/Dynamic/dam/newmark_gamma", "label": "Newmark γ"},
+    {"path": "Physics/SolidMechanics/Dynamic/dam/newmark_beta", "label": "Newmark β"},
+    {"path": "Physics/SolidMechanics/Dynamic/dam/mass_damping_coefficient", "label": "Rayleigh α（质量阻尼）"},
+    {"path": "Physics/SolidMechanics/Dynamic/dam/stiffness_damping_coefficient", "label": "Rayleigh β（刚度阻尼）"},
+    {"path": "Executioner/dt", "label": "时间步长 dt"},
+    {"path": "Executioner/end_time", "label": "结束时间"},
+    {"path": "Outputs/time_step_interval", "label": "输出间隔"}
+  ]
+}

@@ -89,6 +89,10 @@ add_executable(gmp_ise
   include/gmp/PartFeaturePanel.h
   src/L10n.cpp
   src/MoosePanel.cpp
+  src/MooseTemplates.cpp
+  src/MooseSnapshot.cpp
+  include/gmp/MooseTemplates.h
+  include/gmp/MooseSnapshot.h
   src/VtkViewer.cpp
   src/PropertyEditor.cpp
   src/LocalRunner.cpp
@@ -109,6 +113,11 @@ add_executable(gmp_ise
 
 target_include_directories(gmp_ise PRIVATE include)
 target_link_libraries(gmp_ise PRIVATE Qt6::Widgets)
+
+# TASK-E2E-10: MOOSE 模板库根目录（templates/moose/），运行期可被
+# GMP_MOOSE_TEMPLATES 环境变量覆盖
+target_compile_definitions(gmp_ise PRIVATE
+  GMP_TEMPLATE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates/moose")
 
 add_subdirectory(external/yaml-cpp)
 target_link_libraries(gmp_ise PRIVATE yaml-cpp)
