@@ -1,0 +1,45 @@
+{
+  "key": "tpl-dam-2d-dyn-cdp",
+  "display_name": "2D 坝 CDP 动力损伤两阶段（prototype）",
+  "status": "prototype",
+  "status_note": "不作为工程结论：CDP 参数由 Abaqus dam-2b.inp 映射，尚未与 Abaqus ODB 对标；采用 IterationAdaptiveDT + 正则化促进收敛；dt 会被自动回退/放大",
+  "source": {
+    "repo": "DamSafetyApp",
+    "commit": "c58229f085b05ff7d4868bb2a54f8a0c5f54f6fb",
+    "path": ".build/cases/abaqus-2d-dam-p0/full-static-dynamic-v1/generated/dam_2d_full_dynamic_cdp_adaptive.i",
+    "note": "由 dam_2d_full_dynamic.i 迁移 BlackBear DamagePlasticityStressUpdate；CDP 粘性参数方向按客户反馈用 smoothing_tol/yield_function_tol 近似；自适应时间步 IterationAdaptiveDT",
+    "input_sha256": "b01d1f77e0a922dc76e1b34c08f8366c3f181f4bda01267a3c3f2baa2c4fd855",
+    "extracted": "2026-08-21",
+    "evidence": "damASR/docs/verification/TASK-E2E-40-2D坝动力全链路测试报告.md"
+  },
+  "solver": "blackbear-opt（BlackBear@1c190fd3 / MOOSE@4bce02d 锁定基线）",
+  "mesh_files": ["dam_2d_full_static_cdp.e"],
+  "mesh_note": "dam_2d_full_static_cdp.e 为 tpl-dam-2d-static-cdp 的 CDP 静力求解结果（Exodus restart 网格与初值来源）；若修改静力 CDP 参数，需先重跑静力模板并替换本文件",
+  "extra_files": ["dam_2d_full_acceleration.csv", "added-mass_x.csv", "added-mass_y.csv"],
+  "file_sha256": {
+    "dam_2d_full_static_cdp.e": "c60cd1a12ebd7a4d9562d2365f701f987a1a70cf5355da9082a38a03d3091640",
+    "dam_2d_full_acceleration.csv": "91c34fe2d8c3f6830270a9d05e3a541383b328ee3979b03aced1959a0f39f2ad",
+    "added-mass_x.csv": "b50db5df3bcf01bda10ac09ad60b30d21c1c54f72f5bb6bd757b74bc369bf42a",
+    "added-mass_y.csv": "99d140392fcef85315169bb4364b057b4acb5a9762b92c54d8ee888f8a235719"
+  },
+  "scale": "小时级，CDP 动力损伤时程演示（约 50 s 物理时间，自适应 dt）",
+  "form_parameters": [
+    {"path": "Functions/base_acceleration/data_file", "label": "地震波文件 (CSV)"},
+    {"path": "Physics/SolidMechanics/Dynamic/dam/newmark_gamma", "label": "Newmark γ"},
+    {"path": "Physics/SolidMechanics/Dynamic/dam/newmark_beta", "label": "Newmark β"},
+    {"path": "Physics/SolidMechanics/Dynamic/dam/mass_damping_coefficient", "label": "Rayleigh α（质量阻尼）"},
+    {"path": "Physics/SolidMechanics/Dynamic/dam/stiffness_damping_coefficient", "label": "Rayleigh β（刚度阻尼）"},
+    {"path": "Executioner/end_time", "label": "结束时间"},
+    {"path": "Executioner/TimeStepper/dt", "label": "初始时间步长 dt"},
+    {"path": "Executioner/TimeStepper/growth_factor", "label": "自适应步长放大因子"},
+    {"path": "Executioner/TimeStepper/cutback_factor", "label": "自适应步长回退因子"},
+    {"path": "Executioner/TimeStepper/optimal_iterations", "label": "目标非线性迭代数"},
+    {"path": "Materials/damage_plasticity_model/yield_strength_in_tension", "label": "CDP 抗拉强度 (Pa)"},
+    {"path": "Materials/damage_plasticity_model/maximum_strength_in_compression", "label": "CDP 抗压峰值强度 (Pa)"},
+    {"path": "Materials/damage_plasticity_model/fracture_energy_in_tension", "label": "CDP 拉伸断裂能"},
+    {"path": "Materials/damage_plasticity_model/fracture_energy_in_compression", "label": "CDP 压缩断裂能"},
+    {"path": "Materials/damage_plasticity_model/yield_function_tol", "label": "CDP 屈服函数容差（正则化）"},
+    {"path": "Materials/damage_plasticity_model/smoothing_tol", "label": "CDP 屈服面平滑容差（正则化）"},
+    {"path": "Outputs/time_step_interval", "label": "输出间隔"}
+  ]
+}
