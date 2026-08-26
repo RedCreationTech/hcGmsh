@@ -219,6 +219,8 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   template_kind_->addItem("2D 坝静力—动力两阶段 [prototype]",
                           "tpl-dam-2d-dyn");
   template_kind_->addItem("2D 坝 CDP 动力损伤（prototype）", "tpl-dam-2d-dyn-cdp");
+  template_kind_->addItem("北京混凝土 CDP 参考等效损伤静力对标（prototype）",
+                          "tpl-bj-concrete-cdp-static");
   auto* apply_template = new QPushButton("Apply Template");
   connect(apply_template, &QPushButton::clicked, this,
           &MoosePanel::on_apply_template);

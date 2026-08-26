@@ -1,0 +1,31 @@
+{
+  "key": "tpl-bj-concrete-cdp-static",
+  "display_name": "北京混凝土 CDP 参考等效损伤静力对标（prototype）",
+  "status": "prototype",
+  "status_note": "mock 数据；SI 一致单位制。原生 BlackBear DamagePlasticityStressUpdate 映射在损伤起始段不收敛；当前模板改为由 Abaqus RP-1 的 101 点曲线标定的等效割线刚度模型，并用五个 ODB 帧的单元平均值映射 DAMAGEC/DAMAGET。C06 作业 job_20260826_234616_fx73el 已成功完成并生成最终 .e；该模型不代表 Abaqus CDP 本构或损伤空间分布等价，不得用于工程安全结论。",
+  "source": {
+    "repo": "DamSafetyApp",
+    "commit": "c58229f085b05ff7d4868bb2a54f8a0c5f54f6fb",
+    "path": ".build/cases/bj-0826-concrete/calibration/attempt-02/input.i",
+    "input_sha256": "c2ed85f500ea8d6ff07eb422d997056b204b62f81169956b6463358b4361df33",
+    "source_inp_sha256": "b06a04673f6f4db7c22b13c7a86fbb2a0d24efe6cd62b5fcd149c187b5f307ea",
+    "source_odb_sha256": "eb89f4f6261f1fa5e2a65ea8be7707a8c529292e5778049476b787d4441a3fd3",
+    "extracted": "2026-08-26",
+    "evidence": "damASR/docs/verification/2026-08-26-BJ混凝土CDP作业失败问题分析.md"
+  },
+  "solver": "blackbear-opt（DamSafetyApp@c58229f / BlackBear@1c190fd3 / MOOSE@4bce02d9）",
+  "mesh_files": ["bj_concrete_mesh.e"],
+  "file_sha256": {
+    "bj_concrete_mesh.e": "ffe239b144abe83bb5b66ccfbc7a9c43fe1a7aac5c6eb3cb8972c2a35a13bd3a"
+  },
+  "units": "SI: m, N, s, kg, Pa",
+  "scale": "1000 个 HEX8 单元；U2 从 0 线性加载至 -0.005 m；101 个固定时间步；RP-1 力—位移曲线为直接标定目标",
+  "form_parameters": [
+    {"path": "Functions/top_displacement/expression", "label": "顶部 U2 位移函数 (m)"},
+    {"path": "Materials/elasticity/poissons_ratio", "label": "泊松比"},
+    {"path": "Functions/effective_E/y", "label": "等效割线模量时程 (Pa)"},
+    {"path": "Functions/damagec_curve/y", "label": "平均压损伤时程"},
+    {"path": "Functions/damaget_curve/y", "label": "平均拉损伤时程"},
+    {"path": "Executioner/dt", "label": "固定时间步长"}
+  ]
+}
