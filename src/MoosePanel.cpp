@@ -166,11 +166,12 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   layout->addWidget(run_box);
 
   // TASK-E2E-11: 作业提交入口（经 LIMS Facade, 不直连 C06, 不保存凭据）
+  sim_client_ = new SimClient(this);
   auto* remote_box = new QGroupBox("Remote Job (via LIMS Facade)");
   auto* remote_form = new QFormLayout(remote_box);
   sim_server_ = new QLineEdit();
-  sim_server_->setPlaceholderText("http://127.0.0.1:8200");
-  sim_server_->setToolTip("LIMS Facade base URL");
+  sim_server_->setPlaceholderText(sim_client_->base_url());
+  sim_server_->setToolTip("LIMS Facade base URL (GMP_LIMS_BASE_URL)");
   remote_form->addRow("Server", sim_server_);
   sim_project_ = new QLineEdit();
   sim_project_->setPlaceholderText("gmp-ise");
@@ -196,7 +197,6 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   remote_form->addRow("Job", sim_status_label_);
   layout->addWidget(remote_box);
 
-  sim_client_ = new SimClient(this);
   connect(sim_client_, &SimClient::submit_finished, this,
           &MoosePanel::on_sim_submit_finished);
   connect(sim_client_, &SimClient::job_fetched, this,
@@ -1778,8 +1778,12 @@ void MoosePanel::load_settings() {
           .toInt());
   extra_args_->setText(
       settings.value("moose/extra_args", extra_args_->text()).toString());
+  const QString env_sim_server =
+      QString::fromLocal8Bit(qgetenv("GMP_LIMS_BASE_URL")).trimmed();
   sim_server_->setText(
-      settings.value("moose/sim_server", sim_server_->text()).toString());
+      env_sim_server.isEmpty()
+          ? settings.value("moose/sim_server", sim_server_->text()).toString()
+          : env_sim_server);
   sim_project_->setText(
       settings.value("moose/sim_project", sim_project_->text()).toString());
 

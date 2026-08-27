@@ -31,6 +31,11 @@ QString bundle_file_url_path(const QString& job_id, const QString& file_path) {
 }  // namespace
 
 SimClient::SimClient(QObject* parent) : QObject(parent) {
+  const QString configured =
+      QString::fromLocal8Bit(qgetenv("GMP_LIMS_BASE_URL")).trimmed();
+  if (!configured.isEmpty()) {
+    set_base_url(configured);
+  }
   // 大文件下载时只要数据持续到达即不超时
   nam_.setTransferTimeout(60000);
 }

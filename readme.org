@@ -186,6 +186,14 @@ UI 自动探测:
 * 也可通过环境变量 `GMP_MOOSE_EXEC` 指定路径, 或直接在 UI 中 Pick.
 * 选择 “Thermo-Mechanics” 模板时, 建议切换到 `combined-opt` 以启用 TensorMechanics 模块.
 
+** 远程作业地址配置
+
+CAE 只调用 LIMS Facade，不直接访问 C06 Agent。复制 ~.env.example~ 为未入库的
+~.env~，通过 ~GMP_LIMS_BASE_URL~ 配置 LIMS API，默认
+~http://127.0.0.1:8200~。计算笔记本在 ~192.168.0.121~ 与
+~192.168.0.138~ 之间切换时，只需修改 LIMS 的 C06 地址配置，CAE 无需修改。
+Markdown 使用说明见 [[file:README.md][README.md]]。
+
 ** 硬件要求
 
  * 内存: 建议 16GB 以上(调试 MOOSE 需要较大内存) .

@@ -13,12 +13,18 @@
 #endif
 
 #include "gmp/MainWindow.h"
+#include "gmp/Env.h"
 
 int main(int argc, char** argv) {
 #ifdef GMP_ENABLE_VTK_VIEWER
   QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
 #endif
   QApplication app(argc, argv);
+
+  const QString env_path = gmp::load_dotenv();
+  if (!env_path.isEmpty()) {
+    qInfo() << "Loaded local environment configuration:" << env_path;
+  }
 
 #ifdef GMP_ENABLE_GMSH_GUI
   // WS0-A 冒烟测试: GMP_WS0_SMOKE=1 时在 GUI 启动前运行, 不影响正常启动

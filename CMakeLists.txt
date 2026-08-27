@@ -78,6 +78,8 @@ endif()
 
 add_executable(gmp_ise
   src/main.cpp
+  src/Env.cpp
+  include/gmp/Env.h
   resources/icons.qrc
   src/MainWindow.cpp
   src/GmshPanel.cpp
