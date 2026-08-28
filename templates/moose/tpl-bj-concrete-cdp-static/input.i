@@ -1,10 +1,21 @@
 # =============================================================================
-# Calibration model: equivalent secant-stiffness damage surrogate
-# Data class: mock; status: prototype; SI units (m, N, s, kg, Pa)
-# Source RP curve: 参考点RP1力-位移时程.xlsx (101 points)
-# This model is intended to obtain a stable full MOOSE result after the native
-# BlackBear DamagePlasticityStressUpdate return mapping failed. It is not a
-# constitutive-equivalence claim for Abaqus CDP.
+# Template ID : tpl-bj-concrete-cdp-static
+# Status      : prototype / mock data; not for engineering conclusions
+# Units       : SI (m, N, s, kg, Pa)
+# Source INP  : test.inp
+# SHA-256     : b06a04673f6f4db7c22b13c7a86fbb2a0d24efe6cd62b5fcd149c187b5f307ea
+# Loading     : U2 ramps from 0 to -0.005 m while MOOSE pseudo-time t=0..1
+# Mapping     : Abaqus CDP scalar parameters and four tabular curves are read
+#               from test.inp and recorded in cdp-mapping-manifest.json.
+# Mapping     : Abaqus kinematic couplings are represented by uniform
+#               displacement constraints on the two coupled surfaces.
+# Mapping     : C3D8R connectivity is retained as HEX8, but Abaqus reduced
+#               integration/hourglass control is not yet reproduced.
+# Mapping     : Abaqus viscosity=0.0005 is active in AbaqusCDPStressUpdate.
+#               *Static stabilize=0.0002 has no approved MOOSE equivalent and
+#               is deliberately not replaced by an uncalibrated force term.
+# Validation  : Abaqus ODB/CSV values are comparison evidence, never solver
+#               inputs. This template exercises the custom constitutive law.
 # =============================================================================
 
 [Mesh]
@@ -18,22 +29,16 @@
   displacements = 'disp_x disp_y disp_z'
 []
 
-[Physics]
-  [SolidMechanics]
-    [QuasiStatic]
-      [concrete]
-        add_variables = true
-        incremental = false
-        block = Part_1__concrete
-        strain = SMALL
-        generate_output = 'stress_xx stress_xy stress_xz stress_yy stress_yz stress_zz
-                           strain_xx strain_xy strain_xz strain_yy strain_yz strain_zz
-                           max_principal_stress mid_principal_stress min_principal_stress
-                           vonmises_stress'
-        save_in = 'resid_x resid_y resid_z'
-      []
-    []
-  []
+[Physics/SolidMechanics/QuasiStatic/concrete]
+  add_variables = true
+  incremental = true
+  block = Part_1__concrete
+  strain = SMALL
+  generate_output = 'stress_xx stress_xy stress_xz stress_yy stress_yz stress_zz
+                     strain_xx strain_xy strain_xz strain_yy strain_yz strain_zz
+                     max_principal_stress mid_principal_stress min_principal_stress
+                     vonmises_stress'
+  save_in = 'resid_x resid_y resid_z'
 []
 
 [AuxVariables]
@@ -43,51 +48,102 @@
   []
   [resid_z]
   []
-  [DAMAGEC]
+  [DamageC]
     order = CONSTANT
     family = MONOMIAL
   []
-  [DAMAGET]
+  [DamageT]
     order = CONSTANT
     family = MONOMIAL
   []
-[]
-
-[Functions]
-  [top_displacement]
-    type = ParsedFunction
-    expression = '-0.005*t'
+  [combined_damage]
+    order = CONSTANT
+    family = MONOMIAL
   []
-  [effective_E]
-    type = PiecewiseLinear
-    x = '0 0.01 0.02 0.03 0.04 0.05 0.06 0.07 0.08 0.09 0.1 0.11 0.12 0.13 0.14 0.15 0.16 0.17 0.18 0.19 0.2 0.21 0.22 0.23 0.24 0.25 0.26 0.27 0.28 0.29 0.3 0.31 0.32 0.33 0.34 0.35 0.36 0.37 0.38 0.39 0.4 0.41 0.42 0.43 0.44 0.45 0.46 0.47 0.48 0.49 0.5 0.51 0.52 0.53 0.54 0.55 0.56 0.57 0.58 0.59 0.6 0.61 0.62 0.63 0.64 0.65 0.66 0.67 0.68 0.69 0.7 0.71 0.72 0.73 0.74 0.75 0.76 0.77 0.78 0.79 0.8 0.81 0.82 0.83 0.84 0.85 0.86 0.87 0.88 0.89 0.9 0.91 0.92 0.93 0.94 0.95 0.96 0.97 0.98 0.99 1'
-    y = '30395412985 30395412985 26724368577.2 23232536496.4 19852128858.8 16770592772.1 13969423742.4 11550622074.2 9550914227.9 7935272400.54 6641423919.15 5607152613.33 4776853159.83 4102946647.3 3553771924.73 3105073906.36 2736506452.71 2431755942.93 2177219509.72 1962751540.88 1780993785.9 1625520488.21 1491834217.29 1376140809.27 1276671806.5 1193154887.36 1127079497.85 1072081627.74 1022428667.8 978399010.743 937887925.101 901048271.651 868228476 837503806.318 808941001.312 781743723.015 756179817.415 732498683.383 709961598.344 688719845.072 668248548.99 648431270.368 629499036.982 611634257.236 595120587.445 580000447.458 566394281.326 553789034.439 542022238.904 531050496.488 520691305.917 510862888.774 501539608.65 492700209.501 484120988.482 475804250.329 467777594.956 460109889.956 452827263.255 445839835.73 439089642.908 432575641.568 426288493.632 420215339.199 414406903.672 408807100.056 403412336.607 398254057.562 393283708.157 388472454.507 383831994.444 379413528.71 375179004.531 371071147.881 367076065.918 363173694.03 359367194.373 355654514.959 352038694.164 348506209.748 345050696.257 341670903.084 338367221.279 335133776.61 331969603.627 328879881.774 325884620.93 322982053.631 320108631.741 317285217.81 314517345.659 311807457.213 309155070.542 306556937.057 304015461.876 301523398.375 299094053.993 296713462.964 294374842.49 292076920.734 289824957.414'
+  [stiffness_factor]
+    order = CONSTANT
+    family = MONOMIAL
   []
-  [damagec_curve]
-    type = PiecewiseLinear
-    x = '0 0.19 0.38 0.59 0.78 0.97 1'
-    y = '0 0.740072776 0.845154798 0.87725556 0.887343171 0.892585616 0.892585616'
+  [kappa_c]
+    order = CONSTANT
+    family = MONOMIAL
   []
-  [damaget_curve]
-    type = PiecewiseLinear
-    x = '0 0.19 0.38 0.59 0.78 0.97 1'
-    y = '0 0.0857730153 0.144428147 0.197927393 0.208499082 0.211643244 0.211643244'
+  [kappa_t]
+    order = CONSTANT
+    family = MONOMIAL
+  []
+  [local_iterations]
+    order = CONSTANT
+    family = MONOMIAL
+  []
+  [accepted_substeps]
+    order = CONSTANT
+    family = MONOMIAL
   []
 []
 
 [AuxKernels]
-  [damagec]
-    type = FunctionAux
-    variable = DAMAGEC
-    function = damagec_curve
-    execute_on = 'INITIAL TIMESTEP_END'
+  [damage_c]
+    type = MaterialRealAux
+    variable = DamageC
+    property = DamageC
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
   []
-  [damaget]
-    type = FunctionAux
-    variable = DAMAGET
-    function = damaget_curve
-    execute_on = 'INITIAL TIMESTEP_END'
+  [damage_t]
+    type = MaterialRealAux
+    variable = DamageT
+    property = DamageT
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
   []
+  [combined_damage]
+    type = MaterialRealAux
+    variable = combined_damage
+    property = cdp_combined_damage
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [stiffness_factor]
+    type = MaterialRealAux
+    variable = stiffness_factor
+    property = cdp_stiffness_factor
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [kappa_c]
+    type = MaterialRealAux
+    variable = kappa_c
+    property = cdp_kappa_c
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [kappa_t]
+    type = MaterialRealAux
+    variable = kappa_t
+    property = cdp_kappa_t
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [local_iterations]
+    type = MaterialRealAux
+    variable = local_iterations
+    property = cdp_local_iterations
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [accepted_substeps]
+    type = MaterialRealAux
+    variable = accepted_substeps
+    property = cdp_accepted_substeps
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+[]
+
+[Functions/top_displacement]
+  type = ParsedFunction
+  expression = '-0.005*t'
 []
 
 [BCs]
@@ -130,21 +186,36 @@
 []
 
 [Materials]
-  [effective_modulus]
-    type = GenericFunctionMaterial
-    prop_names = effective_youngs_modulus
-    prop_values = effective_E
-  []
   [elasticity]
-    type = ComputeVariableIsotropicElasticityTensor
+    type = ComputeIsotropicElasticityTensor
     block = Part_1__concrete
-    youngs_modulus = effective_youngs_modulus
+    youngs_modulus = 3.04e10
     poissons_ratio = 0.2
-    args = ''
   []
   [stress]
-    type = ComputeLinearElasticStress
+    type = ComputeMultipleInelasticStress
     block = Part_1__concrete
+    inelastic_models = cdp
+    perform_finite_strain_rotations = false
+  []
+  [cdp]
+    type = AbaqusCDPStressUpdate
+    block = Part_1__concrete
+    compression_hardening_file = compression_hardening.csv
+    compression_damage_file = compression_damage.csv
+    tension_stiffening_file = tension_stiffening.csv
+    tension_damage_file = tension_damage.csv
+    youngs_modulus = 3.04e10
+    poissons_ratio = 0.2
+    dilation_angle = 36.31
+    eccentricity = 0.1
+    biaxial_to_uniaxial_compression_ratio = 1.16
+    tensile_meridian_ratio = 0.667
+    viscosity = 0.0005
+    tension_recovery = 1.0
+    compression_recovery = 1.0
+    maximum_substeps = 256
+    maximum_strain_increment = 2.5e-5
   []
 []
 
@@ -166,32 +237,73 @@
   []
   [max_damagec]
     type = ElementExtremeValue
-    variable = DAMAGEC
+    variable = DamageC
     value_type = max
   []
   [max_damaget]
     type = ElementExtremeValue
-    variable = DAMAGET
+    variable = DamageT
     value_type = max
   []
+  [max_local_iterations]
+    type = ElementExtremeValue
+    variable = local_iterations
+    value_type = max
+  []
+  [max_accepted_substeps]
+    type = ElementExtremeValue
+    variable = accepted_substeps
+    value_type = max
+  []
+[]
+
+[Preconditioning/smp]
+  type = SMP
+  full = true
 []
 
 [Executioner]
   type = Transient
   start_time = 0
   end_time = 1
-  dt = 0.01
   solve_type = NEWTON
+  line_search = bt
+  automatic_scaling = true
+  nl_rel_tol = 1e-9
+  nl_abs_tol = 1e-8
+  nl_max_its = 50
+  dtmin = 1e-7
+  dtmax = 0.002
   petsc_options_iname = '-pc_type -pc_factor_mat_solver_type'
   petsc_options_value = 'lu mumps'
-  nl_rel_tol = 1e-10
-  nl_abs_tol = 1e-8
-  nl_max_its = 30
+
+  [TimeStepper]
+    type = IterationAdaptiveDT
+    dt = 0.001
+    optimal_iterations = 8
+    iteration_window = 3
+    growth_factor = 1.15
+    cutback_factor = 0.5
+  []
+[]
+
+[Times/field_output_times]
+  type = TimeIntervalTimes
+  start_time = 0
+  end_time = 1
+  time_interval = 0.01
 []
 
 [Outputs]
-  exodus = true
-  csv = true
-  execute_on = 'INITIAL TIMESTEP_END'
-  file_base = bj_concrete_out
+  [field_exodus]
+    type = Exodus
+    execute_on = 'initial timestep_end'
+    sync_times_object = field_output_times
+    file_base = bj_concrete_cdp_compatible
+  []
+  [history_csv]
+    type = CSV
+    execute_on = 'initial timestep_end'
+    file_base = bj_concrete_cdp_compatible
+  []
 []

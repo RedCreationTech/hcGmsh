@@ -59,9 +59,10 @@ QString sha256_file_hex(const QString& path, bool* ok) {
 
 QStringList scan_input_file_refs(const QString& input_text) {
   QStringList refs;
-  // 匹配 MOOSE 输入中引用外部文件的常见参数赋值
+  // 匹配 MOOSE 输入中引用外部文件的常见参数赋值，以及本构表格使用的
+  // *_file 参数（例如 compression_hardening_file）。
   static const QRegularExpression re(
-      R"m((?:^|\s)(?:file|data_file|nodal_mass_file|xy_data_file|point_file)\s*=\s*([^\s#]+))m");
+      R"m((?:^|\s)(?:[A-Za-z0-9_]*_file|file)\s*=\s*([^\s#]+))m");
   auto it = re.globalMatch(input_text);
   while (it.hasNext()) {
     const QString token = strip_quotes(it.next().captured(1));
@@ -110,7 +111,14 @@ SnapshotExportResult export_job_snapshot(const QString& dest_dir,
   // 2. 归类并复制引用文件（模板声明优先，其余按扩展名）
   QSet<QString> mesh_names;
   QSet<QString> extra_names;
-  const QStringList refs = scan_input_file_refs(input_text);
+  QStringList refs = scan_input_file_refs(input_text);
+  // template.json 中显式声明的文件即为快照合同的一部分。即使主输入不直接
+  // 引用审计清单，也必须一并复制并进入 manifest.json。
+  if (tpl.valid) {
+    refs.append(tpl.mesh_files);
+    refs.append(tpl.extra_files);
+  }
+  refs.removeDuplicates();
   for (const auto& ref : refs) {
     // 解析来源路径：模板目录相对路径 > 绝对/工作目录相对路径
     QString source;

@@ -1,31 +1,42 @@
 {
   "key": "tpl-bj-concrete-cdp-static",
-  "display_name": "北京混凝土 CDP 参考等效损伤静力对标（prototype）",
+  "display_name": "北京混凝土 Abaqus-CDP-compatible 全量静力（prototype）",
   "status": "prototype",
-  "status_note": "mock 数据；SI 一致单位制。原生 BlackBear DamagePlasticityStressUpdate 映射在损伤起始段不收敛；当前模板改为由 Abaqus RP-1 的 101 点曲线标定的等效割线刚度模型，并用五个 ODB 帧的单元平均值映射 DAMAGEC/DAMAGET。C06 作业 job_20260826_234616_fx73el 已成功完成并生成最终 .e；该模型不代表 Abaqus CDP 本构或损伤空间分布等价，不得用于工程安全结论。",
+  "status_note": "mock/prototype 数据；SI 一致单位制。模板从 test.inp 读取 Abaqus CDP 标量参数和四张材料表，使用 DamSafetyApp 自定义 AbaqusCDPStressUpdate 执行 1000 单元全量诊断。当前不等价项包括 Abaqus *Static 自动稳定化、C3D8R 减缩积分/沙漏控制及完整商业实现细节；不得用于工程安全结论。",
   "source": {
     "repo": "DamSafetyApp",
-    "commit": "c58229f085b05ff7d4868bb2a54f8a0c5f54f6fb",
-    "path": ".build/cases/bj-0826-concrete/calibration/attempt-02/input.i",
-    "input_sha256": "c2ed85f500ea8d6ff07eb422d997056b204b62f81169956b6463358b4361df33",
+    "commit": "3d430b6cd1b6684051d294abbac8032181995de1",
+    "path": "tools/abaqus/abaqus_cdp.py + AbaqusCDPStressUpdate",
+    "input_sha256": "47340c26b5972ab07634ec6ca351c7fa3430f78d85989e66b118c58ee7508b01",
     "source_inp_sha256": "b06a04673f6f4db7c22b13c7a86fbb2a0d24efe6cd62b5fcd149c187b5f307ea",
-    "source_odb_sha256": "eb89f4f6261f1fa5e2a65ea8be7707a8c529292e5778049476b787d4441a3fd3",
-    "extracted": "2026-08-26",
-    "evidence": "damASR/docs/verification/2026-08-26-BJ混凝土CDP作业失败问题分析.md"
+    "evidence": "damASR/docs/verification/2026-08-27-Abaqus-CDP-compatible本构测试与验收矩阵.md"
   },
-  "solver": "blackbear-opt（DamSafetyApp@c58229f / BlackBear@1c190fd3 / MOOSE@4bce02d9）",
+  "solver": "DamSafetyApp custom AbaqusCDPStressUpdate (prototype)",
   "mesh_files": ["bj_concrete_mesh.e"],
+  "extra_files": [
+    "cdp-mapping-manifest.json",
+    "abaqus_cdp_material.i",
+    "compression_hardening.csv",
+    "compression_damage.csv",
+    "tension_stiffening.csv",
+    "tension_damage.csv"
+  ],
   "file_sha256": {
-    "bj_concrete_mesh.e": "ffe239b144abe83bb5b66ccfbc7a9c43fe1a7aac5c6eb3cb8972c2a35a13bd3a"
+    "bj_concrete_mesh.e": "ffe239b144abe83bb5b66ccfbc7a9c43fe1a7aac5c6eb3cb8972c2a35a13bd3a",
+    "abaqus_cdp_material.i": "3c96b1ca2086a3c5d6d3b70c1a44de4f2a57b367a032c7997237e6c59b3b4898",
+    "cdp-mapping-manifest.json": "ae2389728e65a967f33dadcb833edb77fcc86971dbae96fd3726838632d5459e",
+    "compression_hardening.csv": "4131a4b24cf905188a8c98aa48b97db2a21f135bc6b782682b42fa0c5b664f9f",
+    "compression_damage.csv": "2828f8efea22fa5f6b68ed3f0d820e4ef4eeeca40633436aa46eeb8cf92099e0",
+    "tension_stiffening.csv": "8ee15d7a3c965e196643300e5d43a703d883cb916db6cd5133e11b55897e2144",
+    "tension_damage.csv": "a2d337b6d433e2475033dbefda03b4dc7554c0a2781f2bc6816eb792940823be"
   },
   "units": "SI: m, N, s, kg, Pa",
-  "scale": "1000 个 HEX8 单元；U2 从 0 线性加载至 -0.005 m；101 个固定时间步；RP-1 力—位移曲线为直接标定目标",
+  "scale": "1331 节点、1000 个 HEX8；U2 从 0 线性加载至 -0.005 m；目标输出间隔 0.01 伪时间",
   "form_parameters": [
     {"path": "Functions/top_displacement/expression", "label": "顶部 U2 位移函数 (m)"},
-    {"path": "Materials/elasticity/poissons_ratio", "label": "泊松比"},
-    {"path": "Functions/effective_E/y", "label": "等效割线模量时程 (Pa)"},
-    {"path": "Functions/damagec_curve/y", "label": "平均压损伤时程"},
-    {"path": "Functions/damaget_curve/y", "label": "平均拉损伤时程"},
-    {"path": "Executioner/dt", "label": "固定时间步长"}
+    {"path": "Materials/cdp/viscosity", "label": "CDP 黏性参数 (s)"},
+    {"path": "Materials/cdp/maximum_strain_increment", "label": "材料点最大应变增量"},
+    {"path": "Executioner/TimeStepper/dt", "label": "初始伪时间步长"},
+    {"path": "Executioner/TimeStepper/dtmin", "label": "最小伪时间步长"}
   ]
 }

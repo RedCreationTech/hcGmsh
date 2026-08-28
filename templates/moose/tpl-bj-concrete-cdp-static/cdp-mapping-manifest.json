@@ -1,0 +1,1008 @@
+{
+  "schema_version": "cdp-mapping-manifest/0.1",
+  "status": "prototype",
+  "source": {
+    "path": "/Users/a123/Desktop/test/bj/0826/测试用例/concrete/test.inp",
+    "sha256": "b06a04673f6f4db7c22b13c7a86fbb2a0d24efe6cd62b5fcd149c187b5f307ea"
+  },
+  "source_files": [
+    {
+      "path": "/Users/a123/Desktop/test/bj/0826/测试用例/concrete/test.inp",
+      "sha256": "b06a04673f6f4db7c22b13c7a86fbb2a0d24efe6cd62b5fcd149c187b5f307ea"
+    }
+  ],
+  "unit_system": {
+    "length": "m",
+    "force": "N",
+    "time": "s",
+    "stress": "Pa"
+  },
+  "material": "concrete",
+  "elastic": {
+    "youngs_modulus_pa": 30400000000.0,
+    "poissons_ratio": 0.2
+  },
+  "plasticity": {
+    "dilation_angle_degrees": 36.31,
+    "eccentricity": 0.1,
+    "fb0_fc0": 1.16,
+    "kc": 0.667,
+    "viscosity_seconds": 0.0005
+  },
+  "recovery": {
+    "tension_recovery": 1.0,
+    "compression_recovery": 1.0
+  },
+  "table_point_counts": {
+    "compression_hardening": 55,
+    "compression_damage": 55,
+    "tension_stiffening": 56,
+    "tension_damage": 56
+  },
+  "derived_plastic_strain": {
+    "compression": [
+      {
+        "strain_measure": 0.0,
+        "stress_pa": 8597100.0,
+        "damage": 0.0,
+        "equivalent_plastic_strain": 0.0
+      },
+      {
+        "strain_measure": 4.68e-05,
+        "stress_pa": 12174200.0,
+        "damage": 0.05368107546863711,
+        "equivalent_plastic_strain": 2.4083023362357208e-05
+      },
+      {
+        "strain_measure": 9.98e-05,
+        "stress_pa": 15094900.0,
+        "damage": 0.08739530137948345,
+        "equivalent_plastic_strain": 5.224873875887132e-05
+      },
+      {
+        "strain_measure": 0.000174673,
+        "stress_pa": 17350400.0,
+        "damage": 0.124836,
+        "equivalent_plastic_strain": 9.326139666502206e-05
+      },
+      {
+        "strain_measure": 0.000269649,
+        "stress_pa": 18995600.0,
+        "damage": 0.164036,
+        "equivalent_plastic_strain": 0.00014703755028761
+      },
+      {
+        "strain_measure": 0.000381823,
+        "stress_pa": 20118100.0,
+        "damage": 0.20348,
+        "equivalent_plastic_strain": 0.00021276395053614804
+      },
+      {
+        "strain_measure": 0.000508008,
+        "stress_pa": 20814500.0,
+        "damage": 0.242108,
+        "equivalent_plastic_strain": 0.000289285119629182
+      },
+      {
+        "strain_measure": 0.000645183,
+        "stress_pa": 21176700.0,
+        "damage": 0.279237,
+        "equivalent_plastic_strain": 0.0003753064312448643
+      },
+      {
+        "strain_measure": 0.000790724,
+        "stress_pa": 21284100.0,
+        "damage": 0.314466,
+        "equivalent_plastic_strain": 0.0004695603355677549
+      },
+      {
+        "strain_measure": 0.000944895,
+        "stress_pa": 21128900.0,
+        "damage": 0.348732,
+        "equivalent_plastic_strain": 0.000572730139600546
+      },
+      {
+        "strain_measure": 0.00110737,
+        "stress_pa": 20721000.0,
+        "damage": 0.382484,
+        "equivalent_plastic_strain": 0.0006851855969792046
+      },
+      {
+        "strain_measure": 0.00127539,
+        "stress_pa": 20143900.0,
+        "damage": 0.415009,
+        "equivalent_plastic_strain": 0.0008053029323593281
+      },
+      {
+        "strain_measure": 0.00144682,
+        "stress_pa": 19462900.0,
+        "damage": 0.445877,
+        "equivalent_plastic_strain": 0.0009316591379794831
+      },
+      {
+        "strain_measure": 0.00162004,
+        "stress_pa": 18726700.0,
+        "damage": 0.47487,
+        "equivalent_plastic_strain": 0.0010629882105057695
+      },
+      {
+        "strain_measure": 0.00179392,
+        "stress_pa": 17969700.0,
+        "damage": 0.50191,
+        "equivalent_plastic_strain": 0.0011982780604884342
+      },
+      {
+        "strain_measure": 0.0019677,
+        "stress_pa": 17215200.0,
+        "damage": 0.527016,
+        "equivalent_plastic_strain": 0.0013367196428142223
+      },
+      {
+        "strain_measure": 0.00214086,
+        "stress_pa": 16478800.0,
+        "damage": 0.550265,
+        "equivalent_plastic_strain": 0.0014776253581670609
+      },
+      {
+        "strain_measure": 0.00231309,
+        "stress_pa": 15769800.0,
+        "damage": 0.571764,
+        "equivalent_plastic_strain": 0.001620484022467198
+      },
+      {
+        "strain_measure": 0.00248423,
+        "stress_pa": 15093700.0,
+        "damage": 0.591638,
+        "equivalent_plastic_strain": 0.0017648922232782885
+      },
+      {
+        "strain_measure": 0.00265416,
+        "stress_pa": 14453000.0,
+        "damage": 0.610014,
+        "equivalent_plastic_strain": 0.0019104986602339574
+      },
+      {
+        "strain_measure": 0.00282289,
+        "stress_pa": 13848700.0,
+        "damage": 0.627018,
+        "equivalent_plastic_strain": 0.002057068492827649
+      },
+      {
+        "strain_measure": 0.00299041,
+        "stress_pa": 13280100.0,
+        "damage": 0.642769,
+        "equivalent_plastic_strain": 0.0022043900926302443
+      },
+      {
+        "strain_measure": 0.00315676,
+        "stress_pa": 12746200.0,
+        "damage": 0.65738,
+        "equivalent_plastic_strain": 0.0023522880213002594
+      },
+      {
+        "strain_measure": 0.00332201,
+        "stress_pa": 12245300.0,
+        "damage": 0.670952,
+        "equivalent_plastic_strain": 0.002500660414705133
+      },
+      {
+        "strain_measure": 0.00348621,
+        "stress_pa": 11775600.0,
+        "damage": 0.68358,
+        "equivalent_plastic_strain": 0.002649384543993826
+      },
+      {
+        "strain_measure": 0.00364943,
+        "stress_pa": 11335000.0,
+        "damage": 0.695348,
+        "equivalent_plastic_strain": 0.002798397555820377
+      },
+      {
+        "strain_measure": 0.00381173,
+        "stress_pa": 10921600.0,
+        "damage": 0.706332,
+        "equivalent_plastic_strain": 0.0029476281406142133
+      },
+      {
+        "strain_measure": 0.00397317,
+        "stress_pa": 10533500.0,
+        "damage": 0.716602,
+        "equivalent_plastic_strain": 0.003097016195962643
+      },
+      {
+        "strain_measure": 0.00413382,
+        "stress_pa": 10168900.0,
+        "damage": 0.726221,
+        "equivalent_plastic_strain": 0.0032465228976478527
+      },
+      {
+        "strain_measure": 0.00445296,
+        "stress_pa": 9503210.0,
+        "damage": 0.743719,
+        "equivalent_plastic_strain": 0.00354578889346095
+      },
+      {
+        "strain_measure": 0.00476955,
+        "stress_pa": 8912140.0,
+        "damage": 0.759209,
+        "equivalent_plastic_strain": 0.003845214752991183
+      },
+      {
+        "strain_measure": 0.00508394,
+        "stress_pa": 8385030.0,
+        "damage": 0.773002,
+        "equivalent_plastic_strain": 0.004144671789420473
+      },
+      {
+        "strain_measure": 0.00539644,
+        "stress_pa": 7912900.0,
+        "damage": 0.785351,
+        "equivalent_plastic_strain": 0.004444089037084655
+      },
+      {
+        "strain_measure": 0.00570729,
+        "stress_pa": 7488180.0,
+        "damage": 0.796463,
+        "equivalent_plastic_strain": 0.004743405652039083
+      },
+      {
+        "strain_measure": 0.00601669,
+        "stress_pa": 7104500.0,
+        "damage": 0.806509,
+        "equivalent_plastic_strain": 0.005042579142657662
+      },
+      {
+        "strain_measure": 0.00632484,
+        "stress_pa": 6756520.0,
+        "damage": 0.815632,
+        "equivalent_plastic_strain": 0.005341603041308687
+      },
+      {
+        "strain_measure": 0.00663186,
+        "stress_pa": 6439710.0,
+        "damage": 0.82395,
+        "equivalent_plastic_strain": 0.005640440275022795
+      },
+      {
+        "strain_measure": 0.0069379,
+        "stress_pa": 6150240.0,
+        "damage": 0.831562,
+        "equivalent_plastic_strain": 0.005939112636790924
+      },
+      {
+        "strain_measure": 0.00724306,
+        "stress_pa": 5884860.0,
+        "damage": 0.838553,
+        "equivalent_plastic_strain": 0.006237603955035105
+      },
+      {
+        "strain_measure": 0.00754743,
+        "stress_pa": 5640780.0,
+        "damage": 0.844994,
+        "equivalent_plastic_strain": 0.006535918803973292
+      },
+      {
+        "strain_measure": 0.00785109,
+        "stress_pa": 5415630.0,
+        "damage": 0.850947,
+        "equivalent_plastic_strain": 0.006834051972372861
+      },
+      {
+        "strain_measure": 0.0081541,
+        "stress_pa": 5207360.0,
+        "damage": 0.856465,
+        "equivalent_plastic_strain": 0.007131994264190101
+      },
+      {
+        "strain_measure": 0.00845653,
+        "stress_pa": 5014170.0,
+        "damage": 0.861592,
+        "equivalent_plastic_strain": 0.00742977710689449
+      },
+      {
+        "strain_measure": 0.00875843,
+        "stress_pa": 4834550.0,
+        "damage": 0.866368,
+        "equivalent_plastic_strain": 0.007727392628711685
+      },
+      {
+        "strain_measure": 0.00905983,
+        "stress_pa": 4667130.0,
+        "damage": 0.870828,
+        "equivalent_plastic_strain": 0.008024830082601003
+      },
+      {
+        "strain_measure": 0.00936078,
+        "stress_pa": 4510740.0,
+        "damage": 0.875001,
+        "equivalent_plastic_strain": 0.008322113266787187
+      },
+      {
+        "strain_measure": 0.00966132,
+        "stress_pa": 4364360.0,
+        "damage": 0.878914,
+        "equivalent_plastic_strain": 0.008619243906779608
+      },
+      {
+        "strain_measure": 0.00996147,
+        "stress_pa": 4227060.0,
+        "damage": 0.882591,
+        "equivalent_plastic_strain": 0.008916213362143627
+      },
+      {
+        "strain_measure": 0.0102613,
+        "stress_pa": 4098050.0,
+        "damage": 0.886051,
+        "equivalent_plastic_strain": 0.009213081377336512
+      },
+      {
+        "strain_measure": 0.0105607,
+        "stress_pa": 3976610.0,
+        "damage": 0.889314,
+        "equivalent_plastic_strain": 0.009509702088904648
+      },
+      {
+        "strain_measure": 0.0108599,
+        "stress_pa": 3862110.0,
+        "damage": 0.892396,
+        "equivalent_plastic_strain": 0.009806289100569047
+      },
+      {
+        "strain_measure": 0.0111587,
+        "stress_pa": 3753960.0,
+        "damage": 0.89531,
+        "equivalent_plastic_strain": 0.010102650457868092
+      },
+      {
+        "strain_measure": 0.0114573,
+        "stress_pa": 3651680.0,
+        "damage": 0.898071,
+        "equivalent_plastic_strain": 0.010398943360987602
+      },
+      {
+        "strain_measure": 0.0117556,
+        "stress_pa": 3554790.0,
+        "damage": 0.90069,
+        "equivalent_plastic_strain": 0.010695070568932211
+      },
+      {
+        "strain_measure": 0.0120536,
+        "stress_pa": 3462900.0,
+        "damage": 0.903178,
+        "equivalent_plastic_strain": 0.01099101013888481
+      }
+    ],
+    "tension": [
+      {
+        "strain_measure": 0.0,
+        "stress_pa": 2549810.0,
+        "damage": 0.0,
+        "equivalent_plastic_strain": 0.0
+      },
+      {
+        "strain_measure": 6.07e-05,
+        "stress_pa": 2298090.0,
+        "damage": 0.2716678934403014,
+        "equivalent_plastic_strain": 3.250303862407857e-05
+      },
+      {
+        "strain_measure": 9.25e-05,
+        "stress_pa": 1953800.0,
+        "damage": 0.3782062738518788,
+        "equivalent_plastic_strain": 5.340790776698335e-05
+      },
+      {
+        "strain_measure": 0.000122719,
+        "stress_pa": 1664600.0,
+        "damage": 0.463263,
+        "equivalent_plastic_strain": 7.545805649713968e-05
+      },
+      {
+        "strain_measure": 0.000150969,
+        "stress_pa": 1439880.0,
+        "damage": 0.529354,
+        "equivalent_plastic_strain": 9.769632031583913e-05
+      },
+      {
+        "strain_measure": 0.000177696,
+        "stress_pa": 1266170.0,
+        "damage": 0.581302,
+        "equivalent_plastic_strain": 0.00011987050401539259
+      },
+      {
+        "strain_measure": 0.000203303,
+        "stress_pa": 1129990.0,
+        "damage": 0.622864,
+        "equivalent_plastic_strain": 0.00014191319463312412
+      },
+      {
+        "strain_measure": 0.000228091,
+        "stress_pa": 1021220.0,
+        "damage": 0.656736,
+        "equivalent_plastic_strain": 0.000163821001091687
+      },
+      {
+        "strain_measure": 0.000252275,
+        "stress_pa": 932712.0,
+        "damage": 0.684816,
+        "equivalent_plastic_strain": 0.00018561217462281015
+      },
+      {
+        "strain_measure": 0.000276004,
+        "stress_pa": 859455.0,
+        "damage": 0.70845,
+        "equivalent_plastic_strain": 0.00020730574309385405
+      },
+      {
+        "strain_measure": 0.000299383,
+        "stress_pa": 797892.0,
+        "damage": 0.72861,
+        "equivalent_plastic_strain": 0.00022891826652748717
+      },
+      {
+        "strain_measure": 0.000322489,
+        "stress_pa": 745456.0,
+        "damage": 0.746008,
+        "equivalent_plastic_strain": 0.0002504658887706368
+      },
+      {
+        "strain_measure": 0.000345379,
+        "stress_pa": 700266.0,
+        "damage": 0.761175,
+        "equivalent_plastic_strain": 0.00027196241378707155
+      },
+      {
+        "strain_measure": 0.000368094,
+        "stress_pa": 660913.0,
+        "damage": 0.774519,
+        "equivalent_plastic_strain": 0.0002934159731188986
+      },
+      {
+        "strain_measure": 0.000390667,
+        "stress_pa": 626327.0,
+        "damage": 0.786351,
+        "equivalent_plastic_strain": 0.0003148366379931508
+      },
+      {
+        "strain_measure": 0.000413121,
+        "stress_pa": 595681.0,
+        "damage": 0.796918,
+        "equivalent_plastic_strain": 0.00033622878548002905
+      },
+      {
+        "strain_measure": 0.000435477,
+        "stress_pa": 568330.0,
+        "damage": 0.806415,
+        "equivalent_plastic_strain": 0.0003575991609183644
+      },
+      {
+        "strain_measure": 0.000457749,
+        "stress_pa": 543759.0,
+        "damage": 0.814998,
+        "equivalent_plastic_strain": 0.00037895139925535657
+      },
+      {
+        "strain_measure": 0.00047995,
+        "stress_pa": 521557.0,
+        "damage": 0.822796,
+        "equivalent_plastic_strain": 0.00040028879971893826
+      },
+      {
+        "strain_measure": 0.00050209,
+        "stress_pa": 501388.0,
+        "damage": 0.829914,
+        "equivalent_plastic_strain": 0.00042161427923613867
+      },
+      {
+        "strain_measure": 0.000524177,
+        "stress_pa": 482979.0,
+        "damage": 0.836437,
+        "equivalent_plastic_strain": 0.0004429308421090039
+      },
+      {
+        "strain_measure": 0.000546218,
+        "stress_pa": 466102.0,
+        "damage": 0.84244,
+        "equivalent_plastic_strain": 0.0004642394202275491
+      },
+      {
+        "strain_measure": 0.000568218,
+        "stress_pa": 450568.0,
+        "damage": 0.847982,
+        "equivalent_plastic_strain": 0.00048554220499026776
+      },
+      {
+        "strain_measure": 0.000590183,
+        "stress_pa": 436219.0,
+        "damage": 0.853117,
+        "equivalent_plastic_strain": 0.0005068402059002295
+      },
+      {
+        "strain_measure": 0.000612116,
+        "stress_pa": 422918.0,
+        "damage": 0.857888,
+        "equivalent_plastic_strain": 0.0005281347319860391
+      },
+      {
+        "strain_measure": 0.00063402,
+        "stress_pa": 410552.0,
+        "damage": 0.862334,
+        "equivalent_plastic_strain": 0.0005494252513329362
+      },
+      {
+        "strain_measure": 0.000655899,
+        "stress_pa": 399021.0,
+        "damage": 0.866488,
+        "equivalent_plastic_strain": 0.0005707137465337238
+      },
+      {
+        "strain_measure": 0.000677756,
+        "stress_pa": 388241.0,
+        "damage": 0.870377,
+        "equivalent_plastic_strain": 0.0005920022440528443
+      },
+      {
+        "strain_measure": 0.000699591,
+        "stress_pa": 378138.0,
+        "damage": 0.874027,
+        "equivalent_plastic_strain": 0.0006132883530339834
+      },
+      {
+        "strain_measure": 0.000721408,
+        "stress_pa": 368647.0,
+        "damage": 0.87746,
+        "equivalent_plastic_strain": 0.000634574646814574
+      },
+      {
+        "strain_measure": 0.000743208,
+        "stress_pa": 359712.0,
+        "damage": 0.880695,
+        "equivalent_plastic_strain": 0.0006558609527813499
+      },
+      {
+        "strain_measure": 0.000764992,
+        "stress_pa": 351284.0,
+        "damage": 0.88375,
+        "equivalent_plastic_strain": 0.000677146149688738
+      },
+      {
+        "strain_measure": 0.000786762,
+        "stress_pa": 343319.0,
+        "damage": 0.886638,
+        "equivalent_plastic_strain": 0.0006984330441811235
+      },
+      {
+        "strain_measure": 0.000808519,
+        "stress_pa": 335778.0,
+        "damage": 0.889374,
+        "equivalent_plastic_strain": 0.0007197204500457682
+      },
+      {
+        "strain_measure": 0.000830263,
+        "stress_pa": 328627.0,
+        "damage": 0.89197,
+        "equivalent_plastic_strain": 0.000741007388379568
+      },
+      {
+        "strain_measure": 0.000851997,
+        "stress_pa": 321834.0,
+        "damage": 0.894437,
+        "equivalent_plastic_strain": 0.0007622961885557738
+      },
+      {
+        "strain_measure": 0.00087372,
+        "stress_pa": 315373.0,
+        "damage": 0.896784,
+        "equivalent_plastic_strain": 0.0007835853550398143
+      },
+      {
+        "strain_measure": 0.000895434,
+        "stress_pa": 309219.0,
+        "damage": 0.899019,
+        "equivalent_plastic_strain": 0.000804877049161085
+      },
+      {
+        "strain_measure": 0.000917138,
+        "stress_pa": 303348.0,
+        "damage": 0.901152,
+        "equivalent_plastic_strain": 0.0008261681001431225
+      },
+      {
+        "strain_measure": 0.000938835,
+        "stress_pa": 297742.0,
+        "damage": 0.903188,
+        "equivalent_plastic_strain": 0.0008474625048901072
+      },
+      {
+        "strain_measure": 0.000960523,
+        "stress_pa": 292382.0,
+        "damage": 0.905135,
+        "equivalent_plastic_strain": 0.0008687564517021418
+      },
+      {
+        "strain_measure": 0.000982204,
+        "stress_pa": 287250.0,
+        "damage": 0.906998,
+        "equivalent_plastic_strain": 0.0008900529060860604
+      },
+      {
+        "strain_measure": 0.00100388,
+        "stress_pa": 282333.0,
+        "damage": 0.908783,
+        "equivalent_plastic_strain": 0.0009113521504406351
+      },
+      {
+        "strain_measure": 0.00102555,
+        "stress_pa": 277616.0,
+        "damage": 0.910495,
+        "equivalent_plastic_strain": 0.0009326531095293118
+      },
+      {
+        "strain_measure": 0.00104721,
+        "stress_pa": 273087.0,
+        "damage": 0.912138,
+        "equivalent_plastic_strain": 0.0009539518261449774
+      },
+      {
+        "strain_measure": 0.00106887,
+        "stress_pa": 268734.0,
+        "damage": 0.913717,
+        "equivalent_plastic_strain": 0.000975257142692773
+      },
+      {
+        "strain_measure": 0.00109052,
+        "stress_pa": 264546.0,
+        "damage": 0.915235,
+        "equivalent_plastic_strain": 0.0009965598569768742
+      },
+      {
+        "strain_measure": 0.00111216,
+        "stress_pa": 260514.0,
+        "damage": 0.916696,
+        "equivalent_plastic_strain": 0.0010178588553086476
+      },
+      {
+        "strain_measure": 0.0011338,
+        "stress_pa": 256629.0,
+        "damage": 0.918102,
+        "equivalent_plastic_strain": 0.0010391654360502665
+      },
+      {
+        "strain_measure": 0.00115544,
+        "stress_pa": 252883.0,
+        "damage": 0.919458,
+        "equivalent_plastic_strain": 0.0010604767569690674
+      },
+      {
+        "strain_measure": 0.00117707,
+        "stress_pa": 249267.0,
+        "damage": 0.920766,
+        "equivalent_plastic_strain": 0.0010817840438273774
+      },
+      {
+        "strain_measure": 0.0011987,
+        "stress_pa": 245775.0,
+        "damage": 0.922028,
+        "equivalent_plastic_strain": 0.0011030974322681962
+      },
+      {
+        "strain_measure": 0.00122032,
+        "stress_pa": 242401.0,
+        "damage": 0.923247,
+        "equivalent_plastic_strain": 0.0011244056983273241
+      },
+      {
+        "strain_measure": 0.00124194,
+        "stress_pa": 239137.0,
+        "damage": 0.924425,
+        "equivalent_plastic_strain": 0.001145719697222609
+      },
+      {
+        "strain_measure": 0.00126356,
+        "stress_pa": 235979.0,
+        "damage": 0.925564,
+        "equivalent_plastic_strain": 0.0011670386917107878
+      },
+      {
+        "strain_measure": 0.00128517,
+        "stress_pa": 232921.0,
+        "damage": 0.926667,
+        "equivalent_plastic_strain": 0.0011883512864518703
+      }
+    ]
+  },
+  "provenance": {
+    "elastic": {
+      "keyword": "elastic",
+      "source": "/Users/a123/Desktop/test/bj/0826/测试用例/concrete/test.inp",
+      "keyword_line": 2398,
+      "data_lines": [
+        2399
+      ],
+      "options": {}
+    },
+    "plasticity": {
+      "keyword": "concrete damaged plasticity",
+      "source": "/Users/a123/Desktop/test/bj/0826/测试用例/concrete/test.inp",
+      "keyword_line": 2404,
+      "data_lines": [
+        2405
+      ],
+      "options": {}
+    },
+    "compression_hardening": {
+      "keyword": "concrete compression hardening",
+      "source": "/Users/a123/Desktop/test/bj/0826/测试用例/concrete/test.inp",
+      "keyword_line": 2406,
+      "data_lines": [
+        2407,
+        2408,
+        2409,
+        2410,
+        2411,
+        2412,
+        2413,
+        2414,
+        2415,
+        2416,
+        2417,
+        2418,
+        2419,
+        2420,
+        2421,
+        2422,
+        2423,
+        2424,
+        2425,
+        2426,
+        2427,
+        2428,
+        2429,
+        2430,
+        2431,
+        2432,
+        2433,
+        2434,
+        2435,
+        2436,
+        2437,
+        2438,
+        2439,
+        2440,
+        2441,
+        2442,
+        2443,
+        2444,
+        2445,
+        2446,
+        2447,
+        2448,
+        2449,
+        2450,
+        2451,
+        2452,
+        2453,
+        2454,
+        2455,
+        2456,
+        2457,
+        2458,
+        2459,
+        2460,
+        2461
+      ],
+      "options": {}
+    },
+    "tension_stiffening": {
+      "keyword": "concrete tension stiffening",
+      "source": "/Users/a123/Desktop/test/bj/0826/测试用例/concrete/test.inp",
+      "keyword_line": 2462,
+      "data_lines": [
+        2463,
+        2464,
+        2465,
+        2466,
+        2467,
+        2468,
+        2469,
+        2470,
+        2471,
+        2472,
+        2473,
+        2474,
+        2475,
+        2476,
+        2477,
+        2478,
+        2479,
+        2480,
+        2481,
+        2482,
+        2483,
+        2484,
+        2485,
+        2486,
+        2487,
+        2488,
+        2489,
+        2490,
+        2491,
+        2492,
+        2493,
+        2494,
+        2495,
+        2496,
+        2497,
+        2498,
+        2499,
+        2500,
+        2501,
+        2502,
+        2503,
+        2504,
+        2505,
+        2506,
+        2507,
+        2508,
+        2509,
+        2510,
+        2511,
+        2512,
+        2513,
+        2514,
+        2515,
+        2516,
+        2517,
+        2518
+      ],
+      "options": {}
+    },
+    "compression_damage": {
+      "keyword": "concrete compression damage",
+      "source": "/Users/a123/Desktop/test/bj/0826/测试用例/concrete/test.inp",
+      "keyword_line": 2519,
+      "data_lines": [
+        2520,
+        2521,
+        2522,
+        2523,
+        2524,
+        2525,
+        2526,
+        2527,
+        2528,
+        2529,
+        2530,
+        2531,
+        2532,
+        2533,
+        2534,
+        2535,
+        2536,
+        2537,
+        2538,
+        2539,
+        2540,
+        2541,
+        2542,
+        2543,
+        2544,
+        2545,
+        2546,
+        2547,
+        2548,
+        2549,
+        2550,
+        2551,
+        2552,
+        2553,
+        2554,
+        2555,
+        2556,
+        2557,
+        2558,
+        2559,
+        2560,
+        2561,
+        2562,
+        2563,
+        2564,
+        2565,
+        2566,
+        2567,
+        2568,
+        2569,
+        2570,
+        2571,
+        2572,
+        2573,
+        2574
+      ],
+      "options": {
+        "tension recovery": "1."
+      }
+    },
+    "tension_damage": {
+      "keyword": "concrete tension damage",
+      "source": "/Users/a123/Desktop/test/bj/0826/测试用例/concrete/test.inp",
+      "keyword_line": 2575,
+      "data_lines": [
+        2576,
+        2577,
+        2578,
+        2579,
+        2580,
+        2581,
+        2582,
+        2583,
+        2584,
+        2585,
+        2586,
+        2587,
+        2588,
+        2589,
+        2590,
+        2591,
+        2592,
+        2593,
+        2594,
+        2595,
+        2596,
+        2597,
+        2598,
+        2599,
+        2600,
+        2601,
+        2602,
+        2603,
+        2604,
+        2605,
+        2606,
+        2607,
+        2608,
+        2609,
+        2610,
+        2611,
+        2612,
+        2613,
+        2614,
+        2615,
+        2616,
+        2617,
+        2618,
+        2619,
+        2620,
+        2621,
+        2622,
+        2623,
+        2624,
+        2625,
+        2626,
+        2627,
+        2628,
+        2629,
+        2630,
+        2631
+      ],
+      "options": {}
+    }
+  },
+  "artifacts": {
+    "compression_hardening.csv": "4131a4b24cf905188a8c98aa48b97db2a21f135bc6b782682b42fa0c5b664f9f",
+    "compression_damage.csv": "2828f8efea22fa5f6b68ed3f0d820e4ef4eeeca40633436aa46eeb8cf92099e0",
+    "tension_stiffening.csv": "8ee15d7a3c965e196643300e5d43a703d883cb916db6cd5133e11b55897e2144",
+    "tension_damage.csv": "a2d337b6d433e2475033dbefda03b4dc7554c0a2781f2bc6816eb792940823be",
+    "abaqus_cdp_material.i": "3c96b1ca2086a3c5d6d3b70c1a44de4f2a57b367a032c7997237e6c59b3b4898"
+  },
+  "assumptions": [
+    "SI consistent units supplied by project decision",
+    "piecewise-linear interpolation",
+    "constant endpoint extrapolation"
+  ],
+  "unsupported": [
+    "temperature/field-variable/rate-dependent material tables",
+    "TYPE=DISPLACEMENT tension stiffening",
+    "Abaqus automatic stabilization equivalence",
+    "C3D8R hourglass equivalence"
+  ]
+}
