@@ -2,10 +2,10 @@
   "key": "tpl-bj-concrete-cdp-static",
   "display_name": "北京混凝土 Abaqus-CDP-compatible 全量静力（prototype）",
   "status": "prototype",
-  "status_note": "mock/prototype 数据；SI 一致单位制。模板从 test.inp 读取 Abaqus CDP 标量参数和四张材料表，使用 DamSafetyApp 自定义 AbaqusCDPStressUpdate 执行 1000 单元全量诊断。当前不等价项包括 Abaqus *Static 自动稳定化、C3D8R 减缩积分/沙漏控制及完整商业实现细节；不得用于工程安全结论。",
+  "status_note": "mock/prototype 数据；SI 一致单位制。模板从 test.inp 读取 Abaqus CDP 标量参数和四张材料表，使用 DamSafetyApp 自定义 AbaqusCDPStressUpdate 执行 1000 单元全量诊断。P4 启用局部求解性能诊断，并将 Exodus/CSV 分别按 0.01/0.005 伪时间采样。当前不等价项包括 Abaqus *Static 自动稳定化、C3D8R 减缩积分/沙漏控制及完整商业实现细节；不得用于工程安全结论。",
   "source": {
     "repo": "DamSafetyApp",
-    "commit": "3d430b6cd1b6684051d294abbac8032181995de1",
+    "commit": "f91503af2e3cba15ff56e08cb5f1a4c03c2d613a",
     "path": "tools/abaqus/abaqus_cdp.py + AbaqusCDPStressUpdate",
     "input_sha256": "47340c26b5972ab07634ec6ca351c7fa3430f78d85989e66b118c58ee7508b01",
     "source_inp_sha256": "b06a04673f6f4db7c22b13c7a86fbb2a0d24efe6cd62b5fcd149c187b5f307ea",
@@ -36,7 +36,9 @@
     {"path": "Functions/top_displacement/expression", "label": "顶部 U2 位移函数 (m)"},
     {"path": "Materials/cdp/viscosity", "label": "CDP 黏性参数 (s)"},
     {"path": "Materials/cdp/maximum_strain_increment", "label": "材料点最大应变增量"},
+    {"path": "Materials/cdp/enable_performance_diagnostics", "label": "启用 P4 性能诊断"},
     {"path": "Executioner/TimeStepper/dt", "label": "初始伪时间步长"},
-    {"path": "Executioner/TimeStepper/dtmin", "label": "最小伪时间步长"}
+    {"path": "Executioner/TimeStepper/dtmin", "label": "最小伪时间步长"},
+    {"path": "Times/history_output_times/time_interval", "label": "监控 CSV 采样间隔"}
   ]
 }

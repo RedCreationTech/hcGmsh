@@ -16,6 +16,9 @@
 #               is deliberately not replaced by an uncalibrated force term.
 # Validation  : Abaqus ODB/CSV values are comparison evidence, never solver
 #               inputs. This template exercises the custom constitutive law.
+# Performance : P4 diagnostics expose local Jacobian/factorization/substep
+#               costs. Exodus is sampled every 0.01 pseudo-time and history
+#               CSV every 0.005 pseudo-time to avoid per-accepted-step I/O.
 # =============================================================================
 
 [Mesh]
@@ -80,6 +83,34 @@
     order = CONSTANT
     family = MONOMIAL
   []
+  [jacobian_fallbacks]
+    order = CONSTANT
+    family = MONOMIAL
+  []
+  [failed_material_calls]
+    order = CONSTANT
+    family = MONOMIAL
+  []
+  [attempted_partitions]
+    order = CONSTANT
+    family = MONOMIAL
+  []
+  [maximum_partition_depth]
+    order = CONSTANT
+    family = MONOMIAL
+  []
+  [local_factorizations]
+    order = CONSTANT
+    family = MONOMIAL
+  []
+  [local_backsolves]
+    order = CONSTANT
+    family = MONOMIAL
+  []
+  [integration_microseconds]
+    order = CONSTANT
+    family = MONOMIAL
+  []
 []
 
 [AuxKernels]
@@ -136,6 +167,55 @@
     type = MaterialRealAux
     variable = accepted_substeps
     property = cdp_accepted_substeps
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [jacobian_fallbacks]
+    type = MaterialRealAux
+    variable = jacobian_fallbacks
+    property = cdp_jacobian_fallbacks
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [failed_material_calls]
+    type = MaterialRealAux
+    variable = failed_material_calls
+    property = cdp_failed_material_calls
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [attempted_partitions]
+    type = MaterialRealAux
+    variable = attempted_partitions
+    property = cdp_attempted_partitions
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [maximum_partition_depth]
+    type = MaterialRealAux
+    variable = maximum_partition_depth
+    property = cdp_maximum_partition_depth
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [local_factorizations]
+    type = MaterialRealAux
+    variable = local_factorizations
+    property = cdp_local_factorizations
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [local_backsolves]
+    type = MaterialRealAux
+    variable = local_backsolves
+    property = cdp_local_backsolves
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [integration_microseconds]
+    type = MaterialRealAux
+    variable = integration_microseconds
+    property = cdp_integration_microseconds
     block = Part_1__concrete
     execute_on = 'initial timestep_end'
   []
@@ -216,6 +296,7 @@
     compression_recovery = 1.0
     maximum_substeps = 256
     maximum_strain_increment = 2.5e-5
+    enable_performance_diagnostics = true
   []
 []
 
@@ -253,6 +334,41 @@
   [max_accepted_substeps]
     type = ElementExtremeValue
     variable = accepted_substeps
+    value_type = max
+  []
+  [max_jacobian_fallbacks]
+    type = ElementExtremeValue
+    variable = jacobian_fallbacks
+    value_type = max
+  []
+  [max_failed_material_calls]
+    type = ElementExtremeValue
+    variable = failed_material_calls
+    value_type = max
+  []
+  [max_attempted_partitions]
+    type = ElementExtremeValue
+    variable = attempted_partitions
+    value_type = max
+  []
+  [max_partition_depth]
+    type = ElementExtremeValue
+    variable = maximum_partition_depth
+    value_type = max
+  []
+  [max_local_factorizations]
+    type = ElementExtremeValue
+    variable = local_factorizations
+    value_type = max
+  []
+  [max_local_backsolves]
+    type = ElementExtremeValue
+    variable = local_backsolves
+    value_type = max
+  []
+  [max_integration_microseconds]
+    type = ElementExtremeValue
+    variable = integration_microseconds
     value_type = max
   []
 []
@@ -294,16 +410,26 @@
   time_interval = 0.01
 []
 
+[Times/history_output_times]
+  type = TimeIntervalTimes
+  start_time = 0
+  end_time = 1
+  time_interval = 0.005
+[]
+
 [Outputs]
   [field_exodus]
     type = Exodus
     execute_on = 'initial timestep_end'
     sync_times_object = field_output_times
+    sync_only = true
     file_base = bj_concrete_cdp_compatible
   []
   [history_csv]
     type = CSV
     execute_on = 'initial timestep_end'
+    sync_times_object = history_output_times
+    sync_only = true
     file_base = bj_concrete_cdp_compatible
   []
 []
