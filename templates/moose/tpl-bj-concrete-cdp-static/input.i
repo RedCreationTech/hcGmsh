@@ -87,6 +87,14 @@
     order = CONSTANT
     family = MONOMIAL
   []
+  [automatic_jacobian_evaluations]
+    order = CONSTANT
+    family = MONOMIAL
+  []
+  [finite_difference_jacobian_evaluations]
+    order = CONSTANT
+    family = MONOMIAL
+  []
   [failed_material_calls]
     order = CONSTANT
     family = MONOMIAL
@@ -174,6 +182,20 @@
     type = MaterialRealAux
     variable = jacobian_fallbacks
     property = cdp_jacobian_fallbacks
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [automatic_jacobian_evaluations]
+    type = MaterialRealAux
+    variable = automatic_jacobian_evaluations
+    property = cdp_automatic_jacobian_evaluations
+    block = Part_1__concrete
+    execute_on = 'initial timestep_end'
+  []
+  [finite_difference_jacobian_evaluations]
+    type = MaterialRealAux
+    variable = finite_difference_jacobian_evaluations
+    property = cdp_finite_difference_jacobian_evaluations
     block = Part_1__concrete
     execute_on = 'initial timestep_end'
   []
@@ -339,6 +361,16 @@
   [max_jacobian_fallbacks]
     type = ElementExtremeValue
     variable = jacobian_fallbacks
+    value_type = max
+  []
+  [max_automatic_jacobian_evaluations]
+    type = ElementExtremeValue
+    variable = automatic_jacobian_evaluations
+    value_type = max
+  []
+  [max_finite_difference_jacobian_evaluations]
+    type = ElementExtremeValue
+    variable = finite_difference_jacobian_evaluations
     value_type = max
   []
   [max_failed_material_calls]
