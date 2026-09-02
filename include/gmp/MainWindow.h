@@ -23,6 +23,8 @@ class QDockWidget;
 class QSplitter;
 class QCloseEvent;
 class QTabWidget;
+class QToolBar;
+class QEvent;
 
 namespace gmp {
 
@@ -33,6 +35,8 @@ class GmshPanel;
 class SketchPanel;
 class PartFeaturePanel;
 class SketchDocument;
+class StageLeftToolbar;
+class FloatingPropertyForm;
 
 class MainWindow : public QMainWindow {
   Q_OBJECT
@@ -45,12 +49,16 @@ class MainWindow : public QMainWindow {
 
  protected:
   void closeEvent(QCloseEvent* event) override;
+  bool eventFilter(QObject* watched, QEvent* event) override;
 
  private:
   void build_menu();
   void build_toolbar();
   void build_model_tree();
   void apply_theme();
+  void reset_tool_group_layout(bool show_feedback = true);
+  void position_default_display_group();
+  void recover_floating_tool_groups();
   void clear_model_tree_children();
   QTreeWidgetItem* find_root_item(const QString& name) const;
   QTreeWidgetItem* find_child_by_param(QTreeWidgetItem* root,
@@ -68,6 +76,7 @@ class MainWindow : public QMainWindow {
   void add_item_under_root(QTreeWidgetItem* root);
   void remove_item(QTreeWidgetItem* item);
   void duplicate_item(QTreeWidgetItem* item);
+  void open_property_form(QTreeWidgetItem* item);
   bool load_project(const QString& path);
   bool save_project(const QString& path);
   void set_project_dirty(bool dirty);
@@ -98,22 +107,30 @@ class MainWindow : public QMainWindow {
                                const QString& root_name,
                                const QString& empty_text) const;
   void refresh_module_pages();
+  void refresh_work_context();
+  QString context_root_for_module(int module_index) const;
   QString build_step_sequence_preview() const;
   void refresh_workflow_status();
   int child_count(const QString& root_name) const;
 
   QTabBar* module_tabs_ = nullptr;
+  QComboBox* module_selector_ = nullptr;
+  QLabel* context_project_label_ = nullptr;
+  QComboBox* context_object_selector_ = nullptr;
   QSplitter* main_split_ = nullptr;
   QSplitter* vertical_split_ = nullptr;
   QDockWidget* module_work_window_ = nullptr;
   QDockWidget* job_work_window_ = nullptr;
   QDockWidget* visualization_work_window_ = nullptr;
   QDockWidget* results_work_window_ = nullptr;
+  QToolBar* display_tool_group_ = nullptr;
   QTabWidget* results_work_tabs_ = nullptr;
+  StageLeftToolbar* stage_left_toolbar_ = nullptr;
   bool layout_ready_ = false;
   QTreeWidget* model_tree_ = nullptr;
   QStackedWidget* property_stack_ = nullptr;
   PropertyEditor* property_editor_ = nullptr;
+  FloatingPropertyForm* floating_property_form_ = nullptr;
   QPlainTextEdit* console_ = nullptr;
   VtkViewer* viewer_ = nullptr;
   QTableWidget* job_table_ = nullptr;
@@ -156,13 +173,23 @@ class MainWindow : public QMainWindow {
   QAction* action_save_ = nullptr;
   QAction* action_save_as_ = nullptr;
   QAction* action_export_bundle_ = nullptr;
+  QAction* action_edit_properties_ = nullptr;
   QAction* action_sync_ = nullptr;
+  QAction* action_undo_ = nullptr;
+  QAction* action_redo_ = nullptr;
   QAction* action_screenshot_ = nullptr;
   QAction* action_mesh_ = nullptr;
   QAction* action_preview_mesh_ = nullptr;
   QAction* action_run_ = nullptr;
   QAction* action_check_ = nullptr;
   QAction* action_stop_ = nullptr;
+  QAction* action_display_mode_ = nullptr;
+  QAction* action_stage_pick_ = nullptr;
+  QAction* action_stage_clear_ = nullptr;
+  QAction* action_stage_slice_ = nullptr;
+  QAction* action_reset_tool_layout_ = nullptr;
+  bool tool_drag_guard_active_ = false;
+  bool tool_drag_restore_picking_ = false;
 
   // Phase 0 数据合同字段
   int schema_version_ = 2;

@@ -12,6 +12,7 @@
 #include <QListWidget>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSlider>
 #include <QSplitter>
@@ -83,6 +84,7 @@
 #include <vtkRenderWindowInteractor.h>
 #include <vtkInteractorStyle.h>
 #include <vtkInteractorStyleImage.h>
+#include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkCommand.h>
 #endif
 
@@ -94,6 +96,39 @@ namespace gmp {
 
 #ifdef GMP_ENABLE_VTK_VIEWER
 namespace {
+
+class StageInteractorStyle : public vtkInteractorStyleTrackballCamera {
+ public:
+  static StageInteractorStyle* New();
+  vtkTypeMacro(StageInteractorStyle, vtkInteractorStyleTrackballCamera);
+
+  void SetStageMode(int mode) { mode_ = std::clamp(mode, 0, 2); }
+
+  void OnLeftButtonDown() override {
+    if (mode_ == 1) {
+      Superclass::OnMiddleButtonDown();
+    } else if (mode_ == 2) {
+      Superclass::OnRightButtonDown();
+    } else {
+      Superclass::OnLeftButtonDown();
+    }
+  }
+
+  void OnLeftButtonUp() override {
+    if (mode_ == 1) {
+      Superclass::OnMiddleButtonUp();
+    } else if (mode_ == 2) {
+      Superclass::OnRightButtonUp();
+    } else {
+      Superclass::OnLeftButtonUp();
+    }
+  }
+
+ private:
+  int mode_ = 0;
+};
+
+vtkStandardNewMacro(StageInteractorStyle);
 
 // 统一约束色标条样式：尺寸按视口比例自适应（随黑色显示区缩放），
 // 必须先关闭 VTK 默认的约束字体模式，否则它会自动放大字体填满色标条。
@@ -807,6 +842,7 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
                                   : "Pick: disabled");
     }
     update_selection_pipeline();
+    emit stage_picking_changed(enabled);
   });
   pick_mode_ = new QComboBox();
   pick_mode_->addItem("Group", 0);
@@ -903,7 +939,10 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   slice_slider_->setRange(0, 100);
   slice_slider_->setValue(50);
   connect(slice_enable_, &QCheckBox::toggled, this,
-          [this](bool) { update_mesh_pipeline(); });
+          [this](bool enabled) {
+            update_mesh_pipeline();
+            emit stage_slice_changed(enabled);
+          });
   connect(slice_axis_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this](int) { update_mesh_pipeline(); });
   connect(slice_slider_, &QSlider::valueChanged, this,
@@ -1081,7 +1120,12 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
     probe_info_->setText(QString("Probe: enabled (%1 mode)").arg(mode));
   };
   connect(probe_enable_, &QCheckBox::toggled, this,
-          [update_probe_status](bool) { update_probe_status(); });
+          [this, update_probe_status](bool enabled) {
+            update_probe_status();
+            if (probe_enable_ && probe_enable_->isEnabled()) {
+              emit stage_picking_changed(enabled);
+            }
+          });
   connect(probe_mode_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [update_probe_status](int) { update_probe_status(); });
   connect(probe_clear_, &QPushButton::clicked, this, [this]() {
@@ -1894,6 +1938,10 @@ void VtkViewer::init_vtk() {
     render_window_->SetInteractor(new_interactor);
     interactor = new_interactor;
   }
+  if (interactor && !style_3d_) {
+    style_3d_ = vtkSmartPointer<StageInteractorStyle>::New();
+    interactor->SetInteractorStyle(style_3d_);
+  }
   if (interactor && !pick_callback_) {
     pick_callback_ = vtkSmartPointer<vtkCallbackCommand>::New();
     pick_callback_->SetClientData(this);
@@ -1910,8 +1958,12 @@ void VtkViewer::init_vtk() {
         int spos[2] = {0, 0};
         iren->GetEventPosition(spos);
         SketchPoint2d wpt;
-        if (self->sketch_display_to_world(spos[0], spos[1], &wpt)) {
+        if (!self->sketch_preview_only_ &&
+            self->sketch_display_to_world(spos[0], spos[1], &wpt)) {
           self->sketch_press(wpt, iren->GetShiftKey() != 0);
+        }
+        if (self->pick_callback_) {
+          self->pick_callback_->AbortFlagOn();
         }
         return;
       }
@@ -1920,13 +1972,15 @@ void VtkViewer::init_vtk() {
         int pos[2] = {0, 0};
         iren->GetEventPosition(pos);
         self->handle_pick(pos[0], pos[1]);
-      }
-      if (auto* style =
-              vtkInteractorStyle::SafeDownCast(iren->GetInteractorStyle())) {
-        style->OnLeftButtonDown();
+        // 拾取期间不允许同一次左键事件继续触发相机旋转；此前手动再次
+        // 调用 OnLeftButtonDown 会与交互样式自己的观察器重复分发事件。
+        if (self->pick_callback_) {
+          self->pick_callback_->AbortFlagOn();
+        }
       }
     });
-    interactor->AddObserver(vtkCommand::LeftButtonPressEvent, pick_callback_);
+    interactor->AddObserver(vtkCommand::LeftButtonPressEvent, pick_callback_,
+                            1.0f);
   }
 
   // 草图编辑: 鼠标移动 (橡皮筋预览 + 世界坐标上报) 与 Delete 键删除选中图元。
@@ -1938,7 +1992,8 @@ void VtkViewer::init_vtk() {
                                           void* client_data, void*) {
       auto* self = static_cast<VtkViewer*>(client_data);
       auto* iren = vtkRenderWindowInteractor::SafeDownCast(caller);
-      if (!self || !iren || !self->sketch_doc_) {
+      if (!self || !iren || !self->sketch_doc_ ||
+          self->sketch_preview_only_) {
         return;
       }
       int pos[2] = {0, 0};
@@ -1957,7 +2012,8 @@ void VtkViewer::init_vtk() {
                                          void* client_data, void*) {
       auto* self = static_cast<VtkViewer*>(client_data);
       auto* iren = vtkRenderWindowInteractor::SafeDownCast(caller);
-      if (!self || !iren || !self->sketch_doc_) {
+      if (!self || !iren || !self->sketch_doc_ ||
+          self->sketch_preview_only_) {
         return;
       }
       const char* sym = iren->GetKeySym();
@@ -3975,6 +4031,155 @@ void VtkViewer::apply_view_preset(int preset) {
 #endif
 }
 
+void VtkViewer::set_stage_interaction_mode(int mode) {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (auto* style = StageInteractorStyle::SafeDownCast(style_3d_)) {
+    style->SetStageMode(mode);
+  }
+  if (vtk_widget_) {
+    vtk_widget_->setCursor(mode == 1   ? Qt::SizeAllCursor
+                           : mode == 2 ? Qt::SizeVerCursor
+                                       : Qt::OpenHandCursor);
+    vtk_widget_->setFocus();
+  }
+  if (mode_ == DataMode::None && !sketch_doc_) {
+    emit stage_command_feedback(
+        "舞台暂无可交互对象；请先加载 .msh/.e 或进入草图编辑。");
+  } else {
+    const QStringList names = {"旋转", "平移", "缩放"};
+    emit stage_command_feedback(
+        QString("舞台交互模式：%1（按住左键拖动）")
+            .arg(names.value(qBound(0, mode, 2))));
+  }
+#else
+  Q_UNUSED(mode);
+#endif
+}
+
+void VtkViewer::apply_stage_view(int preset) {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (mode_ == DataMode::None || (!mesh_grid_ && !mapper_)) {
+    emit stage_command_feedback(
+        "当前没有可取景的数据；请先加载 .msh 或 .e 文件。");
+    return;
+  }
+#endif
+  if (view_combo_) {
+    const int index = view_combo_->findData(preset);
+    if (index >= 0) {
+      view_combo_->setCurrentIndex(index);
+    }
+  }
+  apply_view_preset(preset);
+  const QStringList names = {"适配窗口", "前视图", "右视图", "顶视图",
+                             "轴测图"};
+  emit stage_command_feedback(
+      QString("已应用：%1").arg(names.value(qBound(0, preset, 4))));
+}
+
+void VtkViewer::set_stage_picking(bool enabled) {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (mode_ == DataMode::Mesh && pick_enable_) {
+    if (probe_enable_ && probe_enable_->isChecked()) {
+      probe_enable_->setChecked(false);
+    }
+    pick_enable_->setChecked(enabled);
+    emit stage_command_feedback(enabled ? "网格拾取已启用：单击舞台对象。"
+                                        : "网格拾取已关闭。");
+    return;
+  }
+  if (mode_ == DataMode::Exodus && probe_enable_) {
+    if (pick_enable_ && pick_enable_->isChecked()) {
+      pick_enable_->setChecked(false);
+    }
+    probe_enable_->setChecked(enabled);
+    emit stage_command_feedback(enabled ? "结果探针已启用：单击舞台对象。"
+                                        : "结果探针已关闭。");
+    return;
+  }
+#endif
+  if (pick_enable_) {
+    pick_enable_->setChecked(false);
+  }
+  if (probe_enable_) {
+    probe_enable_->setChecked(false);
+  }
+  emit stage_picking_changed(false);
+  if (enabled) {
+    emit stage_command_feedback(
+        "拾取不可用：请先加载 .msh 网格或 .e 结果文件。");
+  }
+}
+
+void VtkViewer::clear_stage_selection() {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (mode_ == DataMode::Exodus && probe_clear_) {
+    probe_clear_->click();
+    emit stage_command_feedback("已清除结果探针信息。");
+  } else if (mode_ == DataMode::Mesh && pick_clear_) {
+    pick_clear_->click();
+    emit stage_command_feedback("已清除网格选择。");
+  } else {
+    emit stage_command_feedback("当前舞台没有可清除的选择。");
+  }
+#else
+  emit stage_command_feedback("当前构建未启用 VTK 舞台。");
+#endif
+}
+
+void VtkViewer::set_stage_slice(bool enabled) {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (mode_ != DataMode::Mesh || !mesh_grid_) {
+    if (slice_enable_) {
+      slice_enable_->setChecked(false);
+    }
+    emit stage_slice_changed(false);
+    if (enabled) {
+      emit stage_command_feedback("剖切仅对已加载的 .msh 网格可用。");
+    }
+    return;
+  }
+#endif
+  if (slice_enable_) {
+    slice_enable_->setChecked(enabled);
+  }
+  emit stage_command_feedback(enabled ? "网格剖切已启用。"
+                                      : "网格剖切已关闭。");
+}
+
+void VtkViewer::cycle_stage_representation() {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (mode_ == DataMode::Mesh && mesh_grid_ && show_faces_ && show_edges_) {
+    const bool faces = show_faces_->isChecked();
+    const bool edges = show_edges_->isChecked();
+    int next = 0;
+    if (faces && !edges) {
+      next = 1;  // wireframe
+    } else if (!faces && edges) {
+      next = 2;  // surface + edges
+    } else {
+      next = 0;  // surface
+    }
+    const QSignalBlocker faces_blocker(show_faces_);
+    const QSignalBlocker edges_blocker(show_edges_);
+    show_faces_->setChecked(next != 1);
+    show_edges_->setChecked(next != 0);
+    apply_mesh_visuals();
+    const QStringList names = {"实体表面", "线框", "表面 + 边线"};
+    emit stage_command_feedback("网格显示方式：" + names.at(next));
+    return;
+  }
+  if (mode_ == DataMode::Exodus && repr_combo_ && repr_combo_->count() > 0) {
+    const int next = (repr_combo_->currentIndex() + 1) % repr_combo_->count();
+    repr_combo_->setCurrentIndex(next);
+    emit stage_command_feedback("结果显示方式：" + repr_combo_->currentText());
+    return;
+  }
+#endif
+  emit stage_command_feedback(
+      "显示方式不可用：请先加载 .msh 网格或 .e 结果文件。");
+}
+
 void VtkViewer::set_2d_mode(bool on) {
   mode_2d_ = on;
 #ifdef GMP_ENABLE_VTK_VIEWER
@@ -4106,6 +4311,7 @@ double dist2d(const SketchPoint2d& a, const SketchPoint2d& b) {
 #endif
 
 void VtkViewer::set_sketch_document(SketchDocument* doc) {
+  sketch_preview_only_ = false;
   if (sketch_doc_ == doc) {
     refresh_sketch();
     return;
@@ -4237,7 +4443,24 @@ void VtkViewer::set_sketch_document(SketchDocument* doc) {
   emit sketch_selection_changed();
 }
 
+void VtkViewer::set_sketch_preview(const SketchDocument* doc) {
+  if (!doc) {
+    set_sketch_document(nullptr);
+    return;
+  }
+  // 必须先复制再切换指针：调用方通常会在本函数返回后释放编辑文档。
+  sketch_preview_doc_ = *doc;
+  set_sketch_document(&sketch_preview_doc_);
+  sketch_preview_only_ = true;
+  sketch_selection_.clear();
+  sketch_stage_ = 0;
+  rebuild_sketch_actors();
+}
+
 void VtkViewer::set_sketch_tool(int tool) {
+  if (sketch_preview_only_) {
+    return;
+  }
   sketch_tool_ = tool;
   // 切换工具时取消进行中的绘制
   if (sketch_stage_ != 0) {
@@ -4447,7 +4670,7 @@ void VtkViewer::update_sketch_preview() {
 }
 
 void VtkViewer::sketch_press(const SketchPoint2d& pt, bool shift) {
-  if (!sketch_doc_) {
+  if (!sketch_doc_ || sketch_preview_only_) {
     return;
   }
   const double tol = sketch_pick_tol();
@@ -4617,7 +4840,7 @@ void VtkViewer::sketch_move(const SketchPoint2d& pt) {
 }
 
 void VtkViewer::sketch_delete_selected() {
-  if (!sketch_doc_ || sketch_selection_.isEmpty()) {
+  if (!sketch_doc_ || sketch_preview_only_ || sketch_selection_.isEmpty()) {
     return;
   }
   bool removed = false;
@@ -4633,6 +4856,9 @@ void VtkViewer::sketch_delete_selected() {
 }
 
 void VtkViewer::solve_sketch_and_refresh() {
+  if (sketch_preview_only_) {
+    return;
+  }
   if (sketch_doc_) {
     // 求解失败(含矛盾约束)容忍, 仅作尝试; 异常双保险(SketchSolver 内部已
     // 兜底, 这里再防一层, 绝不让异常逃逸进事件循环)
@@ -4648,7 +4874,7 @@ void VtkViewer::solve_sketch_and_refresh() {
 }
 
 void VtkViewer::add_constraint_for_selection(int type) {
-  if (!sketch_doc_) {
+  if (!sketch_doc_ || sketch_preview_only_) {
     return;
   }
   set_sketch_selection(sketch_selection_);  // 剔除失效 id
@@ -4766,7 +4992,7 @@ void VtkViewer::add_constraint_for_selection(int type) {
 }
 
 void VtkViewer::add_dimension_for_selection(int type, double value) {
-  if (!sketch_doc_ || value <= 0.0) {
+  if (!sketch_doc_ || sketch_preview_only_ || value <= 0.0) {
     return;
   }
   set_sketch_selection(sketch_selection_);

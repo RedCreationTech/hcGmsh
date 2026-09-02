@@ -90,7 +90,11 @@ class VtkViewer : public QWidget {
   // 进入草图编辑: doc 为非拥有指针(由 MainWindow 持有), viewer 直接改它;
   // 进入时自动开 2D 模式并渲染草图; 传 nullptr 退出编辑并恢复 3D 视图。
   void set_sketch_document(SketchDocument* doc);
+  // 显示草图的只读快照。viewer 内部复制文档，调用方可立即释放源对象；
+  // 预览态保留 2D 舞台内容，但禁止绘制、删除、约束和尺寸修改。
+  void set_sketch_preview(const SketchDocument* doc);
   SketchDocument* sketch_document() const { return sketch_doc_; }
+  bool is_sketch_preview() const { return sketch_preview_only_; }
   // 切换当前绘制工具, 取值为 SketchTool 枚举; 切换会取消进行中的绘制
   void set_sketch_tool(int tool);
   int sketch_tool() const { return sketch_tool_; }
@@ -118,6 +122,13 @@ class VtkViewer : public QWidget {
   QString plot_stats_snapshot() const;
   QString table_snapshot_text() const;
   QString table_stats_snapshot() const;
+  // 舞台左侧工具栏复用的轻量命令入口。
+  void set_stage_interaction_mode(int mode);  // 0=旋转 1=平移 2=缩放
+  void apply_stage_view(int preset);          // 0=适配 1=前 2=右 3=顶 4=轴测
+  void set_stage_picking(bool enabled);
+  void clear_stage_selection();
+  void set_stage_slice(bool enabled);
+  void cycle_stage_representation();
 
 signals:
   void mesh_group_picked(int dim, int tag);
@@ -128,6 +139,9 @@ signals:
   void sketch_selection_changed();
   // 草图编辑中鼠标的世界坐标 (XY 平面, 毫米), 供面板显示
   void sketch_cursor_moved(double x, double y);
+  void stage_picking_changed(bool enabled);
+  void stage_slice_changed(bool enabled);
+  void stage_command_feedback(const QString& message);
 
  private slots:
   void on_time_changed(int index);
@@ -185,7 +199,9 @@ signals:
   bool mode_2d_ = false;  // 2D 草图模式标志(非 VTK 构建下也保留, 便于状态查询)
 
   // ---- 草图编辑会话状态 (非 VTK 构建下同样保留, 保证 stub 可编译) ----
-  SketchDocument* sketch_doc_ = nullptr;  // 非拥有, MainWindow 持有
+  SketchDocument* sketch_doc_ = nullptr;  // 编辑态非拥有；预览态指向下方快照
+  SketchDocument sketch_preview_doc_;     // 完成编辑后的只读舞台快照
+  bool sketch_preview_only_ = false;
   int sketch_tool_ = SketchToolSelect;
   QList<int> sketch_selection_;           // 选中图元 id
   SketchPoint2d sketch_cursor_{};         // 最近一次鼠标世界坐标

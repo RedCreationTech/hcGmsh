@@ -20,39 +20,47 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   layout->setContentsMargins(10, 10, 10, 10);
   layout->setSpacing(6);
 
-  auto* heading = new QLabel("Sketch", this);
+  management_box_ = new QWidget(this);
+  auto* management_layout = new QVBoxLayout(management_box_);
+  management_layout->setContentsMargins(0, 0, 0, 0);
+  management_layout->setSpacing(6);
+
+  auto* heading = new QLabel("Sketch", management_box_);
   QFont hfont = heading->font();
   hfont.setPointSize(hfont.pointSize() + 3);
   hfont.setBold(true);
   heading->setFont(hfont);
-  layout->addWidget(heading);
+  management_layout->addWidget(heading);
 
   auto* desc = new QLabel(
       "Create and manage 2D sketches on the XY plane. Parts reference sketches "
       "as the basis for feature operations (extrude, revolve, ...).",
-      this);
+      management_box_);
   desc->setWordWrap(true);
-  layout->addWidget(desc);
+  management_layout->addWidget(desc);
 
-  auto* new_btn = new QPushButton("New Sketch", this);
-  auto* open_edit_btn = new QPushButton("Open Edit", this);
+  auto* new_btn = new QPushButton("New Sketch", management_box_);
+  new_btn->setObjectName("newSketchButton");
+  auto* open_edit_btn = new QPushButton("Open Edit", management_box_);
+  open_edit_btn->setObjectName("openSketchEditButton");
   open_edit_btn->setToolTip(
       "Open the selected sketch for editing (2D view; drawing tools land in WS1).");
-  layout->addWidget(new_btn);
-  layout->addWidget(open_edit_btn);
+  management_layout->addWidget(new_btn);
+  management_layout->addWidget(open_edit_btn);
 
-  layout->addWidget(new QLabel("Current entries:", this));
-  list_ = new QListWidget(this);
+  management_layout->addWidget(
+      new QLabel("Current entries:", management_box_));
+  list_ = new QListWidget(management_box_);
   list_->setSelectionMode(QAbstractItemView::SingleSelection);
   list_->setMinimumHeight(120);
   list_->setAlternatingRowColors(true);
-  list_->setToolTip("Double click item to jump to model tree.");
-  layout->addWidget(list_);
+  list_->setToolTip("Double click a sketch to open the 2D editor.");
+  management_layout->addWidget(list_);
 
-  auto* rename_btn = new QPushButton("Rename", this);
-  auto* duplicate_btn = new QPushButton("Duplicate", this);
-  auto* remove_btn = new QPushButton("Remove", this);
-  auto* refresh_btn = new QPushButton("Refresh", this);
+  auto* rename_btn = new QPushButton("Rename", management_box_);
+  auto* duplicate_btn = new QPushButton("Duplicate", management_box_);
+  auto* remove_btn = new QPushButton("Remove", management_box_);
+  auto* refresh_btn = new QPushButton("Refresh", management_box_);
   auto* row = new QHBoxLayout();
   row->setContentsMargins(0, 0, 0, 0);
   row->addWidget(rename_btn);
@@ -60,7 +68,8 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   row->addWidget(remove_btn);
   row->addStretch(1);
   row->addWidget(refresh_btn);
-  layout->addLayout(row);
+  management_layout->addLayout(row);
+  layout->addWidget(management_box_);
 
   // ---- WS1 编辑工具区 (默认隐藏, set_editing(true) 时显示) ----
   edit_box_ = new QWidget(this);
@@ -236,6 +245,9 @@ void SketchPanel::set_editing(bool editing, const QString& sketch_name) {
   editing_ = editing;
   if (edit_box_) {
     edit_box_->setVisible(editing);
+  }
+  if (management_box_) {
+    management_box_->setVisible(!editing);
   }
   if (editing) {
     if (edit_name_) {

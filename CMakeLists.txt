@@ -82,6 +82,8 @@ add_executable(gmp_ise
   include/gmp/Env.h
   resources/icons.qrc
   src/MainWindow.cpp
+  src/StageLeftToolbar.cpp
+  include/gmp/StageLeftToolbar.h
   src/GmshPanel.cpp
   src/SketchPanel.cpp
   include/gmp/SketchPanel.h
@@ -109,6 +111,8 @@ add_executable(gmp_ise
   include/gmp/ArtifactDialog.h
   src/VtkViewer.cpp
   src/PropertyEditor.cpp
+  src/FloatingPropertyForm.cpp
+  include/gmp/FloatingPropertyForm.h
   src/LocalRunner.cpp
   src/ComboPopupFix.cpp
   src/ProcessRunner.cpp

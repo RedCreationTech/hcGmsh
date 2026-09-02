@@ -11,6 +11,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QFrame>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -24,6 +25,7 @@
 #include <QSet>
 #include <QSpinBox>
 #include <QTableWidget>
+#include <QTabWidget>
 #include <QHeaderView>
 #include <QAbstractItemView>
 #include <QModelIndex>
@@ -60,10 +62,67 @@ namespace gmp {
 
 GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* layout = new QVBoxLayout(this);
-  auto* scroll = new QScrollArea();
-  scroll->setWidgetResizable(true);
-  auto* content = new QWidget();
-  auto* content_layout = new QVBoxLayout(content);
+  layout->setContentsMargins(8, 8, 8, 8);
+  layout->setSpacing(8);
+
+  auto* title = new QLabel("Gmsh Panel");
+  layout->addWidget(title);
+
+  auto* workspace_tabs = new QTabWidget();
+  workspace_tabs->setObjectName("gmshWorkspaceTabs");
+  layout->addWidget(workspace_tabs, 1);
+
+  auto make_scrolled_page = [workspace_tabs](const QString& title,
+                                               const QString& object_name) {
+    auto* scroll = new QScrollArea();
+    scroll->setObjectName(object_name);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    auto* content = new QWidget();
+    auto* page_layout = new QVBoxLayout(content);
+    page_layout->setContentsMargins(8, 8, 8, 8);
+    page_layout->setSpacing(8);
+    scroll->setWidget(content);
+    workspace_tabs->addTab(scroll, title);
+    return page_layout;
+  };
+
+  auto* model_layout = make_scrolled_page("Model", "gmshModelPage");
+
+  auto* geometry_page = new QWidget();
+  auto* geometry_layout = new QVBoxLayout(geometry_page);
+  geometry_layout->setContentsMargins(8, 8, 8, 8);
+  auto* geometry_tabs = new QTabWidget(geometry_page);
+  geometry_tabs->setObjectName("gmshGeometryTabs");
+  geometry_layout->addWidget(geometry_tabs, 1);
+  workspace_tabs->addTab(geometry_page, "Geometry");
+
+  auto* groups_page = new QWidget();
+  auto* groups_layout = new QVBoxLayout(groups_page);
+  groups_layout->setContentsMargins(8, 8, 8, 8);
+  auto* groups_tabs = new QTabWidget(groups_page);
+  groups_tabs->setObjectName("gmshGroupsTabs");
+  groups_layout->addWidget(groups_tabs, 1);
+  workspace_tabs->addTab(groups_page, "Groups & Fields");
+
+  auto* mesh_layout = make_scrolled_page("Mesh", "gmshMeshPage");
+
+  auto* log_page = new QWidget();
+  auto* log_layout = new QVBoxLayout(log_page);
+  log_layout->setContentsMargins(8, 8, 8, 8);
+  log_layout->setSpacing(8);
+  workspace_tabs->addTab(log_page, "Log");
+
+  auto add_scrolled_tool_tab = [](QTabWidget* tabs, QWidget* content,
+                                  const QString& title,
+                                  const QString& object_name) {
+    auto* scroll = new QScrollArea();
+    scroll->setObjectName(object_name);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidget(content);
+    tabs->addTab(scroll, title);
+  };
   auto bind_entity_input_validation = [this](QLineEdit* edit, QComboBox* dim_combo,
                                             bool occ_only) {
     if (!edit) {
@@ -81,9 +140,6 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
     tune_gmsh_combo(combo, 70, 120);
   };
 
-  auto* title = new QLabel("Gmsh Panel");
-  content_layout->addWidget(title);
-
   auto* model_box = new QGroupBox("Model");
   auto* model_form = new QFormLayout(model_box);
   geo_path_ = new QLineEdit();
@@ -94,8 +150,13 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* clear_geo = new QPushButton("Clear Model");
   connect(clear_geo, &QPushButton::clicked, this, &GmshPanel::on_clear_model);
   model_form->addRow("Geometry", geo_path_);
-  model_form->addRow(open_geo);
-  model_form->addRow("", clear_geo);
+  auto* model_actions = new QHBoxLayout();
+  model_actions->addWidget(open_geo);
+  model_actions->addWidget(clear_geo);
+  model_actions->addStretch(1);
+  auto* model_actions_container = new QWidget();
+  model_actions_container->setLayout(model_actions);
+  model_form->addRow("", model_actions_container);
   auto_mesh_on_import_ = new QCheckBox("Auto mesh after import");
   auto_mesh_on_import_->setChecked(true);
   model_form->addRow("", auto_mesh_on_import_);
@@ -104,7 +165,7 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   model_form->addRow("", auto_reload_geometry_);
   entity_summary_ = new QLabel("Entities: 0P / 0C / 0S / 0V");
   model_form->addRow("Summary", entity_summary_);
-  content_layout->addWidget(model_box);
+  model_layout->addWidget(model_box);
 
   auto* entities_box = new QGroupBox("Entities");
   auto* entities_layout = new QVBoxLayout(entities_box);
@@ -121,14 +182,17 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   connect(refresh_btn, &QPushButton::clicked, this, [this]() {
     update_entity_list();
   });
-  entities_layout->addWidget(new QLabel("Dim"));
-  entities_layout->addWidget(entity_dim_);
-  entities_layout->addWidget(refresh_btn);
+  auto* entity_actions = new QHBoxLayout();
+  entity_actions->addWidget(new QLabel("Dim"));
+  entity_actions->addWidget(entity_dim_);
+  entity_actions->addWidget(refresh_btn);
+  entity_actions->addStretch(1);
+  entities_layout->addLayout(entity_actions);
   entity_list_ = new QPlainTextEdit();
   entity_list_->setReadOnly(true);
   entity_list_->setMaximumHeight(120);
   entities_layout->addWidget(entity_list_);
-  content_layout->addWidget(entities_box);
+  model_layout->addWidget(entities_box);
 
   auto* geo_box = new QGroupBox("Geometry");
   auto* geo_form = new QFormLayout(geo_box);
@@ -153,7 +217,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   geo_form->addRow("Size Y", size_y_);
   geo_form->addRow("Size Z", size_z_);
   update_geometry_controls();
-  content_layout->addWidget(geo_box);
+  model_layout->addWidget(geo_box);
+  model_layout->addStretch(1);
 
   auto* prim_box = new QGroupBox("Primitives");
   auto* prim_form = new QFormLayout(prim_box);
@@ -198,7 +263,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
           &GmshPanel::on_add_primitive);
   prim_form->addRow("", prim_add_btn_);
   update_primitive_controls();
-  content_layout->addWidget(prim_box);
+  add_scrolled_tool_tab(geometry_tabs, prim_box, "Primitives",
+                        "gmshPrimitivesPage");
 
   auto* xform_box = new QGroupBox("Transform");
   auto* xform_form = new QFormLayout(xform_box);
@@ -316,7 +382,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   xform_form->addRow("sy", scale_y_);
   xform_form->addRow("sz", scale_z_);
   xform_form->addRow(scale_btn);
-  content_layout->addWidget(xform_box);
+  add_scrolled_tool_tab(geometry_tabs, xform_box, "Transform",
+                        "gmshTransformPage");
 
   auto* bool_box = new QGroupBox("Boolean");
   auto* bool_form = new QFormLayout(bool_box);
@@ -411,7 +478,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   bool_form->addRow(fuse_btn);
   bool_form->addRow(cut_btn);
   bool_form->addRow(intersect_btn);
-  content_layout->addWidget(bool_box);
+  add_scrolled_tool_tab(geometry_tabs, bool_box, "Boolean",
+                        "gmshBooleanPage");
 
   auto* phys_box = new QGroupBox("Physical Groups");
   auto* phys_form = new QFormLayout(phys_box);
@@ -501,7 +569,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
             }
           });
   phys_form->addRow("Stats", phys_group_table_);
-  content_layout->addWidget(phys_box);
+  add_scrolled_tool_tab(groups_tabs, phys_box, "Physical Groups",
+                        "gmshPhysicalGroupsPage");
 
   auto* field_box = new QGroupBox("Mesh Fields");
   auto* field_form = new QFormLayout(field_box);
@@ -565,7 +634,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   field_list_->setReadOnly(true);
   field_list_->setMaximumHeight(100);
   field_form->addRow("Fields", field_list_);
-  content_layout->addWidget(field_box);
+  add_scrolled_tool_tab(groups_tabs, field_box, "Mesh Fields",
+                        "gmshMeshFieldsPage");
 
   auto* mesh_box = new QGroupBox("Mesh");
   auto* mesh_form = new QFormLayout(mesh_box);
@@ -671,7 +741,7 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   optimize_->setChecked(true);
   mesh_form->addRow("", optimize_);
 
-  content_layout->addWidget(mesh_box);
+  mesh_layout->addWidget(mesh_box);
 
   auto* form = new QFormLayout();
   output_path_ = new QLineEdit();
@@ -684,12 +754,11 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   form->addRow("Mesh Output", output_path_);
   form->addRow(pick_btn);
 
-  content_layout->addLayout(form);
+  mesh_layout->addLayout(form);
 
   auto* export_btn = new QPushButton("Export Geometry");
   connect(export_btn, &QPushButton::clicked, this,
           &GmshPanel::on_export_geometry);
-  content_layout->addWidget(export_btn);
 
   auto* generate_btn = new QPushButton("Generate Mesh");
   connect(generate_btn, &QPushButton::clicked, this, &GmshPanel::on_generate);
@@ -715,17 +784,18 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
     on_generate();
   });
 
-  content_layout->addWidget(generate_btn);
-  content_layout->addWidget(generate_2d_btn);
-  content_layout->addWidget(generate_3d_btn);
+  auto* generate_actions = new QHBoxLayout();
+  generate_actions->addWidget(export_btn);
+  generate_actions->addWidget(generate_btn);
+  generate_actions->addWidget(generate_2d_btn);
+  generate_actions->addWidget(generate_3d_btn);
+  generate_actions->addStretch(1);
+  mesh_layout->addLayout(generate_actions);
+  mesh_layout->addStretch(1);
 
   log_ = new QPlainTextEdit();
   log_->setReadOnly(true);
-  content_layout->addWidget(log_, 1);
-
-  content_layout->addStretch(1);
-  scroll->setWidget(content);
-  layout->addWidget(scroll, 1);
+  log_layout->addWidget(log_, 1);
 
   tune_gmsh_combo(primitive_kind_, 90, 180);
   tune_gmsh_combo(transform_dim_, 90, 120);
@@ -741,9 +811,10 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   tune_gmsh_combo(algo2d_, 150, 180);
   tune_gmsh_combo(algo3d_, 150, 180);
 
-  // 右侧边栏宽度有限: 表单标签换行到控件上方(垂直布局), 减少横向溢出
+  // The mesh workspace is a wide task dialog; keep labels and fields aligned.
   for (auto* f : findChildren<QFormLayout*>()) {
-    f->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    f->setRowWrapPolicy(QFormLayout::DontWrapRows);
+    f->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
   }
 
   append_log("Gmsh panel ready.");

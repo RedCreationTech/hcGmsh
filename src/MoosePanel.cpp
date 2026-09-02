@@ -19,6 +19,7 @@
 #include <QSet>
 #include <QSpinBox>
 #include <QString>
+#include <QTabWidget>
 #include <QVBoxLayout>
 #include <QStringList>
 #include <QProcess>
@@ -62,9 +63,39 @@ RunnerKind RunnerKindFromIndex(int idx) {
 
 MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   auto* layout = new QVBoxLayout(this);
+  layout->setContentsMargins(8, 8, 8, 8);
+  layout->setSpacing(8);
 
   auto* title = new QLabel("MOOSE Panel");
   layout->addWidget(title);
+
+  auto* workspace_tabs = new QTabWidget();
+  workspace_tabs->setObjectName("mooseWorkspaceTabs");
+
+  auto* setup_page = new QWidget();
+  auto* setup_layout = new QVBoxLayout(setup_page);
+  setup_layout->setContentsMargins(8, 8, 8, 8);
+  setup_layout->setSpacing(8);
+
+  auto* execution_page = new QWidget();
+  auto* execution_layout = new QVBoxLayout(execution_page);
+  execution_layout->setContentsMargins(8, 8, 8, 8);
+  execution_layout->setSpacing(8);
+
+  auto* input_page = new QWidget();
+  auto* input_layout = new QVBoxLayout(input_page);
+  input_layout->setContentsMargins(8, 8, 8, 8);
+  input_layout->setSpacing(8);
+
+  auto* log_page = new QWidget();
+  auto* log_layout = new QVBoxLayout(log_page);
+  log_layout->setContentsMargins(8, 8, 8, 8);
+  log_layout->setSpacing(8);
+
+  workspace_tabs->addTab(setup_page, "Case Setup");
+  workspace_tabs->addTab(execution_page, "Execution");
+  workspace_tabs->addTab(input_page, "Input");
+  workspace_tabs->addTab(log_page, "Log");
 
   auto* paths_box = new QGroupBox("Paths");
   auto* paths_form = new QFormLayout(paths_box);
@@ -112,7 +143,7 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   workdir_container->setLayout(workdir_row);
   paths_form->addRow("Work Dir", workdir_container);
 
-  layout->addWidget(paths_box);
+  setup_layout->addWidget(paths_box);
 
   auto* mesh_box = new QGroupBox("Mesh");
   auto* mesh_form = new QFormLayout(mesh_box);
@@ -127,18 +158,20 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   auto* mesh_container = new QWidget();
   mesh_container->setLayout(mesh_row);
   mesh_form->addRow("Mesh File", mesh_container);
-  layout->addWidget(mesh_box);
+  setup_layout->addWidget(mesh_box);
 
   auto* groups_box = new QGroupBox("Physical Groups");
   auto* groups_layout = new QVBoxLayout(groups_box);
   boundary_list_ = new QPlainTextEdit();
   boundary_list_->setReadOnly(true);
+  boundary_list_->setMaximumHeight(120);
   boundary_list_->setPlaceholderText("No boundary groups detected yet.");
   groups_layout->addWidget(boundary_list_);
   auto* bc_btn = new QPushButton("Insert BCs From Groups");
   connect(bc_btn, &QPushButton::clicked, this, &MoosePanel::on_insert_bcs_block);
   groups_layout->addWidget(bc_btn);
-  layout->addWidget(groups_box);
+  setup_layout->addWidget(groups_box);
+  setup_layout->addStretch(1);
 
   auto* run_box = new QGroupBox("Run");
   auto* run_form = new QFormLayout(run_box);
@@ -163,7 +196,7 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   extra_args_->setPlaceholderText("Extra args (e.g. --n-threads=4)");
   run_form->addRow("Extra Args", extra_args_);
 
-  layout->addWidget(run_box);
+  execution_layout->addWidget(run_box);
 
   // TASK-E2E-11: 作业提交入口（经 LIMS Facade, 不直连 C06, 不保存凭据）
   sim_client_ = new SimClient(this);
@@ -195,7 +228,8 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   remote_form->addRow("", sim_btn_container);
   sim_status_label_ = new QLabel("(no job submitted)");
   remote_form->addRow("Job", sim_status_label_);
-  layout->addWidget(remote_box);
+  execution_layout->addWidget(remote_box);
+  execution_layout->addStretch(1);
 
   connect(sim_client_, &SimClient::submit_finished, this,
           &MoosePanel::on_sim_submit_finished);
@@ -250,7 +284,13 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   io_actions->addStretch(1);
   io_layout->addLayout(io_actions);
 
-  layout->addWidget(io_box, 2);
+  input_layout->addWidget(io_box, 1);
+
+  log_ = new QPlainTextEdit();
+  log_->setReadOnly(true);
+  log_layout->addWidget(log_, 1);
+
+  layout->addWidget(workspace_tabs, 1);
 
   auto* action_row = new QHBoxLayout();
   run_btn_ = new QPushButton("Run");
@@ -266,13 +306,10 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   action_row->addStretch(1);
   layout->addLayout(action_row);
 
-  log_ = new QPlainTextEdit();
-  log_->setReadOnly(true);
-  layout->addWidget(log_, 1);
-
-  // 右侧边栏宽度有限: 表单标签换行到控件上方(垂直布局), 减少横向溢出
+  // Workspace dialogs are wide enough to keep labels and fields on one row.
   for (auto* f : findChildren<QFormLayout*>()) {
-    f->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    f->setRowWrapPolicy(QFormLayout::DontWrapRows);
+    f->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
   }
 
   append_log("MOOSE panel ready.");

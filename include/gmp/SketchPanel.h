@@ -57,6 +57,7 @@ class SketchPanel : public QWidget {
   QListWidget* list_ = nullptr;
 
   bool editing_ = false;
+  QWidget* management_box_ = nullptr;  // 草图列表/管理入口，编辑态隐藏
   QWidget* edit_box_ = nullptr;      // 编辑工具区容器 (默认隐藏)
   QLabel* edit_name_ = nullptr;      // 当前编辑草图名
   QLabel* cursor_label_ = nullptr;   // 光标世界坐标

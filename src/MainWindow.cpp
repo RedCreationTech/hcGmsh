@@ -6,6 +6,7 @@
 #include <QDir>
 #include <QInputDialog>
 #include <QLabel>
+#include <QLineEdit>
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
@@ -23,12 +24,15 @@
 #include <QSplitter>
 #include <QDockWidget>
 #include <QCloseEvent>
+#include <QEvent>
+#include <QMouseEvent>
 #include <QStackedWidget>
 #include <QFrame>
 #include <QGroupBox>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QToolBar>
+#include <QToolButton>
 #include <QTreeWidget>
 #include <QAbstractItemView>
 #include <QVBoxLayout>
@@ -46,6 +50,7 @@
 #include <QMetaType>
 #include <QSet>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QLabel>
 #include <QTextStream>
 #include <QDateTime>
@@ -59,12 +64,14 @@
 #include <yaml-cpp/yaml.h>
 
 #include "gmp/GmshPanel.h"
+#include "gmp/FloatingPropertyForm.h"
 #include "gmp/MoosePanel.h"
 #include "gmp/OccBridge.h"
 #include "gmp/PartFeaturePanel.h"
 #include "gmp/PropertyEditor.h"
 #include "gmp/ProjectSchema.h"
 #include "gmp/SketchDocument.h"
+#include "gmp/StageLeftToolbar.h"
 #include "gmp/SketchPanel.h"
 #include "gmp/VtkViewer.h"
 
@@ -97,6 +104,12 @@ enum class IconGlyph {
   DuplicateItem,
   RenameItem,
   RemoveItem,
+  Undo,
+  Redo,
+  Display,
+  Pick,
+  ClearSelection,
+  Slice,
 };
 
 QIcon MakeIcon(IconGlyph glyph, int size = 18) {
@@ -114,9 +127,19 @@ QIcon MakeIcon(IconGlyph glyph, int size = 18) {
 
   switch (glyph) {
     case IconGlyph::NewFile: {
-      p.drawRect(r);
-      p.drawLine(s / 2, m + 2, s / 2, s - m - 2);
-      p.drawLine(m + 2, s / 2, s - m - 2, s / 2);
+      // 折角文档 + 蓝色加号，避免在 18 px 下与四宫格网格图标混淆。
+      QPolygon page;
+      page << QPoint(m + 2, m) << QPoint(s - m - 4, m)
+           << QPoint(s - m, m + 4) << QPoint(s - m, s - m)
+           << QPoint(m + 2, s - m) << QPoint(m + 2, m);
+      p.drawPolyline(page);
+      p.drawLine(s - m - 4, m, s - m - 4, m + 4);
+      p.drawLine(s - m - 4, m + 4, s - m, m + 4);
+      QPen plus_pen(QColor("#2f6fed"));
+      plus_pen.setWidthF(1.8);
+      p.setPen(plus_pen);
+      p.drawLine(m + 4, s - m - 5, m + 10, s - m - 5);
+      p.drawLine(m + 7, s - m - 8, m + 7, s - m - 2);
       break;
     }
     case IconGlyph::OpenFolder: {
@@ -278,6 +301,40 @@ QIcon MakeIcon(IconGlyph glyph, int size = 18) {
       p.drawPolyline(bin);
       break;
     }
+    case IconGlyph::Undo:
+    case IconGlyph::Redo: {
+      const bool redo = glyph == IconGlyph::Redo;
+      const QRect arc_rect(m + 2, m + 3, s - 2 * m - 4, s - 2 * m - 5);
+      p.drawArc(arc_rect, (redo ? -35 : 35) * 16, (redo ? 250 : -250) * 16);
+      const int x = redo ? s - m - 2 : m + 2;
+      p.drawLine(x, m + 4, redo ? x - 4 : x + 4, m + 2);
+      p.drawLine(x, m + 4, redo ? x - 2 : x + 2, m + 8);
+      break;
+    }
+    case IconGlyph::Display: {
+      p.drawRect(r);
+      p.drawEllipse(r.adjusted(3, 3, -3, -3));
+      break;
+    }
+    case IconGlyph::Pick: {
+      QPolygon cursor;
+      cursor << QPoint(m + 1, m + 1) << QPoint(s - m - 2, s / 2)
+             << QPoint(s / 2 + 1, s / 2 + 1)
+             << QPoint(s / 2 + 4, s - m - 1);
+      p.drawPolyline(cursor);
+      break;
+    }
+    case IconGlyph::ClearSelection: {
+      p.drawLine(m + 2, m + 2, s - m - 2, s - m - 2);
+      p.drawLine(m + 2, s - m - 2, s - m - 2, m + 2);
+      break;
+    }
+    case IconGlyph::Slice: {
+      p.drawRect(r);
+      p.setBrush(QColor("#2f6fed"));
+      p.drawRect(QRect(m + 5, m, 3, s - 2 * m));
+      break;
+    }
   }
 
   return QIcon(pix);
@@ -287,6 +344,8 @@ QIcon MakeIcon(IconGlyph glyph, int size = 18) {
 
 MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   setWindowTitle("GMP-ISE");
+  setDockOptions(QMainWindow::AnimatedDocks | QMainWindow::AllowNestedDocks |
+                 QMainWindow::AllowTabbedDocks);
   if (auto* screen = QGuiApplication::primaryScreen()) {
     const QRect avail = screen->availableGeometry();
     const int w = qBound(980, int(avail.width() * 0.95), avail.width() - 24);
@@ -314,9 +373,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   auto* module_bar = new QWidget(central);
   module_bar->setObjectName("moduleBar");
-  auto* module_bar_layout = new QVBoxLayout(module_bar);
-  module_bar_layout->setContentsMargins(0, 0, 0, 0);
-  module_bar_layout->setSpacing(2);
+  auto* module_bar_layout = new QHBoxLayout(module_bar);
+  module_bar_layout->setContentsMargins(6, 2, 6, 2);
+  module_bar_layout->setSpacing(6);
+  module_bar->setFixedHeight(36);
 
   module_tabs_ = new QTabBar(module_bar);
   module_tabs_->addTab("Sketch");
@@ -332,33 +392,56 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   module_tabs_->addTab("Job");
   module_tabs_->addTab("Visualization");
   module_tabs_->addTab("Results");
-  module_tabs_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-  module_tabs_->setMinimumHeight(30);
-  module_tabs_->setMaximumHeight(34);
-  module_tabs_->setExpanding(true);
-  module_tabs_->setUsesScrollButtons(false);
-  module_bar_layout->addWidget(module_tabs_);
+  // 保留 QTabBar 作为现有模块索引/信号的内部状态机；L-04 起不再作为
+  // 可见导航，避免 13 个等宽页签长期占据顶部空间。
+  module_tabs_->hide();
+
+  auto* module_label = new QLabel("Module:", module_bar);
+  module_selector_ = new QComboBox(module_bar);
+  module_selector_->setObjectName("workContextModule");
+  module_selector_->setMinimumWidth(132);
+  for (int i = 0; i < module_tabs_->count(); ++i) {
+    module_selector_->addItem(module_tabs_->tabText(i), i);
+  }
+  module_selector_->setToolTip("Select the active work module.");
+
+  auto* project_label = new QLabel("Project:", module_bar);
+  context_project_label_ = new QLabel("Untitled", module_bar);
+  context_project_label_->setObjectName("workContextProject");
+  context_project_label_->setMinimumWidth(100);
+  context_project_label_->setMaximumWidth(180);
+  context_project_label_->setToolTip("Current project (read-only).");
+
+  auto* object_label = new QLabel("Object:", module_bar);
+  context_object_selector_ = new QComboBox(module_bar);
+  context_object_selector_->setObjectName("workContextObject");
+  context_object_selector_->setMinimumWidth(150);
+  context_object_selector_->setMaximumWidth(220);
+  context_object_selector_->setToolTip(
+      "Select the active object for the current module.");
 
   auto* module_toolbar = new QWidget(module_bar);
   module_toolbar->setObjectName("moduleToolbar");
-  module_toolbar->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-  module_toolbar->setFixedHeight(34);
+  module_toolbar->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+  module_toolbar->setFixedHeight(30);
   auto* module_toolbar_layout = new QHBoxLayout(module_toolbar);
-  module_toolbar_layout->setContentsMargins(4, 0, 4, 2);
-  module_toolbar_layout->setSpacing(6);
-  auto* module_toolbar_title = new QLabel("Part", module_toolbar);
-  QFont module_toolbar_font = module_toolbar_title->font();
-  module_toolbar_font.setBold(true);
-  module_toolbar_font.setPointSize(module_toolbar_font.pointSize() + 1);
-  module_toolbar_title->setFont(module_toolbar_font);
+  module_toolbar_layout->setContentsMargins(2, 0, 0, 0);
+  module_toolbar_layout->setSpacing(4);
   auto* command_host = new QWidget(module_toolbar);
   auto* command_layout = new QHBoxLayout(command_host);
   command_layout->setContentsMargins(0, 0, 0, 0);
-  command_layout->setSpacing(6);
+  command_layout->setSpacing(4);
   command_layout->addStretch(1);
-  module_toolbar_layout->addWidget(module_toolbar_title);
   module_toolbar_layout->addWidget(command_host, 1);
-  module_bar_layout->addWidget(module_toolbar);
+  module_bar_layout->addWidget(module_label);
+  module_bar_layout->addWidget(module_selector_);
+  module_bar_layout->addSpacing(6);
+  module_bar_layout->addWidget(project_label);
+  module_bar_layout->addWidget(context_project_label_);
+  module_bar_layout->addSpacing(6);
+  module_bar_layout->addWidget(object_label);
+  module_bar_layout->addWidget(context_object_selector_);
+  module_bar_layout->addWidget(module_toolbar, 1);
   main_layout->addWidget(module_bar);
 
   auto module_tab_index = [this](const QString& label) {
@@ -398,50 +481,48 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                             const QString& description,
                             const std::vector<std::pair<QString, std::function<void()>>> &buttons) {
     auto* container = new QWidget();
+    container->setObjectName("modulePage");
     auto* outer = new QVBoxLayout(container);
-    outer->setContentsMargins(10, 10, 10, 10);
-    outer->setSpacing(6);
+    outer->setObjectName("modulePageLayout");
+    outer->setContentsMargins(18, 16, 18, 16);
+    outer->setSpacing(10);
 
-    auto* scroll = new QScrollArea(container);
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-
-    auto* panel = new QWidget(scroll);
-    auto* layout = new QVBoxLayout(panel);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->setSpacing(6);
-
-    auto* heading = new QLabel(title, panel);
+    auto* heading = new QLabel(title, container);
+    heading->setObjectName("modulePageHeading");
     QFont hfont = heading->font();
-    hfont.setPointSize(hfont.pointSize() + 3);
+    hfont.setPointSize(hfont.pointSize() + 2);
     hfont.setBold(true);
     heading->setFont(hfont);
-    layout->addWidget(heading);
+    outer->addWidget(heading);
 
-    auto* desc = new QLabel(description, panel);
+    auto* desc = new QLabel(description, container);
+    desc->setObjectName("modulePageDescription");
     desc->setWordWrap(true);
-    layout->addWidget(desc);
+    outer->addWidget(desc);
 
     if (!buttons.empty()) {
-      auto* actions = new QWidget(panel);
-      auto* actions_layout = new QVBoxLayout(actions);
-      actions_layout->setContentsMargins(0, 4, 0, 4);
-      actions_layout->setSpacing(6);
+      auto* actions = new QWidget(container);
+      actions->setObjectName("modulePrimaryActions");
+      auto* actions_layout = new QHBoxLayout(actions);
+      actions_layout->setContentsMargins(0, 2, 0, 2);
+      actions_layout->setSpacing(8);
       for (const auto& button : buttons) {
         auto* btn = new QPushButton(button.first, actions);
-        // 不设最小宽度, 由右栏滚动区在过窄时承载横向滚动
+        btn->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         const auto action = button.second;
         connect(btn, &QPushButton::clicked, container,
                 [action]() { action(); });
         actions_layout->addWidget(btn);
       }
       actions_layout->addStretch(1);
-      layout->addWidget(actions);
+      outer->addWidget(actions);
     }
 
-    layout->addStretch(1);
-    scroll->setWidget(panel);
-    outer->addWidget(scroll, 1);
+    auto* separator = new QFrame(container);
+    separator->setFrameShape(QFrame::HLine);
+    separator->setFrameShadow(QFrame::Sunken);
+    outer->addWidget(separator);
+    outer->addStretch(1);
     return container;
   };
 
@@ -454,13 +535,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                                    const std::vector<std::pair<QString, std::function<void()>>> &buttons) {
     auto* container = make_module_page(title, description, buttons);
     auto* panel = new QWidget(container);
+    panel->setObjectName("moduleNodeContent");
     auto* list_layout = new QVBoxLayout(panel);
     list_layout->setContentsMargins(0, 0, 0, 0);
     list_layout->setSpacing(6);
 
     auto* list = new QListWidget(panel);
     list->setSelectionMode(QAbstractItemView::SingleSelection);
-    list->setMinimumHeight(120);
+    list->setMinimumHeight(180);
     list->setAlternatingRowColors(true);
     list->setToolTip("Double click item to jump to model tree.");
     list_out = list;
@@ -473,11 +555,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     list_action_bar->setLayout(list_action_row);
 
     list_layout->addWidget(new QLabel("Current entries:", panel));
-    list_layout->addWidget(list);
+    list_layout->addWidget(list, 1);
     list_layout->addWidget(list_action_bar);
     auto* page = qobject_cast<QVBoxLayout*>(container->layout());
     if (page) {
-      page->addWidget(panel);
+      if (page->count() > 0 && page->itemAt(page->count() - 1)->spacerItem()) {
+        delete page->takeAt(page->count() - 1);
+      }
+      page->addWidget(panel, 1);
     }
 
     const QString safe_root = root_name;
@@ -534,6 +619,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     });
     connect(list, &QListWidget::itemDoubleClicked, this,
             [this, list, safe_root, module_tab_index](QListWidgetItem*) {
+              // Part 使用专用的工作窗编辑入口，在 part_page 创建后单独接线。
+              if (safe_root == "Parts") {
+                return;
+              }
               const auto* item = list->currentItem();
               if (!item || !model_tree_) {
                 return;
@@ -723,15 +812,31 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   center_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   center_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   center_scroll->setWidget(center_tabs);
-  center_layout->addWidget(center_scroll);
+  auto* stage_host = new QWidget(center_panel);
+  auto* stage_layout = new QHBoxLayout(stage_host);
+  stage_layout->setContentsMargins(0, 0, 0, 0);
+  stage_layout->setSpacing(2);
+  auto* stage_toolbar_scroll = new QScrollArea(stage_host);
+  stage_toolbar_scroll->setObjectName("stageLeftToolbarScroll");
+  stage_toolbar_scroll->setWidgetResizable(true);
+  stage_toolbar_scroll->setFrameShape(QFrame::NoFrame);
+  stage_toolbar_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  stage_toolbar_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  stage_toolbar_scroll->setStyleSheet("QScrollBar:vertical { width: 4px; }");
+  stage_toolbar_scroll->setFixedWidth(48);
+  stage_left_toolbar_ = new StageLeftToolbar();
+  stage_toolbar_scroll->setWidget(stage_left_toolbar_);
+  stage_layout->addWidget(stage_toolbar_scroll);
+  stage_layout->addWidget(center_scroll, 1);
+  center_layout->addWidget(stage_host, 1);
 
   module_work_window_ = new QDockWidget("Module Workspace", this);
   module_work_window_->setObjectName("moduleWorkspaceWindow");
   module_work_window_->setFeatures(QDockWidget::DockWidgetClosable |
                                    QDockWidget::DockWidgetMovable |
                                    QDockWidget::DockWidgetFloatable);
-  module_work_window_->setMinimumSize(360, 420);
-  module_work_window_->resize(520, 720);
+  module_work_window_->setMinimumSize(620, 540);
+  module_work_window_->resize(760, 700);
   addDockWidget(Qt::RightDockWidgetArea, module_work_window_);
   module_work_window_->setFloating(true);
   module_work_window_->setAllowedAreas(Qt::NoDockWidgetArea);
@@ -742,25 +847,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   property_panel->setFrameShadow(QFrame::Sunken);
   auto* property_layout = new QVBoxLayout(property_panel);
   property_layout->setContentsMargins(0, 0, 0, 0);
-  property_layout->setSpacing(3);
-  auto* property_title = new QLabel("Current Module", property_panel);
-  QFont property_title_font = property_title->font();
-  property_title_font.setBold(true);
-  property_title->setFont(property_title_font);
-  property_layout->addWidget(property_title);
+  property_layout->setSpacing(0);
 
   property_stack_ = new QStackedWidget(property_panel);
-  // 兼容工作窗包一层滚动区；内容显示不开时由内部滚动条承载。
-  auto* property_scroll = new QScrollArea(property_panel);
-  property_scroll->setWidgetResizable(true);
-  property_scroll->setFrameShape(QFrame::NoFrame);
-  property_scroll->setMinimumWidth(0);
-  // 竖向滚动由各页面内部滚动区承担, 外层只保留横向兜底, 避免双竖向滚动条
-  property_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  property_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-  property_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-  property_scroll->setWidget(property_stack_);
-  property_layout->addWidget(property_scroll, 1);
+  property_stack_->setObjectName("moduleWorkspaceStack");
+  // 页面直接进入栈；禁止再套兼容右栏滚动层。需要滚动的复杂页面只允许
+  // 在自身内部保留一层滚动，从结构上消除双竖向滚动条。
+  property_layout->addWidget(property_stack_, 1);
   module_work_window_->setWidget(property_panel);
   module_work_window_->hide();
   if (view_menu_) {
@@ -777,7 +870,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     workspace->setFeatures(QDockWidget::DockWidgetClosable |
                            QDockWidget::DockWidgetMovable |
                            QDockWidget::DockWidgetFloatable);
-    workspace->setMinimumSize(420, 420);
+    workspace->setMinimumSize(560, 500);
     workspace->resize(initial_size);
     addDockWidget(Qt::RightDockWidgetArea, workspace);
     workspace->setFloating(true);
@@ -791,12 +884,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     return workspace;
   };
   job_work_window_ = make_floating_workspace(
-      "Job Workspace", "jobWorkspaceWindow", QSize(820, 680));
+      "Job Workspace", "jobWorkspaceWindow", QSize(900, 720));
   visualization_work_window_ = make_floating_workspace(
       "Visualization Workspace", "visualizationWorkspaceWindow",
-      QSize(560, 720));
+      QSize(720, 740));
   results_work_window_ = make_floating_workspace(
-      "Results Workspace", "resultsWorkspaceWindow", QSize(840, 680));
+      "Results Workspace", "resultsWorkspaceWindow", QSize(900, 720));
 
   main_split->addWidget(tree_panel);
   main_split->addWidget(center_panel);
@@ -812,7 +905,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* job_container = new QWidget(property_stack_);
   auto* job_layout = new QVBoxLayout(job_container);
   job_layout->setContentsMargins(0, 0, 0, 0);
-  job_layout->setSpacing(6);
+  job_layout->setSpacing(0);
+
+  auto* job_tabs = new QTabWidget(job_container);
+  job_tabs->setObjectName("jobWorkspaceTabs");
+  auto* job_manager_page = new QWidget(job_tabs);
+  auto* job_manager_layout = new QVBoxLayout(job_manager_page);
+  job_manager_layout->setContentsMargins(8, 8, 8, 8);
+  job_manager_layout->setSpacing(8);
 
   auto* job_actions = new QHBoxLayout();
   auto* job_run_btn = new QPushButton("Run");
@@ -826,16 +926,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   job_actions->addWidget(job_log_btn);
   job_actions->addWidget(job_result_btn);
   job_actions->addStretch(1);
-  auto* job_actions_container = new QWidget(job_container);
+  auto* job_actions_container = new QWidget(job_manager_page);
   job_actions_container->setLayout(job_actions);
-  job_layout->addWidget(job_actions_container);
+  job_manager_layout->addWidget(job_actions_container);
 
-  auto* job_split = new QSplitter(Qt::Vertical, job_container);
-  job_split->setChildrenCollapsible(false);
-  auto* job_info_panel = new QWidget(job_split);
-  auto* job_info_layout = new QVBoxLayout(job_info_panel);
-  job_info_layout->setContentsMargins(0, 0, 0, 0);
-  job_table_ = new QTableWidget(job_info_panel);
+  auto* job_info_split = new QSplitter(Qt::Vertical, job_manager_page);
+  job_info_split->setChildrenCollapsible(false);
+  job_table_ = new QTableWidget(job_info_split);
   job_table_->setColumnCount(7);
   job_table_->setHorizontalHeaderLabels(
       {"Name", "Status", "Start", "Duration", "Mesh", "Exec", "Result"});
@@ -844,19 +941,50 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   job_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
   job_table_->setSelectionMode(QAbstractItemView::SingleSelection);
   job_table_->setMinimumHeight(58);
-  job_info_layout->addWidget(job_table_);
-  job_detail_ = new QPlainTextEdit(job_info_panel);
+  job_detail_ = new QPlainTextEdit(job_info_split);
   job_detail_->setReadOnly(true);
   job_detail_->setPlaceholderText("Select a job to view details.");
-  job_info_layout->addWidget(job_detail_);
-  job_split->addWidget(job_info_panel);
-  job_split->addWidget(job_page);
-  job_split->setStretchFactor(0, 0);
-  job_split->setStretchFactor(1, 1);
-  job_layout->addWidget(job_split, 1);
+  job_info_split->addWidget(job_table_);
+  job_info_split->addWidget(job_detail_);
+  job_info_split->setStretchFactor(0, 1);
+  job_info_split->setStretchFactor(1, 1);
+  job_manager_layout->addWidget(job_info_split, 1);
+
+  job_tabs->addTab(job_manager_page, "Jobs");
+  job_tabs->addTab(job_page, "MOOSE Setup");
+  job_layout->addWidget(job_tabs, 1);
+
+  // 部件的显式编辑入口：新建、模型树双击和部件列表打开都复用此路径。
+  const auto open_part_editor = [this, part_tab](QTreeWidgetItem* target) {
+    if (!target ||
+        target->data(0, PropertyEditor::kKindRole).toString() != "Parts") {
+      statusBar()->showMessage("Select a part first.", 2000);
+      return;
+    }
+    if (module_tabs_->currentIndex() != part_tab) {
+      module_tabs_->setCurrentIndex(part_tab);
+    }
+    // currentChanged 在同一页签不会再次发出，显式保证工作窗显示 Part 页面。
+    if (property_stack_->count() > 1) {
+      property_stack_->setCurrentIndex(1);
+    }
+    model_tree_->setCurrentItem(target);
+    refresh_module_pages();
+    if (module_part_list_ && target->parent()) {
+      module_part_list_->setCurrentRow(target->parent()->indexOfChild(target));
+    }
+    module_work_window_->setWindowTitle(
+        QString("Part Editor — %1").arg(target->text(0)));
+    module_work_window_->show();
+    module_work_window_->raise();
+    module_work_window_->activateWindow();
+    statusBar()->showMessage(
+        QString("Editing part '%1'.").arg(target->text(0)), 4000);
+  };
 
   // 新建部件: 有草图时弹框选择草图; 无草图时跳到草图页签提示先建草图
-  std::function<void()> create_part_from_sketch = [this, module_tab_index]() {
+  std::function<void()> create_part_from_sketch =
+      [this, module_tab_index, open_part_editor]() {
     auto* sketches_root = find_root_item("Sketches");
     if (!sketches_root || sketches_root->childCount() == 0) {
       QMessageBox::information(
@@ -882,8 +1010,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       return;
     }
     if (auto* root = find_root_item("Parts")) {
-      add_child_item(root, QString("part_%1").arg(root->childCount() + 1),
-                     "Parts", {{"type", "Part"}, {"sketch", chosen}});
+      int suffix = root->childCount() + 1;
+      QString name;
+      bool exists = false;
+      do {
+        name = QString("part_%1").arg(suffix++);
+        exists = false;
+        for (int i = 0; i < root->childCount(); ++i) {
+          if (root->child(i) && root->child(i)->text(0) == name) {
+            exists = true;
+            break;
+          }
+        }
+      } while (exists);
+      if (auto* item = add_child_item(
+              root, name, "Parts",
+              {{"type", "Part"}, {"sketch", chosen}})) {
+        open_part_editor(item);
+      }
     }
   };
 
@@ -916,17 +1060,41 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
            }},
       });
 
-  // 特征操作区 (WS3): PartFeaturePanel -> OccBridge 特征函数 -> Features 根节点
-  // 注意: 部件页外层 layout 无滚动余量, 面板需插进页内嵌套滚动区
-  // (make_module_page 的内部 QScrollArea); 位置紧跟说明文字之后(按钮之前),
-  // 打开部件页即可看到 2D->3D 特征操作入口
+  // 特征操作区 (WS3): 在模块页的说明/主操作之后、部件列表之前显示。
+  // PartFeaturePanel 自身使用操作页签，避免四组长表单纵向堆叠。
   part_feature_panel_ = new PartFeaturePanel(part_page);
-  if (auto* inner_scroll = part_page->findChild<QScrollArea*>()) {
-    if (auto* inner = inner_scroll->widget()) {
-      if (auto* inner_layout = qobject_cast<QVBoxLayout*>(inner->layout())) {
-        // 内层布局: 0=标题 1=说明 2=按钮组 末尾=stretch
-        inner_layout->insertWidget(2, part_feature_panel_);
-      }
+  if (auto* page_layout = qobject_cast<QVBoxLayout*>(part_page->layout())) {
+    if (auto* node_content =
+            part_page->findChild<QWidget*>("moduleNodeContent")) {
+      const int node_index = page_layout->indexOf(node_content);
+      page_layout->insertWidget(qMax(0, node_index), part_feature_panel_);
+    }
+  }
+
+  // Part 的列表双击改为“打开部件编辑工作窗”，不沿用其他模块跳到属性页
+  // 的默认语义。
+  connect(module_part_list_, &QListWidget::itemDoubleClicked, this,
+          [this, open_part_editor](QListWidgetItem* item) {
+            auto* root = find_root_item("Parts");
+            const int row = module_part_list_ ? module_part_list_->row(item) : -1;
+            if (root && row >= 0 && row < root->childCount()) {
+              open_part_editor(root->child(row));
+            }
+          });
+  for (auto* button : part_page->findChildren<QPushButton*>()) {
+    if (button && button->text() == "Open Selected part") {
+      disconnect(button, nullptr, this, nullptr);
+      connect(button, &QPushButton::clicked, this,
+              [this, open_part_editor]() {
+                auto* root = find_root_item("Parts");
+                const int row = module_part_list_
+                                    ? module_part_list_->currentRow()
+                                    : -1;
+                if (root && row >= 0 && row < root->childCount()) {
+                  open_part_editor(root->child(row));
+                }
+              });
+      break;
     }
   }
 
@@ -1319,12 +1487,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     }
     return root->child(row);
   };
-  connect(sketch_panel_, &SketchPanel::new_sketch_requested, this, [this]() {
-    if (auto* root = find_root_item("Sketches")) {
-      add_child_item(root, QString("sketch_%1").arg(root->childCount() + 1),
-                     "Sketches", {{"type", "Sketch2D"}, {"plane", "XY"}});
-    }
-  });
   // 草图编辑会话: 序列化当前编辑中的草图回模型树 params["data"]
   auto save_active_sketch = [this]() {
     if (!active_sketch_doc_ || !active_sketch_item_) {
@@ -1336,24 +1498,60 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     active_sketch_item_->setData(0, PropertyEditor::kParamsRole, params);
     set_project_dirty(true);
   };
-  // 退出编辑: 保存 -> 视口退出草图层 -> 面板退出编辑态
+  // 退出编辑: 保存 -> 舞台切为当前草图只读预览 -> 面板退出编辑态。
   auto close_sketch_editor = [this, save_active_sketch]() {
     if (!active_sketch_doc_) {
       return;
     }
     save_active_sketch();
+    auto* finished_doc = active_sketch_doc_;
     if (viewer_) {
-      viewer_->set_sketch_document(nullptr);
+      viewer_->set_sketch_preview(finished_doc);
     }
     if (sketch_panel_) {
       sketch_panel_->set_editing(false);
     }
-    delete active_sketch_doc_;
     active_sketch_doc_ = nullptr;
     active_sketch_item_ = nullptr;
+    delete finished_doc;
     sketch_undo_stack_.clear();
     sketch_redo_stack_.clear();
     active_sketch_yaml_.clear();
+    if (action_undo_) {
+      action_undo_->setEnabled(false);
+    }
+    if (action_redo_) {
+      action_redo_->setEnabled(false);
+    }
+    if (module_work_window_) {
+      module_work_window_->hide();
+    }
+  };
+
+  const auto preview_sketch = [this](QTreeWidgetItem* target) {
+    if (!viewer_ || active_sketch_doc_) {
+      return;
+    }
+    if (!target || !target->parent()) {
+      viewer_->set_sketch_preview(nullptr);
+      return;
+    }
+    const QVariantMap params =
+        target->data(0, PropertyEditor::kParamsRole).toMap();
+    SketchDocument preview;
+    const QString data = params.value("data").toString();
+    if (!data.trimmed().isEmpty()) {
+      QString error;
+      if (!preview.from_yaml_string(data, &error)) {
+        statusBar()->showMessage(
+            QString("Failed to preview sketch '%1': %2")
+                .arg(target->text(0), error),
+            4000);
+        viewer_->set_sketch_preview(nullptr);
+        return;
+      }
+    }
+    viewer_->set_sketch_preview(&preview);
   };
   // 打开指定草图节点进入编辑会话 (供"打开编辑"按钮与页签切换复用)
   auto open_sketch_editor = [this, close_sketch_editor](QTreeWidgetItem* target) {
@@ -1381,14 +1579,51 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     sketch_redo_stack_.clear();
     active_sketch_yaml_ = doc->to_yaml_string();
     sketch_panel_->set_undo_redo_state(false, false);
+    if (action_undo_) {
+      action_undo_->setEnabled(false);
+    }
+    if (action_redo_) {
+      action_redo_->setEnabled(false);
+    }
     model_tree_->setCurrentItem(target);
     if (viewer_) {
       viewer_->set_sketch_document(doc);  // 自动进入 2D 模式并渲染
     }
     sketch_panel_->set_editing(true, target->text(0));
+    if (module_work_window_) {
+      module_work_window_->setWindowTitle(
+          QString("Sketch Editor — %1").arg(target->text(0)));
+      module_work_window_->show();
+      module_work_window_->raise();
+      module_work_window_->activateWindow();
+    }
     statusBar()->showMessage(
         QString("Editing sketch '%1'.").arg(target->text(0)), 4000);
   };
+  auto create_and_open_sketch = [this, open_sketch_editor]() {
+    auto* root = find_root_item("Sketches");
+    if (!root) {
+      return;
+    }
+    auto* item = add_child_item(
+        root, QString("sketch_%1").arg(root->childCount() + 1), "Sketches",
+        {{"type", "Sketch2D"}, {"plane", "XY"}});
+    if (!item) {
+      return;
+    }
+    if (sketch_panel_ && sketch_panel_->sketch_list()) {
+      sketch_panel_->sketch_list()->setCurrentRow(root->indexOfChild(item));
+    }
+    open_sketch_editor(item);
+  };
+  connect(sketch_panel_, &SketchPanel::new_sketch_requested, this,
+          create_and_open_sketch);
+  connect(module_work_window_, &QDockWidget::visibilityChanged, this,
+          [this, close_sketch_editor](bool visible) {
+            if (!visible && active_sketch_doc_) {
+              close_sketch_editor();
+            }
+          });
   connect(sketch_panel_, &SketchPanel::open_edit_requested, this,
           [resolve_selected_sketch, open_sketch_editor]() {
             open_sketch_editor(resolve_selected_sketch());
@@ -1417,6 +1652,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     if (viewer_) {
       viewer_->set_sketch_tool(tool);
     }
+    if (stage_left_toolbar_) {
+      stage_left_toolbar_->set_sketch_tool_checked(tool);
+    }
   });
   connect(sketch_panel_, &SketchPanel::constraint_requested, this,
           [this](int type) {
@@ -1437,6 +1675,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     if (sketch_panel_) {
       sketch_panel_->set_undo_redo_state(!sketch_undo_stack_.isEmpty(),
                                          !sketch_redo_stack_.isEmpty());
+    }
+    if (action_undo_) {
+      action_undo_->setEnabled(active_sketch_doc_ &&
+                               !sketch_undo_stack_.isEmpty());
+    }
+    if (action_redo_) {
+      action_redo_->setEnabled(active_sketch_doc_ &&
+                               !sketch_redo_stack_.isEmpty());
     }
   };
   auto sketch_undo = [this, save_active_sketch, update_ur_state]() {
@@ -1473,12 +1719,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   };
   connect(sketch_panel_, &SketchPanel::undo_requested, this, sketch_undo);
   connect(sketch_panel_, &SketchPanel::redo_requested, this, sketch_redo);
-  auto* undo_sc = new QShortcut(QKeySequence::Undo, this);
-  undo_sc->setContext(Qt::WindowShortcut);
-  connect(undo_sc, &QShortcut::activated, this, sketch_undo);
-  auto* redo_sc = new QShortcut(QKeySequence::Redo, this);
-  redo_sc->setContext(Qt::WindowShortcut);
-  connect(redo_sc, &QShortcut::activated, this, sketch_redo);
+  if (action_undo_) {
+    connect(action_undo_, &QAction::triggered, this, sketch_undo);
+  }
+  if (action_redo_) {
+    connect(action_redo_, &QAction::triggered, this, sketch_redo);
+  }
   connect(viewer_, &VtkViewer::sketch_modified, this,
           [this, save_active_sketch, update_ur_state]() {
             if (!active_sketch_doc_) {
@@ -1505,15 +1751,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     }
   });
   connect(sketch_panel_->sketch_list(), &QListWidget::itemDoubleClicked, this,
-          [this, resolve_selected_sketch, module_tab_index](QListWidgetItem*) {
-            if (auto* target = resolve_selected_sketch()) {
-              model_tree_->setCurrentItem(target);
-              const int prop_tab = module_tab_index("Property");
-              if (prop_tab >= 0) {
-                module_tabs_->setCurrentIndex(prop_tab);
-              }
-              property_editor_->set_item(target);
-            }
+          [resolve_selected_sketch, open_sketch_editor](QListWidgetItem*) {
+            open_sketch_editor(resolve_selected_sketch());
           });
 
   auto* step_preview_label = new QLabel(
@@ -1561,26 +1800,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
            }},
       });
 
-  // 视口控制页签(Scalar/Mesh/View/...)迁移到右侧边栏,
-  // 让中栏黑色 3D 场景占据全部高度。
-  // make_module_page 的结构是 container > QScrollArea > panel,
-  // 需要插入到滚动区内的 panel 布局底部 stretch 之前
+  // 视口控制页签(Scalar/Mesh/View/...)进入独立工作窗；页面本身不再
+  // 嵌套滚动区，工具条和页签直接参与可伸缩布局。
   if (auto* ct = viewer_ ? viewer_->control_tabs() : nullptr) {
-    if (auto* scroll = visualization_page->findChild<QScrollArea*>()) {
-      if (QWidget* panel = scroll->widget()) {
-        if (auto* panel_layout =
-                qobject_cast<QVBoxLayout*>(panel->layout())) {
-          const int ct_pos = qMax(0, panel_layout->count() - 1);
-          ct->setParent(panel);
-          panel_layout->insertWidget(ct_pos, ct, 1);
-          ct->show();  // setParent 会隐藏控件, 需重新显示
-          // 视口顶部的文件/输出操作区也迁入边栏, 位于控制页之前
-          if (auto* tb = viewer_->top_bar()) {
-            tb->setParent(panel);
-            panel_layout->insertWidget(ct_pos, tb);
-            tb->show();
-          }
-        }
+    if (auto* page_layout =
+            qobject_cast<QVBoxLayout*>(visualization_page->layout())) {
+      const int ct_pos = qMax(0, page_layout->count() - 1);
+      ct->setParent(visualization_page);
+      page_layout->insertWidget(ct_pos, ct, 1);
+      ct->show();
+      if (auto* tb = viewer_->top_bar()) {
+        tb->setParent(visualization_page);
+        page_layout->insertWidget(ct_pos, tb);
+        tb->show();
       }
     }
   }
@@ -1817,17 +2049,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   results_work_tabs_->addTab(plot_page, "Plot");
   results_work_tabs_->addTab(table_page, "Table");
   results_work_window_->setWidget(results_work_tabs_);
-  auto* job_workspace_scroll = new QScrollArea(job_work_window_);
-  job_workspace_scroll->setWidgetResizable(true);
-  job_workspace_scroll->setFrameShape(QFrame::NoFrame);
-  job_workspace_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-  job_workspace_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-  job_workspace_scroll->setWidget(job_container);
-  job_work_window_->setWidget(job_workspace_scroll);
+  job_work_window_->setWidget(job_container);
   visualization_work_window_->setWidget(visualization_page);
-  job_work_window_->resize(820, 680);
-  visualization_work_window_->resize(560, 720);
-  results_work_window_->resize(840, 680);
+  job_work_window_->resize(900, 720);
+  visualization_work_window_->resize(720, 740);
+  results_work_window_->resize(900, 720);
   plot_open_btn->setText("Focus Viewport");
   table_open_btn->setText("Focus Viewport");
 
@@ -1840,6 +2066,79 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     workspace->activateWindow();
   };
 
+  connect(stage_left_toolbar_, &StageLeftToolbar::interaction_mode_requested,
+          viewer_, &VtkViewer::set_stage_interaction_mode);
+  connect(stage_left_toolbar_, &StageLeftToolbar::view_preset_requested,
+          viewer_, &VtkViewer::apply_stage_view);
+  connect(stage_left_toolbar_, &StageLeftToolbar::picking_toggled,
+          viewer_, &VtkViewer::set_stage_picking);
+  connect(stage_left_toolbar_, &StageLeftToolbar::clear_selection_requested,
+          viewer_, &VtkViewer::clear_stage_selection);
+  connect(stage_left_toolbar_, &StageLeftToolbar::slice_toggled,
+          viewer_, &VtkViewer::set_stage_slice);
+  connect(stage_left_toolbar_,
+          &StageLeftToolbar::representation_cycle_requested,
+          viewer_, &VtkViewer::cycle_stage_representation);
+  connect(stage_left_toolbar_, &StageLeftToolbar::sketch_tool_requested,
+          viewer_, &VtkViewer::set_sketch_tool);
+  connect(viewer_, &VtkViewer::stage_picking_changed, stage_left_toolbar_,
+          &StageLeftToolbar::set_picking_checked);
+  connect(viewer_, &VtkViewer::stage_slice_changed, stage_left_toolbar_,
+          &StageLeftToolbar::set_slice_checked);
+  connect(viewer_, &VtkViewer::stage_picking_changed, this,
+          [this](bool enabled) {
+            if (!action_stage_pick_) {
+              return;
+            }
+            const QSignalBlocker blocker(action_stage_pick_);
+            action_stage_pick_->setChecked(enabled);
+          });
+  connect(viewer_, &VtkViewer::stage_slice_changed, this,
+          [this](bool enabled) {
+            if (!action_stage_slice_) {
+              return;
+            }
+            const QSignalBlocker blocker(action_stage_slice_);
+            action_stage_slice_->setChecked(enabled);
+          });
+  connect(viewer_, &VtkViewer::stage_command_feedback, this,
+          [this](const QString& message) {
+            statusBar()->showMessage(message, 4000);
+            if (console_ && !message.isEmpty()) {
+              console_->appendPlainText(message);
+            }
+          });
+  connect(stage_left_toolbar_, &StageLeftToolbar::mesh_workspace_requested,
+          this, [this, module_tab_index, show_workspace]() {
+            const int target = module_tab_index("Mesh");
+            if (target >= 0) {
+              module_tabs_->setCurrentIndex(target);
+            }
+            show_workspace(module_work_window_);
+          });
+  connect(stage_left_toolbar_, &StageLeftToolbar::mesh_generate_requested,
+          this, [this]() {
+            if (gmsh_panel_) {
+              gmsh_panel_->generate_mesh();
+            }
+          });
+  connect(stage_left_toolbar_,
+          &StageLeftToolbar::visualization_workspace_requested, this,
+          [this, show_workspace]() {
+            show_workspace(visualization_work_window_);
+          });
+  connect(stage_left_toolbar_, &StageLeftToolbar::results_workspace_requested,
+          this, [this, show_workspace]() {
+            if (results_work_tabs_) {
+              results_work_tabs_->setCurrentIndex(0);
+            }
+            show_workspace(results_work_window_);
+          });
+  auto* stage_escape = new QShortcut(QKeySequence(Qt::Key_Escape), this);
+  stage_escape->setContext(Qt::WindowShortcut);
+  connect(stage_escape, &QShortcut::activated, stage_left_toolbar_,
+          &StageLeftToolbar::reset_temporary_modes);
+
   assign_module_actions(part_tab,
                        {
                            {"Open Part Root", [this]() {
@@ -1848,10 +2147,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                                root->setExpanded(true);
                              }
                            }},
-                           {"New Part", [this]() {
-                             if (auto* root = find_root_item("Parts")) {
-                               add_item_under_root(root);
-                             }
+                           {"New Part", [create_part_from_sketch]() {
+                             create_part_from_sketch();
                            }},
                            {"Open Mesh Module", [this, module_tab_index]() {
                              const int target = module_tab_index("Mesh");
@@ -2000,15 +2297,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   assign_module_actions(sketch_tab,
                        {
-                           {"New Sketch", [this]() {
-                             if (auto* root = find_root_item("Sketches")) {
-                               add_child_item(
-                                   root,
-                                   QString("sketch_%1").arg(root->childCount() + 1),
-                                   "Sketches",
-                                   {{"type", "Sketch2D"}, {"plane", "XY"}});
-                             }
-                           }},
+                           {"New Sketch", [create_and_open_sketch]() {
+                              create_and_open_sketch();
+                            }},
                            {"Open Sketches Root", [this]() {
                              if (auto* root = find_root_item("Sketches")) {
                                model_tree_->setCurrentItem(root);
@@ -2179,16 +2470,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   apply_toolbar_actions = [this,
                           command_layout,
-                          module_toolbar_title,
-                          property_title,
                           command_host,
                           toolbar_actions = std::move(module_toolbar_actions)](int index) {
     const QString title =
         (index >= 0) ? module_tabs_->tabText(index) : QString("Modules");
-    module_toolbar_title->setText(title + " Module");
-    if (property_title) {
-      property_title->setText(title + " Module");
-    }
     if (module_work_window_) {
       module_work_window_->setWindowTitle(title + " Workspace");
     }
@@ -2220,6 +2505,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     for (const auto& action : actions) {
       auto* action_btn = new QPushButton(action.first, command_host);
+      action_btn->setProperty("moduleAction", action.first);
       action_btn->setMinimumHeight(24);
       connect(action_btn, &QPushButton::clicked, action_btn,
               [action]() { action.second(); });
@@ -2228,16 +2514,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     command_layout->addStretch(1);
   };
 
-  // 无内部滚动区的页面统一包一层, 竖向滚动只保留一层
-  // (否则外层 property_scroll 与页面内滚动区会出现双竖向滚动条)
-  auto wrap_scroll = [](QWidget* w) {
-    auto* s = new QScrollArea();
-    s->setWidgetResizable(true);
-    s->setFrameShape(QFrame::NoFrame);
-    s->setMinimumWidth(0);
-    s->setWidget(w);
-    return s;
-  };
   auto make_workspace_launcher =
       [this, show_workspace](const QString& title, const QString& description,
                              QDockWidget* workspace) {
@@ -2276,7 +2552,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "Results, Plot and Table use an independent window; the central "
       "viewport remains visible.",
       results_work_window_);
-  property_stack_->addWidget(wrap_scroll(property_editor_));
+  property_stack_->addWidget(property_editor_);
   property_stack_->addWidget(part_page);
   property_stack_->addWidget(material_page);
   property_stack_->addWidget(section_page);
@@ -2284,7 +2560,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   property_stack_->addWidget(step_page);
   property_stack_->addWidget(interaction_page);
   property_stack_->addWidget(load_page);
-  property_stack_->addWidget(wrap_scroll(sketch_panel_));
+  property_stack_->addWidget(sketch_panel_);
   property_stack_->addWidget(mesh_page);
   property_stack_->addWidget(job_launcher);
   property_stack_->addWidget(visualization_launcher);
@@ -2294,7 +2570,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   // 各页改为 Ignored, 栈只按当前页内容计算宽度。
   for (int i = 0; i < property_stack_->count(); ++i) {
     property_stack_->widget(i)->setSizePolicy(QSizePolicy::Ignored,
-                                              QSizePolicy::Preferred);
+                                              QSizePolicy::Expanding);
   }
   refresh_module_pages();
 
@@ -2314,8 +2590,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   vertical_split->setSizes({std::max(480, height() - 90), 80});
 
   connect(module_tabs_, &QTabBar::currentChanged, this,
-          [this, apply_toolbar_actions, results_tab, sketch_tab,
-           close_sketch_editor, open_sketch_editor](
+          [this, apply_toolbar_actions, results_tab, sketch_tab, mesh_tab, viz_tab,
+           close_sketch_editor, preview_sketch](
               int index) {
             // 页签顺序: Sketch, Part, Property, Material, Section, Assembly,
             // Step, Interaction, Load, Mesh, Job, Visualization, Results
@@ -2325,36 +2601,46 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             constexpr int module_count = 13;
             const int target =
                 (index >= 0 && index < module_count) ? module_to_property[index] : 0;
-            // 中央舞台跟随页签: 进草图页签 -> 进入 2D 草图编辑 (未编辑时自动
-            // 打开当前选中/首个草图); 离开草图页签 -> 保存退出 2D, 恢复 3D 场景
+            // 只有新建/双击/打开编辑等显式入口才进入草图 2D 会话；
+            // 离开草图页签时保存退出 2D，恢复 3D 场景。
             // 注: 用构造期解析的 sketch_tab 索引比较, 不能用 tabText
             // (中文界面下 tabText 已被翻译)
-            if (index == sketch_tab) {
-              if (!active_sketch_doc_ && sketch_panel_) {
-                auto* root = find_root_item("Sketches");
-                if (root && root->childCount() > 0) {
-                  auto* list = sketch_panel_->sketch_list();
-                  int row = list ? list->currentRow() : -1;
-                  if (row < 0 || row >= root->childCount()) {
-                    row = 0;
-                    if (list) {
-                      list->setCurrentRow(0);
-                    }
-                  }
-                  open_sketch_editor(root->child(row));
-                } else {
-                  statusBar()->showMessage(
-                      "No sketches yet. Create one with New Sketch.", 2500);
-                }
+            if (index != sketch_tab) {
+              if (active_sketch_doc_) {
+                close_sketch_editor();
               }
-            } else if (active_sketch_doc_) {
-              close_sketch_editor();
+              // 完成编辑后保留的预览只属于 Sketch 上下文；离开模块时恢复
+              // 原有 3D 场景，避免预览覆盖 Part/Mesh/Results 舞台。
+              if (viewer_ && viewer_->sketch_document()) {
+                viewer_->set_sketch_preview(nullptr);
+              }
+            } else if (!active_sketch_doc_) {
+              auto* item = model_tree_ ? model_tree_->currentItem() : nullptr;
+              if (item && item->parent() &&
+                  item->data(0, PropertyEditor::kKindRole).toString() ==
+                      "Sketches") {
+                preview_sketch(item);
+              }
             }
             refresh_module_pages();
             if (target >= 0 && target < property_stack_->count()) {
               property_stack_->setCurrentIndex(target);
             }
+            if (stage_left_toolbar_) {
+              QString stage_context;
+              if (index == sketch_tab) {
+                stage_context = "Sketch";
+              } else if (index == mesh_tab) {
+                stage_context = "Mesh";
+              } else if (index == viz_tab) {
+                stage_context = "Visualization";
+              } else if (index == results_tab) {
+                stage_context = "Results";
+              }
+              stage_left_toolbar_->set_context(stage_context);
+            }
             apply_toolbar_actions(index);
+            refresh_work_context();
             if (index == results_tab) {
               refresh_results_panel();
             }
@@ -2365,6 +2651,45 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             if (l10n::current_language() == l10n::Language::Chinese) {
               QTimer::singleShot(0, this, [this]() { l10n::apply(this); });
             }
+          });
+  connect(module_selector_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+          this, [this](int combo_index) {
+            if (combo_index < 0 || !module_tabs_) {
+              return;
+            }
+            const int module_index =
+                module_selector_->itemData(combo_index).toInt();
+            if (module_tabs_->currentIndex() != module_index) {
+              module_tabs_->setCurrentIndex(module_index);
+            }
+            // 选择器是原可见页签的替代入口，保持“主动切换即打开对应工作窗”。
+            QMetaObject::invokeMethod(module_tabs_, "tabBarClicked",
+                                      Qt::DirectConnection,
+                                      Q_ARG(int, module_index));
+          });
+  connect(context_object_selector_,
+          QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          [this](int combo_index) {
+            if (combo_index < 0 || !model_tree_) {
+              return;
+            }
+            if (combo_index == 0) {
+              model_tree_->clearSelection();
+              model_tree_->setCurrentItem(nullptr);
+              refresh_work_context();
+              return;
+            }
+            const QString root_name =
+                context_object_selector_->property("contextRoot").toString();
+            auto* root = find_root_item(root_name);
+            const int row =
+                context_object_selector_->itemData(combo_index).toInt();
+            if (!root || row < 0 || row >= root->childCount()) {
+              return;
+            }
+            auto* item = root->child(row);
+            model_tree_->setCurrentItem(item);
+            model_tree_->scrollToItem(item);
           });
   connect(module_tabs_, &QTabBar::tabBarClicked, this,
           [this, job_tab, viz_tab, results_tab, show_workspace](int index) {
@@ -2591,12 +2916,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   connect(model_tree_, &QTreeWidget::itemSelectionChanged, this,
           [this, sketch_tab, part_tab, property_tab, material_tab, section_tab,
-           step_tab, interaction_tab, load_tab, mesh_tab, job_tab, results_tab,
-           open_sketch_editor]() {
+           step_tab, interaction_tab, load_tab, mesh_tab, job_tab,
+           results_tab, preview_sketch]() {
     auto* item = model_tree_->currentItem();
     property_editor_->set_item(item);
-    // 模型树驱动模块联动: 点击节点时页签/右侧栏/中央舞台一并跟随
-    // (页签切换回调里含草图 2D 会话的自动进出)
+    // 模型树单击驱动选择与模块上下文；草图编辑由双击或显式命令进入。
     // 注: 必须用构造期解析的页签索引, 不能用 module_tab_index/tabText
     // (中文界面下 tabText 已被翻译, 运行期按名查找会失败)
     if (item) {
@@ -2631,28 +2955,68 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       }
       if (tab >= 0) {
         if (kind == "Sketches" && sketch_panel_ && item->parent()) {
-          // 点草图子节点: 先同步面板列表选中行, 再确保编辑该草图
+          // 单击草图子节点只同步选择与模块上下文；编辑由双击或显式命令进入。
           if (auto* list = sketch_panel_->sketch_list()) {
             list->setCurrentRow(item->parent()->indexOfChild(item));
           }
-          if (tab == module_tabs_->currentIndex()) {
-            // 已在草图页签: 页签切换回调不会触发, 直接切换编辑对象
-            // (setCurrentItem 不变时不复发信号, 不会递归)
-            open_sketch_editor(item);
-          } else {
-            // 切页签, 由页签回调自动打开编辑 (命中刚同步的列表行)
+          if (tab != module_tabs_->currentIndex()) {
             module_tabs_->setCurrentIndex(tab);
           }
+          preview_sketch(item);
+        } else if (kind == "Sketches" && !item->parent()) {
+          if (tab != module_tabs_->currentIndex()) {
+            module_tabs_->setCurrentIndex(tab);
+          }
+          preview_sketch(nullptr);
         } else if (tab != module_tabs_->currentIndex()) {
           module_tabs_->setCurrentIndex(tab);
         }
       }
     }
+    refresh_work_context();
     // PropertyEditor 表单是动态重建的, 中文模式下需重新翻译
     if (l10n::current_language() == l10n::Language::Chinese) {
       QTimer::singleShot(0, this, [this]() { l10n::apply(this); });
     }
   });
+  connect(model_tree_, &QTreeWidget::itemDoubleClicked, this,
+          [this, sketch_tab, part_tab, open_sketch_editor,
+           open_part_editor](QTreeWidgetItem* item, int) {
+            if (!item || !item->parent()) {
+              return;
+            }
+            const QString kind =
+                item->data(0, PropertyEditor::kKindRole).toString();
+            if (kind == "Sketches") {
+              if (module_tabs_->currentIndex() != sketch_tab) {
+                module_tabs_->setCurrentIndex(sketch_tab);
+              }
+              if (sketch_panel_ && sketch_panel_->sketch_list()) {
+                sketch_panel_->sketch_list()->setCurrentRow(
+                    item->parent()->indexOfChild(item));
+              }
+              open_sketch_editor(item);
+            } else if (kind == "Parts") {
+              if (module_tabs_->currentIndex() != part_tab) {
+                module_tabs_->setCurrentIndex(part_tab);
+              }
+              open_part_editor(item);
+            } else if (kind != "Mesh" && kind != "Jobs" &&
+                       kind != "Results") {
+              open_property_form(item);
+            }
+          });
+  if (action_edit_properties_) {
+    connect(action_edit_properties_, &QAction::triggered, this, [this]() {
+      auto* item = model_tree_ ? model_tree_->currentItem() : nullptr;
+      if (!item || !item->parent()) {
+        statusBar()->showMessage("Select an editable model object first.",
+                                 2000);
+        return;
+      }
+      model_tree_->itemDoubleClicked(item, 0);
+    });
+  }
   connect(model_tree_, &QTreeWidget::itemChanged, this,
           [this](QTreeWidgetItem* item, int) {
             if (suppress_dirty_) {
@@ -2712,7 +3076,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     vertical_split_->restoreState(vertical_split_state);
   }
   const QByteArray workspace_geometry =
-      layout_settings.value("ui/layout/v1/module_workspace_geometry")
+      layout_settings.value("ui/layout/v2/module_workspace_geometry")
           .toByteArray();
   if (!workspace_geometry.isEmpty()) {
     module_work_window_->restoreGeometry(workspace_geometry);
@@ -2725,13 +3089,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     }
   };
   restore_workspace_geometry(job_work_window_,
-                             "ui/layout/v1/job_workspace_geometry");
+                             "ui/layout/v3/job_workspace_geometry");
   restore_workspace_geometry(visualization_work_window_,
-                             "ui/layout/v1/visualization_workspace_geometry");
+                             "ui/layout/v2/visualization_workspace_geometry");
   restore_workspace_geometry(results_work_window_,
-                             "ui/layout/v1/results_workspace_geometry");
+                             "ui/layout/v2/results_workspace_geometry");
+  const int tool_layout_version =
+      layout_settings.value("ui/layout/v3/version", 0).toInt();
+  const QByteArray tool_layout_state =
+      layout_settings.value("ui/layout/v3/main_window_state").toByteArray();
+  const bool tool_layout_restored =
+      tool_layout_version == 3 && !tool_layout_state.isEmpty() &&
+      restoreState(tool_layout_state, 3);
+  if (!tool_layout_restored) {
+    reset_tool_group_layout(false);
+  }
   layout_ready_ = true;
-  if (layout_settings.value("ui/layout/v1/module_workspace_visible", false)
+  if (layout_settings.value("ui/layout/v2/module_workspace_visible", false)
           .toBool()) {
     module_work_window_->show();
   } else {
@@ -2746,12 +3120,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     workspace->setVisible(layout_settings.value(key, false).toBool());
   };
   restore_workspace_visibility(job_work_window_,
-                               "ui/layout/v1/job_workspace_visible");
+                               "ui/layout/v3/job_workspace_visible");
   restore_workspace_visibility(
       visualization_work_window_,
-      "ui/layout/v1/visualization_workspace_visible");
+      "ui/layout/v2/visualization_workspace_visible");
   restore_workspace_visibility(results_work_window_,
-                               "ui/layout/v1/results_workspace_visible");
+                               "ui/layout/v2/results_workspace_visible");
   project_status_label_ = new QLabel("Project: Untitled");
   dirty_status_label_ = new QLabel("Saved");
   statusBar()->addPermanentWidget(project_status_label_);
@@ -2759,14 +3133,157 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   update_window_title();
   statusBar()->showMessage("Ready");
 
+  QTimer::singleShot(0, this, [this, tool_layout_restored]() {
+    if (!tool_layout_restored) {
+      position_default_display_group();
+    }
+    recover_floating_tool_groups();
+  });
+
   // 启动时恢复语言偏好 (动态重建的页面在模块切换时已另行处理)
   if (l10n::current_language() == l10n::Language::Chinese) {
     QTimer::singleShot(0, this, [this]() { l10n::apply(this); });
   }
 }
 
+bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
+  auto belongs_to_tool_group = [](QObject* object) {
+    for (QObject* current = object; current; current = current->parent()) {
+      if (current->property("gmpToolGroup").toBool()) {
+        return true;
+      }
+    }
+    return false;
+  };
+  if (event && event->type() == QEvent::MouseButtonPress &&
+      belongs_to_tool_group(watched)) {
+    const auto* mouse_event = static_cast<QMouseEvent*>(event);
+    if (mouse_event->button() == Qt::LeftButton) {
+      tool_drag_guard_active_ = true;
+      tool_drag_restore_picking_ =
+          action_stage_pick_ && action_stage_pick_->isChecked();
+      if (tool_drag_restore_picking_ && viewer_) {
+        viewer_->set_stage_picking(false);
+      }
+    }
+  } else if (event && event->type() == QEvent::MouseButtonRelease &&
+             tool_drag_guard_active_) {
+    tool_drag_guard_active_ = false;
+    if (tool_drag_restore_picking_ && viewer_) {
+      viewer_->set_stage_picking(true);
+    }
+    tool_drag_restore_picking_ = false;
+  }
+  return QMainWindow::eventFilter(watched, event);
+}
+
+void MainWindow::position_default_display_group() {
+  if (!display_tool_group_) {
+    return;
+  }
+  display_tool_group_->adjustSize();
+  if (!display_tool_group_->isFloating()) {
+    // 保持工具栏仍注册在 QMainWindow 布局中，只切换为 Tool 顶层窗口；
+    // 这样 Qt 能同时保存浮动状态，并允许用户拖回其他工具栏的同一行。
+    display_tool_group_->setParent(this, Qt::Tool);
+    display_tool_group_->setOrientation(Qt::Horizontal);
+  }
+  const QSize size = display_tool_group_->frameGeometry().size();
+  QPoint target;
+  if (viewer_) {
+    target = viewer_->mapToGlobal(
+        QPoint(std::max(12, viewer_->width() - size.width() - 20), 20));
+  } else {
+    target = mapToGlobal(QPoint(std::max(12, width() - size.width() - 24),
+                               menuBar()->height() + 72));
+  }
+  display_tool_group_->move(target);
+  display_tool_group_->show();
+  display_tool_group_->raise();
+}
+
+void MainWindow::recover_floating_tool_groups() {
+  auto recover = [this](QWidget* widget) {
+    if (!widget || !widget->isVisible()) {
+      return;
+    }
+    QRect frame = widget->frameGeometry();
+    QScreen* target_screen = nullptr;
+    for (auto* screen : QGuiApplication::screens()) {
+      if (screen && screen->availableGeometry().intersects(frame)) {
+        target_screen = screen;
+        break;
+      }
+    }
+    if (!target_screen) {
+      target_screen = screen();
+    }
+    if (!target_screen) {
+      target_screen = QGuiApplication::primaryScreen();
+    }
+    if (!target_screen) {
+      return;
+    }
+    const QRect available = target_screen->availableGeometry();
+    const int max_x =
+        std::max(available.left(), available.right() - frame.width() + 1);
+    const int max_y =
+        std::max(available.top(), available.bottom() - frame.height() + 1);
+    const QPoint clamped(qBound(available.left(), frame.x(), max_x),
+                         qBound(available.top(), frame.y(), max_y));
+    if (clamped != frame.topLeft()) {
+      widget->move(clamped);
+    }
+  };
+
+  const QStringList toolbar_names = {
+      "projectToolGroup", "editToolGroup", "modelToolGroup",
+      "meshToolGroup", "jobToolGroup", "displayToolGroup"};
+  for (const QString& name : toolbar_names) {
+    auto* toolbar = findChild<QToolBar*>(name);
+    if (toolbar && toolbar->isFloating()) {
+      recover(toolbar);
+    }
+  }
+}
+
+void MainWindow::reset_tool_group_layout(bool show_feedback) {
+  QSettings settings("gmp-ise", "gmp_ise");
+  // v2 的 Display Group 是 QDockWidget，不能恢复到当前 QToolBar 类型。
+  settings.remove("ui/layout/v2");
+  settings.remove("ui/layout/v3");
+
+  const QStringList toolbar_names = {
+      "projectToolGroup", "editToolGroup", "modelToolGroup",
+      "meshToolGroup", "jobToolGroup"};
+  for (const QString& name : toolbar_names) {
+    auto* toolbar = findChild<QToolBar*>(name);
+    if (!toolbar) {
+      continue;
+    }
+    removeToolBar(toolbar);
+    toolbar->setParent(this, Qt::Widget);
+    toolbar->setOrientation(Qt::Horizontal);
+    addToolBar(Qt::TopToolBarArea, toolbar);
+    toolbar->show();
+  }
+  if (display_tool_group_) {
+    display_tool_group_->setParent(this, Qt::Tool);
+    display_tool_group_->setOrientation(Qt::Horizontal);
+    display_tool_group_->show();
+    QTimer::singleShot(0, this,
+                       &MainWindow::position_default_display_group);
+  }
+  QTimer::singleShot(0, this, &MainWindow::recover_floating_tool_groups);
+  if (show_feedback) {
+    statusBar()->showMessage("Tool layout reset to default.", 2500);
+  }
+}
+
 void MainWindow::closeEvent(QCloseEvent* event) {
   QSettings settings("gmp-ise", "gmp_ise");
+  settings.setValue("ui/layout/v3/version", 3);
+  settings.setValue("ui/layout/v3/main_window_state", saveState(3));
   settings.setValue("ui/layout/v1/main_window_geometry", saveGeometry());
   if (main_split_) {
     settings.setValue("ui/layout/v1/main_split_state", main_split_->saveState());
@@ -2776,9 +3293,9 @@ void MainWindow::closeEvent(QCloseEvent* event) {
                       vertical_split_->saveState());
   }
   if (module_work_window_) {
-    settings.setValue("ui/layout/v1/module_workspace_geometry",
+    settings.setValue("ui/layout/v2/module_workspace_geometry",
                       module_work_window_->saveGeometry());
-    settings.setValue("ui/layout/v1/module_workspace_visible",
+    settings.setValue("ui/layout/v2/module_workspace_visible",
                       module_work_window_->isVisible());
   }
   auto save_workspace = [&settings](QDockWidget* workspace,
@@ -2789,16 +3306,17 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     settings.setValue(key_prefix + "_geometry", workspace->saveGeometry());
     settings.setValue(key_prefix + "_visible", workspace->isVisible());
   };
-  save_workspace(job_work_window_, "ui/layout/v1/job_workspace");
+  save_workspace(job_work_window_, "ui/layout/v3/job_workspace");
   save_workspace(visualization_work_window_,
-                 "ui/layout/v1/visualization_workspace");
-  save_workspace(results_work_window_, "ui/layout/v1/results_workspace");
+                 "ui/layout/v2/visualization_workspace");
+  save_workspace(results_work_window_, "ui/layout/v2/results_workspace");
   settings.sync();
   QMainWindow::closeEvent(event);
 }
 
 void MainWindow::build_menu() {
   auto* file_menu = menuBar()->addMenu("&File");
+  file_menu->setObjectName("fileMenu");
   action_new_ = file_menu->addAction("New Project");
   action_open_ = file_menu->addAction("Open Project...");
   action_save_ = file_menu->addAction("Save Project");
@@ -2813,18 +3331,24 @@ void MainWindow::build_menu() {
   action_screenshot_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_P));
 
   auto* model_menu = menuBar()->addMenu("&Model");
+  model_menu->setObjectName("modelMenu");
+  action_edit_properties_ = model_menu->addAction("Edit Properties...");
+  action_edit_properties_->setShortcut(QKeySequence(Qt::Key_Return));
   action_sync_ = model_menu->addAction("Sync Model -> MOOSE Input");
   action_sync_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
 
   view_menu_ = menuBar()->addMenu("&View");
+  view_menu_->setObjectName("viewMenu");
 
   auto* mesh_menu = menuBar()->addMenu("&Mesh");
+  mesh_menu->setObjectName("meshMenu");
   action_mesh_ = mesh_menu->addAction("Generate Mesh");
   action_preview_mesh_ = mesh_menu->addAction("Preview Mesh...");
   action_mesh_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
   action_preview_mesh_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_M));
 
   auto* job_menu = menuBar()->addMenu("&Job");
+  job_menu->setObjectName("jobMenu");
   action_run_ = job_menu->addAction("Run");
   action_check_ = job_menu->addAction("Check Input");
   action_stop_ = job_menu->addAction("Stop");
@@ -2832,7 +3356,16 @@ void MainWindow::build_menu() {
   action_check_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_K));
   action_stop_->setShortcut(QKeySequence(Qt::SHIFT | Qt::Key_F5));
 
-  auto* demo_menu = menuBar()->addMenu("&Demos");
+  auto* tools_menu = menuBar()->addMenu("&Tools");
+  tools_menu->setObjectName("toolsMenu");
+  action_undo_ = tools_menu->addAction("Undo");
+  action_redo_ = tools_menu->addAction("Redo");
+  action_undo_->setShortcut(QKeySequence::Undo);
+  action_redo_->setShortcut(QKeySequence::Redo);
+  action_undo_->setEnabled(false);
+  action_redo_->setEnabled(false);
+  tools_menu->addSeparator();
+  auto* demo_menu = tools_menu->addMenu("Demos");
   auto* demo_setup_diff =
       demo_menu->addAction("Setup Transient Diffusion");
   auto* demo_run_diff = demo_menu->addAction("Run Transient Diffusion");
@@ -2847,6 +3380,7 @@ void MainWindow::build_menu() {
 
   // 设置菜单: 中英文界面切换 (字典式运行时翻译, 见 L10n)
   auto* settings_menu = menuBar()->addMenu("&Settings");
+  settings_menu->setObjectName("settingsMenu");
   auto* lang_menu = settings_menu->addMenu("Language");
   auto* lang_group = new QActionGroup(this);
   lang_group->setExclusive(true);
@@ -2868,6 +3402,15 @@ void MainWindow::build_menu() {
     l10n::set_language(l10n::Language::Chinese);
     l10n::apply(this);
     update_window_title();
+  });
+
+  auto* help_menu = menuBar()->addMenu("&Help");
+  help_menu->setObjectName("helpMenu");
+  auto* about_action = help_menu->addAction("About GMP-ISE");
+  connect(about_action, &QAction::triggered, this, [this]() {
+    QMessageBox::about(
+        this, "About GMP-ISE",
+        "GMP-ISE finite-element preprocessing and job submission workspace.");
   });
 
   connect(action_new_, &QAction::triggered, this, [this]() {
@@ -3008,54 +3551,195 @@ void MainWindow::build_menu() {
 }
 
 void MainWindow::build_toolbar() {
-  auto* toolbar = addToolBar("Main");
-  toolbar->setMovable(false);
-  toolbar->setIconSize(QSize(18, 18));
+  auto make_group = [this](const QString& title, const QString& object_name) {
+    auto* toolbar = new QToolBar(title, this);
+    addToolBar(Qt::TopToolBarArea, toolbar);
+    toolbar->setObjectName(object_name);
+    toolbar->setProperty("gmpToolGroup", true);
+    toolbar->setMovable(true);
+    toolbar->setFloatable(true);
+    toolbar->setAllowedAreas(Qt::AllToolBarAreas);
+    toolbar->setIconSize(QSize(18, 18));
+    toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    auto update_compact_extent = [toolbar](Qt::Orientation orientation) {
+      if (orientation == Qt::Horizontal) {
+        toolbar->setMinimumWidth(0);
+        toolbar->setMaximumWidth(QWIDGETSIZE_MAX);
+        toolbar->setFixedHeight(30);
+      } else {
+        toolbar->setMinimumHeight(0);
+        toolbar->setMaximumHeight(QWIDGETSIZE_MAX);
+        toolbar->setFixedWidth(30);
+      }
+    };
+    update_compact_extent(Qt::Horizontal);
+    connect(toolbar, &QToolBar::orientationChanged, toolbar,
+            update_compact_extent);
+    connect(toolbar, &QToolBar::topLevelChanged, this,
+            [this, toolbar, update_compact_extent](bool floating) {
+              if (floating) {
+                toolbar->setOrientation(Qt::Horizontal);
+                update_compact_extent(Qt::Horizontal);
+                QTimer::singleShot(0, this,
+                                   &MainWindow::recover_floating_tool_groups);
+              }
+            });
+    connect(toolbar, &QToolBar::visibilityChanged, this,
+            [this, toolbar](bool visible) {
+              if (visible && toolbar->isFloating()) {
+                QTimer::singleShot(0, this,
+                                   &MainWindow::recover_floating_tool_groups);
+              }
+            });
+    return toolbar;
+  };
+
+  auto* project_toolbar = make_group("Project", "projectToolGroup");
+  auto* edit_toolbar = make_group("Edit", "editToolGroup");
+  auto* model_toolbar = make_group("Model", "modelToolGroup");
+  auto* mesh_toolbar = make_group("Mesh", "meshToolGroup");
+  auto* job_toolbar = make_group("Job", "jobToolGroup");
 
   if (action_new_) {
     action_new_->setIcon(MakeIcon(IconGlyph::NewFile));
-    toolbar->addAction(action_new_);
+    project_toolbar->addAction(action_new_);
   }
   if (action_open_) {
     action_open_->setIcon(MakeIcon(IconGlyph::OpenFolder));
-    toolbar->addAction(action_open_);
+    project_toolbar->addAction(action_open_);
   }
   if (action_save_) {
     action_save_->setIcon(MakeIcon(IconGlyph::SaveDisk));
-    toolbar->addAction(action_save_);
+    project_toolbar->addAction(action_save_);
   }
   if (action_save_as_) {
     action_save_as_->setIcon(MakeIcon(IconGlyph::SaveDisk));
-    toolbar->addAction(action_save_as_);
+    project_toolbar->addAction(action_save_as_);
   }
   if (action_screenshot_) {
     action_screenshot_->setIcon(MakeIcon(IconGlyph::Output));
-    toolbar->addAction(action_screenshot_);
+    project_toolbar->addAction(action_screenshot_);
+  }
+  if (action_undo_) {
+    action_undo_->setIcon(MakeIcon(IconGlyph::Undo));
+    edit_toolbar->addAction(action_undo_);
+  }
+  if (action_redo_) {
+    action_redo_->setIcon(MakeIcon(IconGlyph::Redo));
+    edit_toolbar->addAction(action_redo_);
   }
   if (action_sync_) {
     action_sync_->setIcon(MakeIcon(IconGlyph::Sync));
-    toolbar->addAction(action_sync_);
+    model_toolbar->addAction(action_sync_);
   }
-  toolbar->addSeparator();
   if (action_mesh_) {
     action_mesh_->setIcon(MakeIcon(IconGlyph::Mesh));
-    toolbar->addAction(action_mesh_);
+    mesh_toolbar->addAction(action_mesh_);
   }
   if (action_preview_mesh_) {
     action_preview_mesh_->setIcon(MakeIcon(IconGlyph::OpenFolder));
-    toolbar->addAction(action_preview_mesh_);
+    mesh_toolbar->addAction(action_preview_mesh_);
   }
   if (action_run_) {
     action_run_->setIcon(MakeIcon(IconGlyph::Run));
-    toolbar->addAction(action_run_);
+    job_toolbar->addAction(action_run_);
   }
   if (action_check_) {
     action_check_->setIcon(MakeIcon(IconGlyph::Check));
-    toolbar->addAction(action_check_);
+    job_toolbar->addAction(action_check_);
   }
   if (action_stop_) {
     action_stop_->setIcon(MakeIcon(IconGlyph::Stop));
-    toolbar->addAction(action_stop_);
+    job_toolbar->addAction(action_stop_);
+  }
+
+  // Abaqus 风格的紧凑显示组：默认悬浮于舞台右上角，同时保留 Qt
+  // 原生的四向停靠预览和整组拖拽行为。
+  display_tool_group_ = make_group("Display Group", "displayToolGroup");
+  action_display_mode_ = display_tool_group_->addAction(
+      MakeIcon(IconGlyph::Display), "Cycle Display Mode");
+  action_stage_pick_ = display_tool_group_->addAction(
+      MakeIcon(IconGlyph::Pick), "Pick");
+  action_stage_pick_->setCheckable(true);
+  action_stage_clear_ = display_tool_group_->addAction(
+      MakeIcon(IconGlyph::ClearSelection), "Clear Selection");
+  action_stage_slice_ = display_tool_group_->addAction(
+      MakeIcon(IconGlyph::Slice), "Slice");
+  action_stage_slice_->setCheckable(true);
+  action_display_mode_->setToolTip("Cycle Display Mode");
+  action_stage_pick_->setToolTip("Pick");
+  action_stage_clear_->setToolTip("Clear Selection");
+  action_stage_slice_->setToolTip("Slice");
+  connect(action_display_mode_, &QAction::triggered, this, [this]() {
+    if (viewer_) {
+      viewer_->cycle_stage_representation();
+    }
+  });
+  connect(action_stage_pick_, &QAction::toggled, this, [this](bool enabled) {
+    if (viewer_) {
+      viewer_->set_stage_picking(enabled);
+    }
+  });
+  connect(action_stage_clear_, &QAction::triggered, this, [this]() {
+    if (viewer_) {
+      viewer_->clear_stage_selection();
+    }
+  });
+  connect(action_stage_slice_, &QAction::toggled, this, [this](bool enabled) {
+    if (viewer_) {
+      viewer_->set_stage_slice(enabled);
+    }
+  });
+  // 直接切为顶层 Tool，同时仍保留在 QMainWindow 的工具栏布局注册表中。
+  // 与 QDockWidget 不同，重新拖回顶部后可和其他 QToolBar 共用同一行。
+  display_tool_group_->setParent(this, Qt::Tool);
+  display_tool_group_->setOrientation(Qt::Horizontal);
+  display_tool_group_->adjustSize();
+  display_tool_group_->hide();
+
+  if (view_menu_) {
+    auto* toolbars_menu = view_menu_->addMenu("Toolbars");
+    toolbars_menu->setObjectName("toolbarVisibilityMenu");
+    for (auto* toolbar : {project_toolbar, edit_toolbar, model_toolbar,
+                          mesh_toolbar, job_toolbar}) {
+      auto* toggle = toolbar->toggleViewAction();
+      toggle->setText(toolbar->windowTitle());
+      toolbars_menu->addAction(toggle);
+    }
+    auto* display_toggle = display_tool_group_->toggleViewAction();
+    display_toggle->setText("Display Group");
+    toolbars_menu->addAction(display_toggle);
+    view_menu_->addSeparator();
+    action_reset_tool_layout_ =
+        view_menu_->addAction("Reset Tool Layout");
+    action_reset_tool_layout_->setObjectName("resetToolLayoutAction");
+    connect(action_reset_tool_layout_, &QAction::triggered, this,
+            [this]() { reset_tool_group_layout(true); });
+  }
+
+  // 应用级事件过滤只关注带 gmpToolGroup 标记的工具组；在拖拽开始时
+  // 暂停拾取，释放后恢复，其他控件事件原样透传。
+  qApp->installEventFilter(this);
+  connect(qApp, &QGuiApplication::screenAdded, this, [this](QScreen* screen) {
+    if (screen) {
+      connect(screen, &QScreen::availableGeometryChanged, this,
+              [this]() { recover_floating_tool_groups(); });
+      connect(screen, &QScreen::geometryChanged, this,
+              [this]() { recover_floating_tool_groups(); });
+    }
+    QTimer::singleShot(0, this, &MainWindow::recover_floating_tool_groups);
+  });
+  connect(qApp, &QGuiApplication::screenRemoved, this, [this](QScreen*) {
+    QTimer::singleShot(0, this, &MainWindow::recover_floating_tool_groups);
+  });
+  for (auto* screen : QGuiApplication::screens()) {
+    if (!screen) {
+      continue;
+    }
+    connect(screen, &QScreen::availableGeometryChanged, this,
+            [this]() { recover_floating_tool_groups(); });
+    connect(screen, &QScreen::geometryChanged, this,
+            [this]() { recover_floating_tool_groups(); });
   }
 }
 
@@ -3352,10 +4036,17 @@ void MainWindow::build_model_tree() {
               connect(add_action, &QAction::triggered, this,
                       [this, item]() { add_item_under_root(item); });
             } else {
+              auto* edit_action = menu.addAction("Edit Properties...");
               auto* add_action = menu.addAction("Add");
               auto* duplicate_action = menu.addAction("Duplicate");
               auto* rename_action = menu.addAction("Rename");
               auto* delete_action = menu.addAction("Remove");
+              connect(edit_action, &QAction::triggered, this, [this, item]() {
+                model_tree_->setCurrentItem(item);
+                if (action_edit_properties_) {
+                  action_edit_properties_->trigger();
+                }
+              });
               connect(add_action, &QAction::triggered, this, [this, item]() {
                 if (item->parent()) {
                   add_item_under_root(item->parent());
@@ -3371,6 +4062,47 @@ void MainWindow::build_model_tree() {
             }
             menu.exec(model_tree_->viewport()->mapToGlobal(pos));
           });
+}
+
+void MainWindow::open_property_form(QTreeWidgetItem* item) {
+  if (!item || !item->parent()) {
+    return;
+  }
+  if (floating_property_form_) {
+    floating_property_form_->show();
+    floating_property_form_->raise();
+    floating_property_form_->activateWindow();
+    return;
+  }
+
+  const QStringList boundaries =
+      property_editor_ ? property_editor_->boundary_groups() : QStringList();
+  const QStringList volumes =
+      property_editor_ ? property_editor_->volume_groups() : QStringList();
+  auto* form = new FloatingPropertyForm(item, boundaries, volumes, this);
+  floating_property_form_ = form;
+  l10n::apply(form);
+  connect(form, &FloatingPropertyForm::committed, this,
+          [this](QTreeWidgetItem* committed_item) {
+            set_project_dirty(true);
+            if (model_tree_ && committed_item) {
+              model_tree_->setCurrentItem(committed_item);
+            }
+            if (property_editor_) {
+              property_editor_->set_item(committed_item);
+            }
+            refresh_module_pages();
+            refresh_work_context();
+            statusBar()->showMessage("Properties updated.", 2000);
+          });
+  connect(form, &QObject::destroyed, this,
+          [this]() { floating_property_form_ = nullptr; });
+  form->open();
+  QTimer::singleShot(0, form, [this, form]() {
+    if (form) {
+      form->place_over_stage(viewer_);
+    }
+  });
 }
 
 void MainWindow::clear_model_tree_children() {
@@ -3475,6 +4207,100 @@ void MainWindow::refresh_module_pages() {
     step_sequence_preview_->setPlainText(build_step_sequence_preview());
   }
   refresh_workflow_status();
+  refresh_work_context();
+}
+
+QString MainWindow::context_root_for_module(int module_index) const {
+  // 顺序与构造函数中的隐藏 module_tabs_ 状态机保持一致。
+  switch (module_index) {
+    case 0:
+      return "Sketches";
+    case 1:
+      return "Parts";
+    case 3:
+      return "Materials";
+    case 4:
+      return "Sections";
+    case 5:
+      return "Parts";  // Assembly 当前以部件实例为工作对象
+    case 6:
+      return "Steps";
+    case 7:
+      return "Interactions";
+    case 8:
+      return "Loads";
+    case 9:
+      return "Mesh";
+    case 10:
+      return "Jobs";
+    case 11:
+    case 12:
+      return "Results";
+    case 2: {
+      // Property 直接跟随当前树对象所属根节点。
+      auto* current = model_tree_ ? model_tree_->currentItem() : nullptr;
+      return current && current->parent() ? current->parent()->text(0)
+                                           : QString();
+    }
+    default:
+      return {};
+  }
+}
+
+void MainWindow::refresh_work_context() {
+  const bool chinese =
+      l10n::current_language() == l10n::Language::Chinese;
+  if (context_project_label_) {
+    const QString display = project_path_.isEmpty()
+                                ? (chinese ? QString::fromUtf8("未命名")
+                                           : QString("Untitled"))
+                                : QFileInfo(project_path_).fileName();
+    context_project_label_->setText(display);
+    context_project_label_->setToolTip(
+        project_path_.isEmpty() ? QString("Current project: Untitled")
+                                : project_path_);
+  }
+
+  if (module_selector_ && module_tabs_) {
+    const QSignalBlocker blocker(module_selector_);
+    const int combo_index =
+        module_selector_->findData(module_tabs_->currentIndex());
+    if (combo_index >= 0) {
+      module_selector_->setCurrentIndex(combo_index);
+    }
+  }
+
+  if (!context_object_selector_ || !module_tabs_) {
+    return;
+  }
+  const QString root_name =
+      context_root_for_module(module_tabs_->currentIndex());
+  auto* root = root_name.isEmpty() ? nullptr : find_root_item(root_name);
+  auto* current = model_tree_ ? model_tree_->currentItem() : nullptr;
+  int selected_combo_index = 0;
+  {
+    const QSignalBlocker blocker(context_object_selector_);
+    context_object_selector_->clear();
+    context_object_selector_->addItem(
+        chinese ? QString::fromUtf8("未选择") : QString("Unselected"), -1);
+    context_object_selector_->setProperty("contextRoot", root_name);
+    for (int row = 0; root && row < root->childCount(); ++row) {
+      auto* child = root->child(row);
+      if (!child) {
+        continue;
+      }
+      context_object_selector_->addItem(child->text(0), row);
+      if (child == current) {
+        selected_combo_index = context_object_selector_->count() - 1;
+      }
+    }
+    context_object_selector_->setCurrentIndex(selected_combo_index);
+  }
+  context_object_selector_->setEnabled(root != nullptr);
+  context_object_selector_->setToolTip(
+      root ? QString("Current %1 object; selecting an entry locates it in the model tree.")
+                 .arg(root_name)
+           : QString("No object selector is available in this context."));
 }
 
 int MainWindow::child_count(const QString& root_name) const {
@@ -4840,6 +5666,7 @@ void MainWindow::update_project_status() {
   if (dirty_status_label_) {
     dirty_status_label_->setText(project_dirty_ ? "Modified" : "Saved");
   }
+  refresh_work_context();
 }
 
 void MainWindow::add_recent_project(const QString& path) {
@@ -5008,7 +5835,544 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
     steps.append({QString("module_%1_%2")
                       .arg(i, 2, 10, QLatin1Char('0'))
                       .arg(modules[i]),
-                  [this, i]() { module_tabs_->setCurrentIndex(i); }, this});
+                  [this, i]() {
+                    module_tabs_->setCurrentIndex(i);
+                    // 可选地走与人工点击完全相同的 tabBarClicked 路径，
+                    // 用于捕获“切换成功但点击打开工作窗时崩溃”的回归。
+                    if (qEnvironmentVariableIsSet("GMP_TOUR_REAL_CLICKS")) {
+                      QMetaObject::invokeMethod(module_tabs_, "tabBarClicked",
+                                                Qt::DirectConnection,
+                                                Q_ARG(int, i));
+                    }
+                  },
+                  this});
+  }
+  if (qEnvironmentVariableIsSet("GMP_TOUR_REAL_CLICKS")) {
+    auto i01_original_name = std::make_shared<QString>();
+    auto i01_original_dirty = std::make_shared<bool>(false);
+    auto i01_form_size = std::make_shared<QSize>();
+    steps.append({"l04_top_context_1280",
+                  [this]() {
+                    resize(1280, 720);
+                    const QStringList groups = {
+                        "projectToolGroup", "editToolGroup", "modelToolGroup",
+                        "meshToolGroup", "jobToolGroup"};
+                    for (const QString& name : groups) {
+                      auto* group = findChild<QToolBar*>(name);
+                      if (!group || !group->isVisible() || group->height() > 32) {
+                        qFatal("L-04 compact toolbar group contract failed");
+                      }
+                    }
+                    auto* project_group = findChild<QToolBar*>("projectToolGroup");
+                    auto* edit_group = findChild<QToolBar*>("editToolGroup");
+                    auto* mesh_group = findChild<QToolBar*>("meshToolGroup");
+                    if (!project_group ||
+                        !project_group->actions().contains(action_save_) ||
+                        !edit_group ||
+                        !edit_group->actions().contains(action_undo_) ||
+                        !mesh_group ||
+                        !mesh_group->actions().contains(action_mesh_)) {
+                      qFatal("L-04 menu/toolbar QAction sharing contract failed");
+                    }
+                    const QStringList menus = {
+                        "fileMenu", "modelMenu", "viewMenu", "meshMenu",
+                        "jobMenu", "toolsMenu", "settingsMenu", "helpMenu"};
+                    for (const QString& name : menus) {
+                      if (!findChild<QMenu*>(name)) {
+                        qFatal("L-04 standard menu contract failed");
+                      }
+                    }
+                    if (!module_selector_ || !module_selector_->isVisible() ||
+                        !context_project_label_ ||
+                        !context_project_label_->isVisible() ||
+                        !context_object_selector_ ||
+                        !context_object_selector_->isVisible()) {
+                      qFatal("L-04 work context fields are not visible");
+                    }
+                    auto* context_bar = findChild<QWidget*>("moduleBar");
+                    const int top_height = menuBar()->height() + 30 +
+                                           (context_bar ? context_bar->height()
+                                                        : 1000);
+                    if (top_height > 100) {
+                      qFatal("L-04 top three-layer height exceeds 100 px");
+                    }
+                  },
+                  this});
+    steps.append({"l04_module_selector_part",
+                  [this]() {
+                    const int combo_index = module_selector_
+                                                ? module_selector_->findData(1)
+                                                : -1;
+                    if (combo_index < 0) {
+                      qFatal("Part module is missing from work context");
+                    }
+                    module_selector_->setCurrentIndex(combo_index);
+                    if (!module_tabs_ || module_tabs_->currentIndex() != 1) {
+                      qFatal("Work context module did not switch internal module");
+                    }
+                  },
+                  this});
+    steps.append({"l05_tool_group_layout_contract",
+                  [this]() {
+                    reset_tool_group_layout(false);
+                    const QStringList groups = {
+                        "projectToolGroup", "editToolGroup", "modelToolGroup",
+                        "meshToolGroup", "jobToolGroup"};
+                    for (const QString& name : groups) {
+                      auto* group = findChild<QToolBar*>(name);
+                      if (!group || !group->isMovable() ||
+                          !group->isFloatable() ||
+                          group->allowedAreas() != Qt::AllToolBarAreas) {
+                        qFatal("L-05 movable toolbar contract failed");
+                      }
+                    }
+                    auto* toolbar_menu =
+                        findChild<QMenu*>("toolbarVisibilityMenu");
+                    if (!display_tool_group_ ||
+                        !display_tool_group_->isFloating() ||
+                        display_tool_group_->allowedAreas() !=
+                            Qt::AllToolBarAreas ||
+                        !toolbar_menu || toolbar_menu->actions().size() != 6 ||
+                        !action_reset_tool_layout_ ||
+                        saveState(3).isEmpty()) {
+                      qFatal("L-05 display/persistence contract failed");
+                    }
+                    auto* toggle =
+                        findChild<QToolBar*>("modelToolGroup")->toggleViewAction();
+                    toggle->trigger();
+                    if (toggle->isChecked()) {
+                      qFatal("L-05 toolbar visibility toggle failed");
+                    }
+                    toggle->trigger();
+                    if (!toggle->isChecked()) {
+                      qFatal("L-05 toolbar visibility restore failed");
+                    }
+                    auto* project_group =
+                        findChild<QToolBar*>("projectToolGroup");
+                    auto* edit_group = findChild<QToolBar*>("editToolGroup");
+                    removeToolBar(project_group);
+                    addToolBar(Qt::BottomToolBarArea, project_group);
+                    edit_group->hide();
+                    const QByteArray round_trip_state = saveState(3);
+                    reset_tool_group_layout(false);
+                    if (!restoreState(round_trip_state, 3) ||
+                        toolBarArea(project_group) != Qt::BottomToolBarArea ||
+                        edit_group->isVisible()) {
+                      qFatal("L-05 layout round-trip contract failed");
+                    }
+                    reset_tool_group_layout(false);
+                    auto* job_group = findChild<QToolBar*>("jobToolGroup");
+                    removeToolBar(display_tool_group_);
+                    display_tool_group_->setParent(this, Qt::Widget);
+                    insertToolBar(job_group, display_tool_group_);
+                    display_tool_group_->show();
+                    if (display_tool_group_->isFloating() ||
+                        toolBarArea(display_tool_group_) !=
+                            Qt::TopToolBarArea ||
+                        display_tool_group_->y() != project_group->y()) {
+                      qFatal("L-05 display group same-row docking failed");
+                    }
+                    reset_tool_group_layout(false);
+                  },
+                  this});
+    steps.append({"l05_display_group_default",
+                  [this]() {
+                    if (!display_tool_group_ || !viewer_ ||
+                        !display_tool_group_->isVisible() ||
+                        !display_tool_group_->isFloating()) {
+                      qFatal("L-05 default display group is not floating");
+                    }
+                    const QRect viewer_rect(viewer_->mapToGlobal(QPoint(0, 0)),
+                                            viewer_->size());
+                    const QRect group_rect = display_tool_group_->frameGeometry();
+                    if (group_rect.center().x() < viewer_rect.center().x() ||
+                        group_rect.top() > viewer_rect.top() +
+                                               viewer_rect.height() / 3) {
+                      qFatal("L-05 display group is not in the stage top-right preset");
+                    }
+                  },
+                  display_tool_group_});
+    steps.append({"p2_workspace_content_layout",
+                  [this, dir]() {
+                    if (!property_stack_ || !module_work_window_) {
+                      qFatal("Phase 2 workspace layout fixture is missing");
+                    }
+                    for (int i = 0; i < property_stack_->count(); ++i) {
+                      auto* page = property_stack_->widget(i);
+                      if (!page) {
+                        qFatal("Phase 2 workspace page is missing");
+                      }
+                      const auto scrolls = page->findChildren<QScrollArea*>();
+                      for (auto* scroll : scrolls) {
+                        for (QObject* ancestor = scroll->parent(); ancestor &&
+                             ancestor != page; ancestor = ancestor->parent()) {
+                          if (qobject_cast<QScrollArea*>(ancestor)) {
+                            qFatal("Phase 2 nested workspace scroll area found");
+                          }
+                        }
+                      }
+                    }
+                    module_tabs_->setCurrentIndex(3);
+                    module_tabs_->tabBarClicked(3);
+                    auto* material_page = property_stack_->currentWidget();
+                    auto* actions = material_page
+                                        ? material_page->findChild<QWidget*>(
+                                              "modulePrimaryActions")
+                                        : nullptr;
+                    auto* content = material_page
+                                        ? material_page->findChild<QWidget*>(
+                                              "moduleNodeContent")
+                                        : nullptr;
+                    const auto buttons =
+                        actions ? actions->findChildren<QPushButton*>()
+                                : QList<QPushButton*>();
+                    if (!material_page || !actions || !content ||
+                        !material_page->findChildren<QScrollArea*>().isEmpty() ||
+                        buttons.size() < 2 ||
+                        qAbs(buttons.at(0)->geometry().center().y() -
+                             buttons.at(1)->geometry().center().y()) > 2 ||
+                        module_work_window_->minimumWidth() < 620 ||
+                        !content->isVisible()) {
+                      qFatal("Phase 2 material workspace layout contract failed");
+                    }
+                    auto* part_page = property_stack_->widget(1);
+                    auto* feature_tabs = part_page
+                                             ? part_page->findChild<QTabWidget*>(
+                                                   "partFeatureTabs")
+                                             : nullptr;
+                    if (!feature_tabs || feature_tabs->count() != 4) {
+                      qFatal("Phase 2 part feature tabs contract failed");
+                    }
+                    auto* mesh_page = property_stack_->widget(9);
+                    auto* gmsh_tabs = mesh_page
+                                          ? mesh_page->findChild<QTabWidget*>(
+                                                "gmshWorkspaceTabs")
+                                          : nullptr;
+                    auto* geometry_tabs = mesh_page
+                                              ? mesh_page->findChild<QTabWidget*>(
+                                                    "gmshGeometryTabs")
+                                              : nullptr;
+                    auto* groups_tabs = mesh_page
+                                            ? mesh_page->findChild<QTabWidget*>(
+                                                  "gmshGroupsTabs")
+                                            : nullptr;
+                    if (!gmsh_tabs || gmsh_tabs->count() != 5 ||
+                        !geometry_tabs || geometry_tabs->count() != 3 ||
+                        !groups_tabs || groups_tabs->count() != 2) {
+                      qFatal("Phase 2 mesh workspace tabs contract failed");
+                    }
+                    property_stack_->setCurrentIndex(9);
+                    qApp->processEvents();
+                    mesh_page->grab().save(dir +
+                                           "/p2_mesh_workspace_layout.png");
+                    property_stack_->setCurrentIndex(3);
+                  },
+                  module_work_window_});
+    steps.append({"i01_property_form_cancel_buffer",
+                  [this, i01_original_name, i01_original_dirty,
+                   i01_form_size, dir]() {
+                    auto* root = find_root_item("Materials");
+                    if (!root || root->childCount() == 0) {
+                      qFatal("I-01 material fixture is missing");
+                    }
+                    auto* item = root->child(0);
+                    *i01_original_name = item->text(0);
+                    *i01_original_dirty = project_dirty_;
+                    model_tree_->setCurrentItem(item);
+                    model_tree_->itemDoubleClicked(item, 0);
+                    auto* form = findChild<FloatingPropertyForm*>(
+                        "floatingPropertyForm");
+                    auto* name = form ? form->findChild<QLineEdit*>(
+                                            "propertyNameEdit")
+                                      : nullptr;
+                    auto* cancel = form ? form->findChild<QPushButton*>(
+                                              "propertyFormCancel")
+                                        : nullptr;
+                    const QString title_prefix =
+                        l10n::current_language() == l10n::Language::Chinese
+                            ? QString::fromUtf8("编辑材料 — ")
+                            : QString("Edit Material — ");
+                    if (!form || !form->isVisible() || !form->isModal() ||
+                        form->windowTitle() != title_prefix + item->text(0) ||
+                        !name || !cancel) {
+                      qFatal("I-01 floating property form contract failed");
+                    }
+                    const auto property_scrolls =
+                        form->findChildren<QScrollArea*>();
+                    if (!property_scrolls.isEmpty()) {
+                      qFatal("I-01 property form contains an outer scroll area");
+                    }
+                    if (auto* editor_tabs = form->findChild<QTabWidget*>(
+                            "propertyEditorTabs");
+                        !editor_tabs || editor_tabs->count() != 4) {
+                      qFatal("I-01 property form tab layout contract failed");
+                    }
+                    *i01_form_size = form->size();
+                    form->grab().save(dir + "/i01_property_form_layout.png");
+                    const QRect stage_rect(
+                        viewer_->mapToGlobal(QPoint(0, 0)), viewer_->size());
+                    if (!stage_rect.contains(form->frameGeometry().center())) {
+                      qFatal("I-01 property form is outside the stage");
+                    }
+                    name->setText("i01_discarded_name");
+                    if (item->text(0) != *i01_original_name ||
+                        project_dirty_ != *i01_original_dirty) {
+                      qFatal("I-01 uncommitted edit leaked into project state");
+                    }
+                    cancel->click();
+                    if (item->text(0) != *i01_original_name ||
+                        project_dirty_ != *i01_original_dirty) {
+                      qFatal("I-01 cancel changed project state");
+                    }
+                  },
+                  this});
+    steps.append({"i01_property_form_validation",
+                  [this, i01_original_name, i01_original_dirty,
+                   i01_form_size]() {
+                    auto* root = find_root_item("Materials");
+                    auto* item = root && root->childCount() > 0
+                                     ? root->child(0)
+                                     : nullptr;
+                    if (!item) {
+                      qFatal("I-01 material fixture disappeared");
+                    }
+                    model_tree_->setCurrentItem(item);
+                    model_tree_->itemDoubleClicked(item, 0);
+                    auto* form = findChild<FloatingPropertyForm*>(
+                        "floatingPropertyForm");
+                    auto* name = form ? form->findChild<QLineEdit*>(
+                                            "propertyNameEdit")
+                                      : nullptr;
+                    auto* ok = form ? form->findChild<QPushButton*>(
+                                          "propertyFormOk")
+                                    : nullptr;
+                    if (!form || !name || !ok ||
+                        form->size() != *i01_form_size) {
+                      qFatal("I-01 property form did not reopen");
+                    }
+                    name->clear();
+                    ok->click();
+                    if (!form->isVisible() ||
+                        item->text(0) != *i01_original_name ||
+                        project_dirty_ != *i01_original_dirty) {
+                      qFatal("I-01 invalid edit was not blocked and focused");
+                    }
+                  },
+                  this});
+    steps.append({"i01_property_form_commit",
+                  [this]() {
+                    auto* root = find_root_item("Materials");
+                    auto* item = root && root->childCount() > 0
+                                     ? root->child(0)
+                                     : nullptr;
+                    auto* form = findChild<FloatingPropertyForm*>(
+                        "floatingPropertyForm");
+                    auto* name = form ? form->findChild<QLineEdit*>(
+                                            "propertyNameEdit")
+                                      : nullptr;
+                    auto* ok = form ? form->findChild<QPushButton*>(
+                                          "propertyFormOk")
+                                    : nullptr;
+                    if (!item || !form || !name || !ok) {
+                      qFatal("I-01 commit fixture is missing");
+                    }
+                    if (!name->hasFocus()) {
+                      qFatal("I-01 validation did not focus the first field");
+                    }
+                    name->setText("material_i01_committed");
+                    ok->click();
+                    if (item->text(0) != "material_i01_committed" ||
+                        !project_dirty_) {
+                      qFatal("I-01 accepted edit was not committed");
+                    }
+                  },
+                  this});
+    steps.append({"module_repeat_Part",
+                  [this]() {
+                    for (int i = 0; i < module_tabs_->count(); ++i) {
+                      if (module_tabs_->tabText(i) == "Part" ||
+                          module_tabs_->tabText(i) == QString::fromUtf8("部件")) {
+                        module_tabs_->setCurrentIndex(i);
+                        QMetaObject::invokeMethod(module_tabs_, "tabBarClicked",
+                                                  Qt::DirectConnection,
+                                                  Q_ARG(int, i));
+                        break;
+                      }
+                    }
+                  },
+                  this});
+    steps.append({"part_fixture_for_double_click",
+                  [this]() {
+                    if (auto* root = find_root_item("Parts");
+                        root && root->childCount() == 0) {
+                      add_child_item(root, "part_tour", "Parts",
+                                     {{"type", "Part"}});
+                    }
+                  },
+                  this});
+    steps.append({"l04_object_selector_to_tree",
+                  [this]() {
+                    refresh_work_context();
+                    const int combo_index = context_object_selector_
+                                                ? context_object_selector_->findText(
+                                                      "part_tour")
+                                                : -1;
+                    if (combo_index < 0) {
+                      qFatal("Part fixture is missing from current object selector");
+                    }
+                    context_object_selector_->setCurrentIndex(combo_index);
+                    if (!model_tree_ || !model_tree_->currentItem() ||
+                        model_tree_->currentItem()->text(0) != "part_tour") {
+                      qFatal("Current object selector did not locate model tree item");
+                    }
+                  },
+                  this});
+    steps.append({"tree_Parts_root",
+                  [this]() {
+                    if (auto* root = find_root_item("Parts")) {
+                      model_tree_->setCurrentItem(root);
+                    }
+                  },
+                  this});
+    steps.append({"tree_Parts_child",
+                  [this]() {
+                    if (auto* root = find_root_item("Parts");
+                        root && root->childCount() > 0) {
+                      model_tree_->setCurrentItem(root->child(0));
+                    }
+                  },
+                  this});
+    steps.append({"part_tree_double_click_opens_editor",
+                  [this]() {
+                    if (auto* root = find_root_item("Parts");
+                        root && root->childCount() > 0) {
+                      auto* item = root->child(0);
+                      model_tree_->setCurrentItem(item);
+                      model_tree_->itemDoubleClicked(item, 0);
+                    }
+                    if (!module_work_window_ ||
+                        !module_work_window_->isVisible() ||
+                        !module_work_window_->windowTitle().startsWith(
+                            "Part Editor")) {
+                      qFatal("Part tree double-click did not open editor");
+                    }
+                  },
+                  module_work_window_});
+    steps.append({"sketch_new_opens_editor",
+                  [this]() {
+                    for (int i = 0; i < module_tabs_->count(); ++i) {
+                      if (module_tabs_->tabText(i) == "Sketch" ||
+                          module_tabs_->tabText(i) == QString::fromUtf8("草图")) {
+                        module_tabs_->setCurrentIndex(i);
+                        break;
+                      }
+                    }
+                    if (auto* button = sketch_panel_->findChild<QPushButton*>(
+                            "newSketchButton")) {
+                      button->click();
+                    }
+                  },
+                  module_work_window_});
+    steps.append({"sketch_add_preview_fixture",
+                  [this]() {
+                    if (!viewer_ || !viewer_->sketch_document() ||
+                        viewer_->is_sketch_preview()) {
+                      qFatal("Sketch editor did not enter editable state");
+                    }
+                    SketchEntity circle;
+                    circle.type = SketchEntityType::Circle;
+                    circle.center = {0.0, 0.0};
+                    circle.radius = 20.0;
+                    viewer_->sketch_document()->add_entity(circle);
+                    viewer_->refresh_sketch();
+                  },
+                  this});
+    steps.append({"sketch_close_editor",
+                  [this]() {
+                    if (module_work_window_) {
+                      module_work_window_->close();
+                    }
+                  },
+                  this});
+    steps.append({"sketch_preview_after_finish",
+                  [this]() {
+                    if (!viewer_ || !viewer_->is_sketch_preview() ||
+                        !viewer_->sketch_document() ||
+                        viewer_->sketch_document()->entity_count() == 0) {
+                      qFatal("Finished sketch was not retained as read-only preview");
+                    }
+                    if (!context_object_selector_ ||
+                        context_object_selector_->currentText() != "sketch_1") {
+                      qFatal("Model tree selection did not update current object");
+                    }
+                  },
+                  this});
+    steps.append({"sketch_tree_double_click_opens_editor",
+                  [this]() {
+                    if (auto* root = find_root_item("Sketches");
+                        root && root->childCount() > 0) {
+                      auto* item = root->child(root->childCount() - 1);
+                      model_tree_->setCurrentItem(item);
+                      model_tree_->itemDoubleClicked(item, 0);
+                    }
+                  },
+                  module_work_window_});
+    steps.append({"sketch_finish_editor",
+                  [this]() {
+                    if (module_work_window_) {
+                      module_work_window_->close();
+                    }
+                  },
+                  this});
+    steps.append({"part_new_opens_editor",
+                  [this]() {
+                    for (int i = 0; i < module_tabs_->count(); ++i) {
+                      if (module_tabs_->tabText(i) == "Part" ||
+                          module_tabs_->tabText(i) == QString::fromUtf8("部件")) {
+                        module_tabs_->setCurrentIndex(i);
+                        break;
+                      }
+                    }
+                    QTimer::singleShot(100, this, []() {
+                      for (QWidget* widget : QApplication::topLevelWidgets()) {
+                        if (auto* dialog = qobject_cast<QInputDialog*>(widget);
+                            dialog && dialog->isVisible()) {
+                          dialog->accept();
+                          return;
+                        }
+                      }
+                    });
+                    QPushButton* new_part = nullptr;
+                    for (auto* button : findChildren<QPushButton*>()) {
+                      if (button->property("moduleAction").toString() ==
+                          "New Part") {
+                        new_part = button;
+                        break;
+                      }
+                    }
+                    if (!new_part) {
+                      qFatal("New Part command button not found");
+                    }
+                    new_part->click();
+                    if (!module_work_window_ ||
+                        !module_work_window_->isVisible()) {
+                      qFatal("New Part did not open editor");
+                    }
+                  },
+                  module_work_window_});
+    const QStringList stage_commands = {"rotate", "pan",   "zoom", "fit",
+                                        "front",  "right", "top",  "iso",
+                                        "display", "pick", "clear", "slice"};
+    for (const QString& command : stage_commands) {
+      steps.append({"stage_command_" + command,
+                    [this, command]() {
+                      if (auto* button = stage_left_toolbar_->findChild<QToolButton*>(
+                              "stageTool_" + command)) {
+                        button->click();
+                      }
+                    },
+                    this});
+    }
   }
   steps.append({"center_Viewport", [this]() {
                   if (viewer_) {
@@ -5027,6 +6391,28 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
   steps.append({"workspace_Job",
                 [this, reveal_workspace]() {
                   reveal_workspace(job_work_window_);
+                  auto* job_tabs = job_work_window_
+                                       ? job_work_window_->findChild<QTabWidget*>(
+                                             "jobWorkspaceTabs")
+                                       : nullptr;
+                  auto* moose_tabs = job_work_window_
+                                         ? job_work_window_->findChild<QTabWidget*>(
+                                               "mooseWorkspaceTabs")
+                                         : nullptr;
+                  if (job_tabs) {
+                    job_tabs->setCurrentIndex(1);
+                  }
+                  const QRect available = job_work_window_ &&
+                                                   job_work_window_->screen()
+                                               ? job_work_window_->screen()
+                                                     ->availableGeometry()
+                                               : QRect();
+                  if (!job_tabs || job_tabs->count() != 2 || !moose_tabs ||
+                      moose_tabs->count() != 4 ||
+                      (!available.isEmpty() &&
+                       job_work_window_->height() > available.height())) {
+                    qFatal("Phase 2 job workspace layout contract failed");
+                  }
                 },
                 job_work_window_});
   steps.append({"workspace_Visualization",

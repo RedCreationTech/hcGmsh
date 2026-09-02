@@ -1,5 +1,6 @@
 #include "gmp/PropertyEditor.h"
 
+#include "gmp/L10n.h"
 #include "gmp/SketchDocument.h"
 
 #include <QFormLayout>
@@ -21,6 +22,7 @@
 #include <QDialog>
 #include <QPlainTextEdit>
 #include <QFont>
+#include <QTimer>
 
 #include "gmp/ComboPopupFix.h"
 
@@ -36,6 +38,7 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   layout->addWidget(header_label_);
 
   tabs_ = new QTabWidget(this);
+  tabs_->setObjectName("propertyEditorTabs");
   layout->addWidget(tabs_, 1);
 
   general_tab_ = new QWidget(this);
@@ -43,9 +46,11 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   // macOS 的 QMacStyle 默认把 QFormLayout 强制 WrapAllRows (标签在字段上方),
   // 看起来像"空行", 显式改回标签与值同行
   general_layout->setRowWrapPolicy(QFormLayout::DontWrapRows);
+  general_layout->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
   kind_label_ = new QLabel("-", general_tab_);
   status_label_ = new QLabel("-", general_tab_);
   name_edit_ = new QLineEdit(general_tab_);
+  name_edit_->setObjectName("propertyNameEdit");
   summary_label_ = new QLabel("-", general_tab_);
   summary_label_->setWordWrap(true);
   general_layout->addRow("Kind", kind_label_);
@@ -59,6 +64,8 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
 
   form_box_ = new QGroupBox("Quick Parameters", params_tab_);
   form_layout_ = new QFormLayout(form_box_);
+  form_layout_->setRowWrapPolicy(QFormLayout::DontWrapRows);
+  form_layout_->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
   params_layout->addWidget(form_box_);
 
   groups_box_ = new QGroupBox("Groups", params_tab_);
@@ -126,7 +133,10 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   validation_label_->setWordWrap(true);
   params_layout->addWidget(validation_label_);
 
-  validation_box_ = new QGroupBox("Validation Summary", params_tab_);
+  auto* validation_tab = new QWidget(this);
+  auto* validation_page_layout = new QVBoxLayout(validation_tab);
+  validation_page_layout->setContentsMargins(8, 8, 8, 8);
+  validation_box_ = new QGroupBox("Validation Summary", validation_tab);
   auto* validation_layout = new QVBoxLayout(validation_box_);
   validation_summary_label_ = new QLabel("No issues.", validation_box_);
   validation_summary_label_->setStyleSheet("font-weight: 600;");
@@ -154,8 +164,9 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   validation_actions->addWidget(validation_goto_btn_);
   validation_actions->addStretch(1);
   validation_layout->addLayout(validation_actions);
-  params_layout->addWidget(validation_box_);
   tabs_->addTab(params_tab_, "Parameters");
+  validation_page_layout->addWidget(validation_box_, 1);
+  tabs_->addTab(validation_tab, "Validation");
 
   preview_tab_ = new QWidget(this);
   auto* preview_layout = new QVBoxLayout(preview_tab_);
@@ -216,13 +227,11 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
             &PropertyEditor::refresh_validation_summary);
   }
 
-  // 右侧边栏宽度有限: 表单标签换行到控件上方(垂直布局), 减少横向溢出。
-  // 常规页(身份信息, 值都较短)例外, 保持标签与值同行, 避免看起来像"空行"
+  // I-01 起属性编辑器承载于宽体弹窗，表单统一使用“标签 + 字段”同行布局；
+  // 不再沿用旧窄右栏的 WrapAllRows，避免字段被拉成长纵向页面。
   for (auto* f : findChildren<QFormLayout*>()) {
-    if (general_tab_ && f == qobject_cast<QFormLayout*>(general_tab_->layout())) {
-      continue;
-    }
-    f->setRowWrapPolicy(QFormLayout::WrapAllRows);
+    f->setRowWrapPolicy(QFormLayout::DontWrapRows);
+    f->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
   }
 
   set_item(nullptr);
@@ -259,6 +268,89 @@ void PropertyEditor::refresh_form_options() {
   update_group_widget_for_kind(kind);
   update_validation();
   refresh_preview();
+}
+
+bool PropertyEditor::validate_current(QStringList* issues) {
+  QStringList current_issues;
+  if (!current_item_ || is_root_item()) {
+    current_issues << "name";
+  } else {
+    if (current_item_->text(0).trimmed().isEmpty()) {
+      current_issues << "name";
+    }
+    if (auto* parent = current_item_->parent()) {
+      for (int i = 0; i < parent->childCount(); ++i) {
+        auto* sibling = parent->child(i);
+        if (sibling != current_item_ &&
+            sibling->text(0).trimmed() == current_item_->text(0).trimmed()) {
+          current_issues << "name must be unique";
+          break;
+        }
+      }
+    }
+    const QString kind =
+        current_item_->data(0, kKindRole).toString().isEmpty()
+            ? current_item_->text(0)
+            : current_item_->data(0, kKindRole).toString();
+    current_issues.append(
+        validate_params(kind, current_item_->data(0, kParamsRole).toMap()));
+  }
+
+  if (issues) {
+    *issues = current_issues;
+  }
+  if (current_issues.isEmpty()) {
+    update_validation();
+    return true;
+  }
+
+  if (validation_label_) {
+    const QString prompt =
+        l10n::current_language() == l10n::Language::Chinese
+            ? QString::fromUtf8("请修正：")
+            : QString("Please correct: ");
+    validation_label_->setText(prompt + current_issues.join(", "));
+  }
+  const QString first = current_issues.first();
+  if (first.startsWith("name")) {
+    if (tabs_) {
+      tabs_->setCurrentWidget(general_tab_);
+    }
+    if (name_edit_) {
+      name_edit_->setFocus(Qt::OtherFocusReason);
+      name_edit_->selectAll();
+      QTimer::singleShot(0, name_edit_, [edit = name_edit_]() {
+        edit->setFocus(Qt::OtherFocusReason);
+        edit->selectAll();
+      });
+      QTimer::singleShot(50, name_edit_, [edit = name_edit_]() {
+        edit->setFocus(Qt::OtherFocusReason);
+        edit->selectAll();
+      });
+    }
+  } else {
+    if (tabs_) {
+      tabs_->setCurrentWidget(params_tab_);
+    }
+    QString key = first.section(' ', 0, 0).section('/', 0, 0);
+    if (auto* field = form_widgets_.value(key, nullptr)) {
+      field->setFocus(Qt::OtherFocusReason);
+      QTimer::singleShot(0, field,
+                         [field]() { field->setFocus(Qt::OtherFocusReason); });
+      QTimer::singleShot(50, field,
+                         [field]() { field->setFocus(Qt::OtherFocusReason); });
+    } else if (params_table_) {
+      for (int row = 0; row < params_table_->rowCount(); ++row) {
+        auto* key_item = params_table_->item(row, 0);
+        if (key_item && key_item->text() == key) {
+          params_table_->setCurrentCell(row, 1);
+          params_table_->setFocus(Qt::OtherFocusReason);
+          break;
+        }
+      }
+    }
+  }
+  return false;
 }
 
 bool PropertyEditor::is_root_item() const {

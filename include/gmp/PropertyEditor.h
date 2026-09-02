@@ -29,6 +29,9 @@ class PropertyEditor : public QWidget {
   void set_boundary_groups(const QStringList& names);
   void set_volume_groups(const QStringList& names);
   void refresh_form_options();
+  bool validate_current(QStringList* issues = nullptr);
+  const QStringList& boundary_groups() const { return boundary_groups_; }
+  const QStringList& volume_groups() const { return volume_groups_; }
 
   static constexpr int kKindRole = Qt::UserRole + 1;
   static constexpr int kParamsRole = Qt::UserRole + 2;

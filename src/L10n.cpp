@@ -3,6 +3,7 @@
 #include <QAbstractButton>
 #include <QAction>
 #include <QComboBox>
+#include <QDockWidget>
 #include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
@@ -14,6 +15,7 @@
 #include <QTabBar>
 #include <QTabWidget>
 #include <QTableWidget>
+#include <QToolBar>
 #include <QTreeWidget>
 #include <QVector>
 #include <QWidget>
@@ -36,6 +38,7 @@ const QHash<QString, QString>& zh_dict() {
       {"Export Debug Bundle...", "导出调试包..."},
       {"Save Screenshot...", "保存截图..."},
       {"Model", "模型"},
+      {"Edit Properties...", "编辑属性..."},
       {"Sync Model -> MOOSE Input", "同步模型到 MOOSE 输入"},
       {"Mesh", "网格"},
       {"Generate Mesh", "生成网格"},
@@ -52,9 +55,21 @@ const QHash<QString, QString>& zh_dict() {
       {"Setup Nonlinear Heat", "载入非线性热传导"},
       {"Run Nonlinear Heat", "运行非线性热传导"},
       {"Settings", "设置"},
+      {"Tools", "工具"},
+      {"Help", "帮助"},
+      {"About GMP-ISE", "关于 GMP-ISE"},
       {"Language", "语言"},
       {"Chinese", "中文"},
       {"English", "English"},
+      {"Toolbars", "工具栏"},
+      {"Project", "项目"},
+      {"Edit", "编辑"},
+      {"Display", "显示"},
+      {"Display Group", "显示工具组"},
+      {"Cycle Display Mode", "切换显示方式"},
+      {"Clear Selection", "清除选择"},
+      {"Reset Tool Layout", "恢复默认工具布局"},
+      {"Tool layout reset to default.", "已恢复默认工具布局。"},
       // ===== 模块页签 =====
       {"Part", "部件"},
       {"Property", "属性"},
@@ -78,6 +93,17 @@ const QHash<QString, QString>& zh_dict() {
       {"Plot Preview", "曲线预览"},
       {"Table Preview", "表格预览"},
       {"Current Module", "当前模块"},
+      {"Module:", "模块:"},
+      {"Project:", "项目:"},
+      {"Object:", "当前对象:"},
+      {"Untitled", "未命名"},
+      {"Unselected", "未选择"},
+      {"Select the active work module.", "选择当前工作模块。"},
+      {"Current project (read-only).", "当前项目（只读）。"},
+      {"Select the active object for the current module.",
+       "选择当前模块的活动对象。"},
+      {"No object selector is available in this context.",
+       "当前上下文没有可选择的对象。"},
       {"Add", "添加"},
       {"Duplicate", "复制"},
       {"Rename", "重命名"},
@@ -89,6 +115,11 @@ const QHash<QString, QString>& zh_dict() {
       {"Retry", "重试"},
       {"Open Log", "打开日志"},
       {"Open Result", "打开结果"},
+      {"Open Results Workspace", "打开结果工作窗"},
+      {"Refresh Results", "刷新结果"},
+      {"Open Visualization Workspace", "打开可视化工作窗"},
+      {"Open Module Workspace", "打开模块工作窗"},
+      {"Focus Viewport", "聚焦视口"},
       {"Apply", "应用"},
       {"Clear", "清除"},
       {"Pick", "拾取"},
@@ -214,6 +245,7 @@ const QHash<QString, QString>& zh_dict() {
       // ===== PropertyEditor =====
       {"General", "常规"},
       {"Parameters", "参数"},
+      {"Validation", "校验"},
       {"Preview", "预览"},
       {"Kind", "类型"},
       {"Status", "状态"},
@@ -232,6 +264,8 @@ const QHash<QString, QString>& zh_dict() {
       {"Go To Node", "跳转到节点"},
       {"Current Type Only", "仅当前类型"},
       {"Only With Issues", "仅显示问题项"},
+      {"Properties updated.", "属性已更新。"},
+      {"Select an editable model object first.", "请先选择可编辑的模型对象。"},
       // ===== GmshPanel =====
       {"Gmsh Panel", "Gmsh 面板"},
       {"Model", "模型"},
@@ -254,6 +288,7 @@ const QHash<QString, QString>& zh_dict() {
       {"Remove Object", "删除对象"},
       {"Remove Tool", "删除工具"},
       {"Physical Groups", "物理组"},
+      {"Groups & Fields", "分组与网格场"},
       {"Update Selected", "更新所选"},
       {"Delete Selected", "删除所选"},
       {"Mesh Fields", "网格场"},
@@ -274,7 +309,13 @@ const QHash<QString, QString>& zh_dict() {
       {"Export Geometry", "导出几何"},
       {"Use Sample Box", "使用示例盒"},
       // ===== MoosePanel =====
+      {"Jobs", "作业列表"},
+      {"MOOSE Setup", "MOOSE 设置"},
       {"MOOSE Panel", "MOOSE 面板"},
+      {"Case Setup", "算例设置"},
+      {"Execution", "执行配置"},
+      {"Input", "输入文件"},
+      {"Log", "运行日志"},
       {"Paths", "路径"},
       {"Executable", "可执行文件"},
       {"Input File", "输入文件"},
@@ -667,6 +708,12 @@ void translate_widget(QWidget* w, Language lang) {
         header->setText(i, translate_text(header->text(i), lang));
       }
     }
+  }
+  if (auto* dock = qobject_cast<QDockWidget*>(w)) {
+    dock->setWindowTitle(translate_text(dock->windowTitle(), lang));
+  }
+  if (auto* toolbar = qobject_cast<QToolBar*>(w)) {
+    toolbar->setWindowTitle(translate_text(toolbar->windowTitle(), lang));
   }
   if (auto* tabs = qobject_cast<QTabWidget*>(w)) {
     for (int i = 0; i < tabs->count(); ++i) {

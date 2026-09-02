@@ -7,6 +7,7 @@
 #include <QGroupBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QTabWidget>
 #include <QVBoxLayout>
 
 // WS3 实装: 部件特征面板 (拉伸/旋转/放样/扫掠)。
@@ -60,11 +61,15 @@ PartFeaturePanel::PartFeaturePanel(QWidget* parent) : QWidget(parent) {
   desc->setWordWrap(true);
   layout->addWidget(desc);
 
+  auto* feature_tabs = new QTabWidget(this);
+  feature_tabs->setObjectName("partFeatureTabs");
+  feature_tabs->setDocumentMode(true);
+
   // ---- 拉伸 ----
-  auto* extrude_group = new QGroupBox("Extrude", this);
+  auto* extrude_group = new QGroupBox(this);
   auto* extrude_form = new QFormLayout(extrude_group);
-  // 窄侧栏: 标签置于字段上方, 规避 Qt6 spinbox 最小宽度硬下限
-  extrude_form->setRowWrapPolicy(QFormLayout::WrapAllRows);
+  extrude_form->setRowWrapPolicy(QFormLayout::DontWrapRows);
+  extrude_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
   sketch_combo_ = new QComboBox(extrude_group);
   sketch_combo_->setToolTip("Profile sketch (also used by Revolve).");
   extrude_distance_ = make_spin(10.0, -1e6, 1e6, " mm", extrude_group);
@@ -75,12 +80,13 @@ PartFeaturePanel::PartFeaturePanel(QWidget* parent) : QWidget(parent) {
   extrude_form->addRow("Sketch:", sketch_combo_);
   extrude_form->addRow("Distance:", extrude_distance_);
   extrude_form->addRow(extrude_btn);
-  layout->addWidget(extrude_group);
+  feature_tabs->addTab(extrude_group, "Extrude");
 
   // ---- 旋转 ----
-  auto* revolve_group = new QGroupBox("Revolve", this);
+  auto* revolve_group = new QGroupBox(this);
   auto* revolve_form = new QFormLayout(revolve_group);
-  revolve_form->setRowWrapPolicy(QFormLayout::WrapAllRows);
+  revolve_form->setRowWrapPolicy(QFormLayout::DontWrapRows);
+  revolve_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
   revolve_angle_ = make_spin(90.0, -360.0, 360.0, " deg", revolve_group);
   auto* revolve_btn = new QPushButton("Revolve about Y axis", revolve_group);
   revolve_btn->setToolTip(
@@ -88,12 +94,13 @@ PartFeaturePanel::PartFeaturePanel(QWidget* parent) : QWidget(parent) {
       "must not intersect the axis.");
   revolve_form->addRow("Angle:", revolve_angle_);
   revolve_form->addRow(revolve_btn);
-  layout->addWidget(revolve_group);
+  feature_tabs->addTab(revolve_group, "Revolve");
 
   // ---- 放样 (v1: 固定两个截面) ----
-  auto* loft_group = new QGroupBox("Loft", this);
+  auto* loft_group = new QGroupBox(this);
   auto* loft_form = new QFormLayout(loft_group);
-  loft_form->setRowWrapPolicy(QFormLayout::WrapAllRows);
+  loft_form->setRowWrapPolicy(QFormLayout::DontWrapRows);
+  loft_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
   loft_first_ = new QComboBox(loft_group);
   loft_second_ = new QComboBox(loft_group);
   loft_z_ = make_spin(10.0, -1e6, 1e6, " mm", loft_group);
@@ -106,12 +113,13 @@ PartFeaturePanel::PartFeaturePanel(QWidget* parent) : QWidget(parent) {
   loft_form->addRow("Second section:", loft_second_);
   loft_form->addRow("Z lift:", loft_z_);
   loft_form->addRow(loft_btn);
-  layout->addWidget(loft_group);
+  feature_tabs->addTab(loft_group, "Loft");
 
   // ---- 扫掠 ----
-  auto* sweep_group = new QGroupBox("Sweep", this);
+  auto* sweep_group = new QGroupBox(this);
   auto* sweep_form = new QFormLayout(sweep_group);
-  sweep_form->setRowWrapPolicy(QFormLayout::WrapAllRows);
+  sweep_form->setRowWrapPolicy(QFormLayout::DontWrapRows);
+  sweep_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
   sweep_profile_ = new QComboBox(sweep_group);
   sweep_path_ = new QComboBox(sweep_group);
   sweep_path_->setToolTip(
@@ -120,9 +128,8 @@ PartFeaturePanel::PartFeaturePanel(QWidget* parent) : QWidget(parent) {
   sweep_form->addRow("Profile sketch:", sweep_profile_);
   sweep_form->addRow("Path sketch:", sweep_path_);
   sweep_form->addRow(sweep_btn);
-  layout->addWidget(sweep_group);
-
-  layout->addStretch(1);
+  feature_tabs->addTab(sweep_group, "Sweep");
+  layout->addWidget(feature_tabs);
 
   connect(extrude_btn, &QPushButton::clicked, this, [this] {
     const QString name = selected_sketch();
