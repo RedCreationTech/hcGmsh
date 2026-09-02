@@ -32,6 +32,7 @@ class PropertyEditor : public QWidget {
 
   static constexpr int kKindRole = Qt::UserRole + 1;
   static constexpr int kParamsRole = Qt::UserRole + 2;
+  static constexpr int kStatusRole = Qt::UserRole + 3;
 
  private slots:
   void on_name_changed(const QString& value);

@@ -23,6 +23,10 @@ bool looks_like_mesh(const QString& name) {
          lower.endsWith(".exo") || lower.endsWith(".xda");
 }
 
+QString normalized_snapshot_path(const QString& path) {
+  return QDir::fromNativeSeparators(QDir::cleanPath(path));
+}
+
 QString strip_quotes(const QString& token) {
   QString s = token.trimmed();
   if (s.size() >= 2 &&
@@ -75,6 +79,15 @@ QStringList scan_input_file_refs(const QString& input_text) {
   return refs;
 }
 
+bool is_safe_snapshot_relative_path(const QString& path) {
+  if (path.trimmed().isEmpty() || QFileInfo(path).isAbsolute()) {
+    return false;
+  }
+  const QString clean = normalized_snapshot_path(path);
+  return clean != QStringLiteral(".") && clean != QStringLiteral("..") &&
+         !clean.startsWith(QStringLiteral("../"));
+}
+
 SnapshotExportResult export_job_snapshot(const QString& dest_dir,
                                          const QString& input_text,
                                          const QString& input_file,
@@ -87,6 +100,11 @@ SnapshotExportResult export_job_snapshot(const QString& dest_dir,
     result.error = "empty destination directory or input file name";
     return result;
   }
+  if (!is_safe_snapshot_relative_path(input_file)) {
+    result.error = "input file must be a safe path relative to snapshot root: " +
+                   input_file;
+    return result;
+  }
   if (!QDir().mkpath(dest_dir)) {
     result.error = "failed to create destination directory: " + dest_dir;
     return result;
@@ -94,6 +112,11 @@ SnapshotExportResult export_job_snapshot(const QString& dest_dir,
 
   // 1. 写主输入文件
   const QString input_path = QDir(dest_dir).filePath(input_file);
+  if (!QDir().mkpath(QFileInfo(input_path).absolutePath())) {
+    result.error = "failed to create input file directory: " +
+                   QFileInfo(input_path).absolutePath();
+    return result;
+  }
   {
     QFile file(input_path);
     if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
@@ -112,6 +135,7 @@ SnapshotExportResult export_job_snapshot(const QString& dest_dir,
   // 2. 归类并复制引用文件（模板声明优先，其余按扩展名）
   QSet<QString> mesh_names;
   QSet<QString> extra_names;
+  QSet<QString> destination_names;
   QStringList refs = scan_input_file_refs(input_text);
   // template.json 中显式声明的文件即为快照合同的一部分。即使主输入不直接
   // 引用审计清单，也必须一并复制并进入 manifest.json。
@@ -138,7 +162,24 @@ SnapshotExportResult export_job_snapshot(const QString& dest_dir,
     }
 
     const QString base = QFileInfo(ref).fileName();
-    const QString dest = QDir(dest_dir).filePath(base);
+    const QString snapshot_name =
+        QFileInfo(ref).isAbsolute() ? base : normalized_snapshot_path(ref);
+    if (!is_safe_snapshot_relative_path(snapshot_name)) {
+      result.error = "unsafe referenced file path: " + ref;
+      return result;
+    }
+    if (destination_names.contains(snapshot_name)) {
+      result.error = "duplicate snapshot destination path: " + snapshot_name;
+      return result;
+    }
+    destination_names.insert(snapshot_name);
+
+    const QString dest = QDir(dest_dir).filePath(snapshot_name);
+    if (!QDir().mkpath(QFileInfo(dest).absolutePath())) {
+      result.error = "failed to create referenced file directory: " +
+                     QFileInfo(dest).absolutePath();
+      return result;
+    }
     if (QFileInfo::exists(dest)) {
       QFile::remove(dest);
     }
@@ -147,14 +188,20 @@ SnapshotExportResult export_job_snapshot(const QString& dest_dir,
       return result;
     }
 
-    const bool declared_mesh = tpl.valid && tpl.mesh_files.contains(base);
-    const bool declared_extra = tpl.valid && tpl.extra_files.contains(base);
+    const bool declared_mesh =
+        tpl.valid && (tpl.mesh_files.contains(ref) ||
+                      tpl.mesh_files.contains(snapshot_name) ||
+                      tpl.mesh_files.contains(base));
+    const bool declared_extra =
+        tpl.valid && (tpl.extra_files.contains(ref) ||
+                      tpl.extra_files.contains(snapshot_name) ||
+                      tpl.extra_files.contains(base));
     if (declared_extra) {
-      extra_names.insert(base);
-    } else if (declared_mesh || looks_like_mesh(base)) {
-      mesh_names.insert(base);
+      extra_names.insert(snapshot_name);
+    } else if (declared_mesh || looks_like_mesh(snapshot_name)) {
+      mesh_names.insert(snapshot_name);
     } else {
-      extra_names.insert(base);
+      extra_names.insert(snapshot_name);
     }
   }
   result.mesh_files = mesh_names.values();
@@ -192,6 +239,7 @@ SnapshotExportResult export_job_snapshot(const QString& dest_dir,
   QJsonObject snapshot;
   snapshot.insert("input_file", input_file);
   snapshot.insert("input_sha256", result.input_sha256);
+  snapshot.insert("input_role", "input_config");
   QJsonArray mesh_arr;
   for (const auto& name : result.mesh_files) {
     bool ok = false;
@@ -244,11 +292,62 @@ SnapshotExportResult export_job_snapshot_v2(const QString& dest_dir,
                                             const QString& input_file,
                                             const MooseTemplateInfo& tpl,
                                             const SnapshotExportConfig& cfg) {
+  SnapshotExportResult rejected;
+  rejected.dir = dest_dir;
+  rejected.input_file = input_file;
+  if (QFileInfo::exists(dest_dir)) {
+    rejected.error = "snapshot destination already exists; create a new version: " +
+                     dest_dir;
+    return rejected;
+  }
+  if (!is_safe_snapshot_relative_path(input_file)) {
+    rejected.error = "input file must be a safe path relative to snapshot root: " +
+                     input_file;
+    return rejected;
+  }
+  const QSet<QString> allowed_modes = {"structured", "expert", "manual"};
+  if (!allowed_modes.contains(cfg.input_mode)) {
+    rejected.error = "invalid input_mode: " + cfg.input_mode;
+    return rejected;
+  }
+  if (cfg.case_id.trimmed().isEmpty()) {
+    rejected.error = "case_id is required by snapshot contract v2";
+    return rejected;
+  }
+  if (!cfg.profile.valid || cfg.profile.id.trimmed().isEmpty() ||
+      cfg.profile.mapping_version.trimmed().isEmpty()) {
+    rejected.error =
+        "a valid application profile and mapping version are required";
+    return rejected;
+  }
+  if (!cfg.physical_groups.is_valid()) {
+    rejected.error = "physical group manifest is invalid";
+    return rejected;
+  }
+  for (const QString& ref : scan_input_file_refs(input_text)) {
+    if (!is_safe_snapshot_relative_path(ref)) {
+      rejected.error = "snapshot v2 requires relative in-root file references: " +
+                       ref;
+      return rejected;
+    }
+  }
+
   // v2 入口复用 v1 的文件复制与哈希逻辑，再组装 v2 manifest。
   SnapshotExportResult result =
       export_job_snapshot(dest_dir, input_text, input_file, tpl);
   if (!result.ok) {
     return result;
+  }
+  auto fail_created_snapshot = [&result, &dest_dir](const QString& error) {
+    result.ok = false;
+    result.error = error;
+    // dest_dir 在函数入口已确认不存在，因此这里只清理由本次调用创建的目录。
+    QDir(dest_dir).removeRecursively();
+    return result;
+  };
+  if (!result.missing_files.isEmpty()) {
+    return fail_created_snapshot("missing snapshot input files: " +
+                                 result.missing_files.join(", "));
   }
 
   // 构建 v2 manifest（覆盖 v1 生成的 manifest）。
@@ -304,14 +403,32 @@ SnapshotExportResult export_job_snapshot_v2(const QString& dest_dir,
   QJsonObject snapshot;
   snapshot.insert("input_file", input_file);
   snapshot.insert("input_sha256", result.input_sha256);
+  snapshot.insert("input_role", "input_config");
   QJsonArray mesh_arr;
   for (const auto& name : result.mesh_files) {
     bool ok = false;
     const QString sha = sha256_file_hex(QDir(dest_dir).filePath(name), &ok);
+    if (!ok) {
+      return fail_created_snapshot("failed to hash mesh/input file: " + name);
+    }
     QJsonObject entry;
     entry.insert("name", name);
     entry.insert("sha256", ok ? sha : QString());
-    entry.insert("role", "input_mesh");
+    QString role = cfg.file_roles.value(name);
+    if (role.isEmpty() && name.toLower().endsWith(".e")) {
+      return fail_created_snapshot(
+          "Exodus input requires an explicit file role: " + name);
+    }
+    if (role.isEmpty()) {
+      role = "input_mesh";
+    }
+    const QSet<QString> mesh_roles = {"input_mesh", "initial_state",
+                                     "restart_data"};
+    if (!mesh_roles.contains(role)) {
+      return fail_created_snapshot("invalid mesh/input file role for " + name +
+                                   ": " + role);
+    }
+    entry.insert("role", role);
     mesh_arr.append(entry);
   }
   snapshot.insert("mesh_files", mesh_arr);
@@ -319,10 +436,20 @@ SnapshotExportResult export_job_snapshot_v2(const QString& dest_dir,
   for (const auto& name : result.extra_files) {
     bool ok = false;
     const QString sha = sha256_file_hex(QDir(dest_dir).filePath(name), &ok);
+    if (!ok) {
+      return fail_created_snapshot("failed to hash extra file: " + name);
+    }
     QJsonObject entry;
     entry.insert("name", name);
     entry.insert("sha256", ok ? sha : QString());
-    entry.insert("role", "extra");
+    const QString role = cfg.file_roles.value(name, "extra");
+    const QSet<QString> extra_roles = {"extra", "project_snapshot",
+                                      "generation_report", "physical_groups"};
+    if (!extra_roles.contains(role)) {
+      return fail_created_snapshot("invalid extra file role for " + name +
+                                   ": " + role);
+    }
+    entry.insert("role", role);
     extra_arr.append(entry);
   }
   snapshot.insert("extra_files", extra_arr);

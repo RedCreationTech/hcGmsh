@@ -99,6 +99,8 @@ add_executable(gmp_ise
   include/gmp/ApplicationProfile.h
   src/PhysicalGroupManifest.cpp
   include/gmp/PhysicalGroupManifest.h
+  src/ProjectSchema.cpp
+  include/gmp/ProjectSchema.h
   src/SimClient.cpp
   src/ArtifactDialog.cpp
   include/gmp/MooseTemplates.h
@@ -166,6 +168,7 @@ add_executable(gmp_ise_phase0_test tests/test_phase0.cpp
   src/MooseSnapshot.cpp include/gmp/MooseSnapshot.h
   src/MooseTemplates.cpp include/gmp/MooseTemplates.h
   src/PhysicalGroupManifest.cpp include/gmp/PhysicalGroupManifest.h
+  src/ProjectSchema.cpp include/gmp/ProjectSchema.h
   src/Env.cpp include/gmp/Env.h
 )
 target_include_directories(gmp_ise_phase0_test PRIVATE include)
@@ -173,3 +176,8 @@ target_link_libraries(gmp_ise_phase0_test PRIVATE Qt6::Core Qt6::Network yaml-cp
 target_compile_definitions(gmp_ise_phase0_test PRIVATE
   GMP_TEMPLATE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates/moose"
   GMP_PROFILE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates/moose/profiles")
+
+enable_testing()
+add_test(NAME gmp_ise_phase0 COMMAND gmp_ise_phase0_test)
+set_tests_properties(gmp_ise_phase0 PROPERTIES
+  WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")

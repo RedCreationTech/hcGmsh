@@ -3,10 +3,13 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonParseError>
 #include <QJsonValue>
+#include <QSet>
 
 namespace gmp {
 
@@ -54,6 +57,7 @@ void ApplicationProfileRegistry::set_root(const QString& root_dir) {
 bool ApplicationProfileRegistry::reload() {
   profiles_.clear();
   last_error_.clear();
+  QStringList errors;
 
   if (root_dir_.isEmpty() || !QDir(root_dir_).exists()) {
     last_error_ = QStringLiteral("Application profile root not found: %1").arg(root_dir_);
@@ -66,12 +70,15 @@ bool ApplicationProfileRegistry::reload() {
     const QString path = QDir(root_dir_).filePath(file);
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) {
+      errors.append(QStringLiteral("Cannot read profile: %1").arg(file));
       continue;
     }
     const QByteArray data = f.readAll();
-    const QJsonDocument doc = QJsonDocument::fromJson(data);
+    QJsonParseError parse_error;
+    const QJsonDocument doc = QJsonDocument::fromJson(data, &parse_error);
     if (!doc.isObject()) {
-      last_error_ = QStringLiteral("Invalid JSON in profile: %1").arg(file);
+      errors.append(QStringLiteral("Invalid JSON in profile %1: %2")
+                        .arg(file, parse_error.errorString()));
       continue;
     }
     const QJsonObject obj = doc.object();
@@ -93,7 +100,6 @@ bool ApplicationProfileRegistry::reload() {
     profile.support_level = json_string_or(obj, "support_level", profile.status);
     profile.unit_contract = json_to_string_map(obj.value("unit_contract").toObject());
     profile.raw = obj;
-    profile.valid = true;
 
     const QJsonArray physics_arr = obj.value("physics").toArray();
     for (const QJsonValue& pv : physics_arr) {
@@ -119,13 +125,97 @@ bool ApplicationProfileRegistry::reload() {
       profile.physics.append(physics);
     }
 
-    if (profile.id.isEmpty()) {
-      last_error_ = QStringLiteral("Profile missing 'id': %1").arg(file);
+    QStringList profile_errors;
+    if (profile.id.trimmed().isEmpty()) {
+      profile_errors.append(QStringLiteral("missing id"));
+    }
+    if (profiles_.contains(profile.id)) {
+      profile_errors.append(QStringLiteral("duplicate id"));
+    }
+    static const QSet<QString> allowed_status = {
+        QStringLiteral("production"), QStringLiteral("prototype"),
+        QStringLiteral("unsupported")};
+    if (!allowed_status.contains(profile.status)) {
+      profile_errors.append(QStringLiteral("invalid status '%1'").arg(profile.status));
+    }
+    if (!allowed_status.contains(profile.support_level)) {
+      profile_errors.append(
+          QStringLiteral("invalid support_level '%1'").arg(profile.support_level));
+    }
+    if (profile.status == QStringLiteral("production") &&
+        profile.support_level != QStringLiteral("production")) {
+      profile_errors.append(QStringLiteral(
+          "production status requires production support_level"));
+    }
+    if (profile.solver_program.trimmed().isEmpty()) {
+      profile_errors.append(QStringLiteral("missing solver_program"));
+    }
+    if (profile.physics.isEmpty()) {
+      profile_errors.append(QStringLiteral("physics list is empty"));
+    }
+    QSet<QString> physics_ids;
+    for (const auto& physics : profile.physics) {
+      if (physics.id.trimmed().isEmpty() || physics_ids.contains(physics.id)) {
+        profile_errors.append(QStringLiteral("physics ids must be non-empty and unique"));
+      }
+      physics_ids.insert(physics.id);
+      if (physics.dimensions.isEmpty() || physics.supported_blocks.isEmpty()) {
+        profile_errors.append(
+            QStringLiteral("physics '%1' has empty dimensions or supported_blocks")
+                .arg(physics.id));
+      }
+      for (int dim : physics.dimensions) {
+        if (dim < 1 || dim > 3) {
+          profile_errors.append(
+              QStringLiteral("physics '%1' has invalid dimension %2")
+                  .arg(physics.id)
+                  .arg(dim));
+        }
+      }
+    }
+    const QStringList required_units = {"name", "length", "force", "time",
+                                        "mass", "pressure", "temperature"};
+    for (const QString& key : required_units) {
+      if (profile.unit_contract.value(key).trimmed().isEmpty()) {
+        profile_errors.append(
+            QStringLiteral("unit_contract is missing '%1'").arg(key));
+      }
+    }
+    if (profile.mapping_registry_path.trimmed().isEmpty() ||
+        profile.mapping_version.trimmed().isEmpty()) {
+      profile_errors.append(QStringLiteral("mapping registry path/version is required"));
+    } else {
+      const QString mapping_path =
+          QFileInfo(QDir(root_dir_).filePath(profile.mapping_registry_path))
+              .absoluteFilePath();
+      QFile mapping_file(mapping_path);
+      if (!mapping_file.open(QIODevice::ReadOnly)) {
+        profile_errors.append(
+            QStringLiteral("mapping registry not found: %1")
+                .arg(profile.mapping_registry_path));
+      } else {
+        const QJsonDocument mapping_doc = QJsonDocument::fromJson(mapping_file.readAll());
+        const QString actual_version =
+            mapping_doc.isObject()
+                ? mapping_doc.object().value("version").toString()
+                : QString();
+        if (actual_version != profile.mapping_version) {
+          profile_errors.append(
+              QStringLiteral("mapping version mismatch: expected %1, got %2")
+                  .arg(profile.mapping_version, actual_version));
+        }
+      }
+    }
+    if (!profile_errors.isEmpty()) {
+      errors.append(QStringLiteral("Invalid profile %1: %2")
+                        .arg(file, profile_errors.join(", ")));
       continue;
     }
+    profile.valid = true;
     profiles_.insert(profile.id, profile);
   }
 
+  last_error_ = errors.join(QStringLiteral("; "));
   return !profiles_.isEmpty();
 }
 

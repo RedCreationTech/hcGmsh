@@ -18,7 +18,8 @@ struct PhysicalGroupEntry {
   QStringList bound_object_ids; // 引用此组的对象 ID（可选）
 
   bool is_valid() const {
-    return !name.isEmpty() && dim >= 0 && dim <= 3 && !tags.isEmpty();
+    return !name.trimmed().isEmpty() && dim >= 0 && dim <= 3 &&
+           !tags.isEmpty() && entity_count > 0 && element_count > 0;
   }
 
   QVariantMap to_variant_map() const;

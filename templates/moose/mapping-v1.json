@@ -28,6 +28,16 @@
         }
       }
     },
+    "GlobalParams": {
+      "description": "跨 block 共享的全局参数",
+      "objects": {
+        "GlobalParams": {
+          "required_params": [],
+          "optional_params": [],
+          "param_schema": {}
+        }
+      }
+    },
     "Variables": {
       "description": "主变量",
       "objects": {

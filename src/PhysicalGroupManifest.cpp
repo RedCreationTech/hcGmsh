@@ -1,6 +1,10 @@
 #include "gmp/PhysicalGroupManifest.h"
 
 #include <QMap>
+#include <QDir>
+#include <QFileInfo>
+#include <QRegularExpression>
+#include <QSet>
 #include <QStringList>
 
 namespace gmp {
@@ -55,11 +59,11 @@ PhysicalGroupEntry PhysicalGroupEntry::from_variant_map(const QVariantMap& map) 
 }
 
 bool PhysicalGroupManifest::is_valid() const {
-  if (mesh_dim < 1 || mesh_dim > 3) {
-    return false;
-  }
-  if (mesh_path.isEmpty() || mesh_sha256.isEmpty()) {
-    return false;
+  const auto issues = validate();
+  for (const auto& issue : issues) {
+    if (issue.severity == QStringLiteral("error")) {
+      return false;
+    }
   }
   return true;
 }
@@ -139,9 +143,22 @@ QList<PhysicalGroupManifest::ValidationIssue> PhysicalGroupManifest::validate() 
 
   if (mesh_path.isEmpty()) {
     issues.append({"error", "mesh_path is empty", QString()});
+  } else {
+    const QString clean = QDir::cleanPath(mesh_path);
+    if (QFileInfo(mesh_path).isAbsolute() || clean == QStringLiteral("..") ||
+        clean.startsWith(QStringLiteral("../"))) {
+      issues.append({"error", "mesh_path must be relative to the project/snapshot root",
+                     QString()});
+    }
   }
   if (mesh_sha256.isEmpty()) {
     issues.append({"error", "mesh_sha256 is empty", QString()});
+  } else {
+    static const QRegularExpression sha256_re(QStringLiteral("^[0-9a-fA-F]{64}$"));
+    if (!sha256_re.match(mesh_sha256).hasMatch()) {
+      issues.append({"error", "mesh_sha256 must contain 64 hexadecimal characters",
+                     QString()});
+    }
   }
   if (mesh_dim < 1 || mesh_dim > 3) {
     issues.append({"error", "mesh_dim must be 1, 2 or 3", QString()});
@@ -159,12 +176,30 @@ QList<PhysicalGroupManifest::ValidationIssue> PhysicalGroupManifest::validate() 
     }
     if (g.dim < 0 || g.dim > 3) {
       issues.append({"error", "Physical group dimension out of range", g.name});
+    } else if (mesh_dim >= 1 && g.dim > mesh_dim) {
+      issues.append({"error", "Physical group dimension exceeds mesh dimension",
+                     g.name});
     }
     if (g.tags.isEmpty()) {
       issues.append({"error", "Physical group has no entity tags", g.name});
+    } else {
+      QSet<int> seen_tags;
+      for (int tag : g.tags) {
+        if (tag <= 0) {
+          issues.append({"error", "Physical group contains a non-positive entity tag",
+                         g.name});
+        } else if (seen_tags.contains(tag)) {
+          issues.append({"error", "Physical group contains duplicate entity tags",
+                         g.name});
+        }
+        seen_tags.insert(tag);
+      }
     }
-    if (g.entity_count <= 0 || g.element_count < 0) {
-      issues.append({"warning", "Physical group may be empty", g.name});
+    if (g.entity_count <= 0) {
+      issues.append({"error", "Physical group contains no entities", g.name});
+    }
+    if (g.element_count <= 0) {
+      issues.append({"error", "Physical group contains no mesh elements", g.name});
     }
 
     const QString key = QString("%1:%2").arg(g.dim).arg(g.name);

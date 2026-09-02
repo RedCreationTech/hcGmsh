@@ -1,6 +1,7 @@
 /build/
 /out/
 *.gmp.yaml
+!tests/fixtures/*.gmp.yaml
 /build-windows/
 /dist-windows/
 *.zip

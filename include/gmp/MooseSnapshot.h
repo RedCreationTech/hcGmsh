@@ -25,6 +25,7 @@ struct SnapshotExportConfig {
   QString recommended_command;
   ApplicationProfile profile;
   QMap<QString, double> unit_factors;  // 显示 -> 求解单位比例因子
+  QMap<QString, QString> file_roles;   // 相对路径 -> input_mesh/initial_state/...
   PhysicalGroupManifest physical_groups;
   QVariantMap extra;  // 扩展字段
 };
@@ -48,6 +49,9 @@ QString sha256_file_hex(const QString& path, bool* ok);
 // 扫描 .i 文本中引用的外部文件（file = / data_file = / nodal_mass_file = 等），
 // 按出现顺序返回原始引用串（未去重、未解析路径）。
 QStringList scan_input_file_refs(const QString& input_text);
+
+// 路径必须位于快照根目录内；拒绝绝对路径、空路径和 .. 穿越。
+bool is_safe_snapshot_relative_path(const QString& path);
 
 // 导出任务快照到 dest_dir（v1 兼容入口）：
 //   1. 写 <input_file>（编辑区当前内容，UTF-8）；

@@ -61,6 +61,7 @@
 #include "gmp/OccBridge.h"
 #include "gmp/PartFeaturePanel.h"
 #include "gmp/PropertyEditor.h"
+#include "gmp/ProjectSchema.h"
 #include "gmp/SketchDocument.h"
 #include "gmp/SketchPanel.h"
 #include "gmp/VtkViewer.h"
@@ -2592,6 +2593,11 @@ void MainWindow::build_menu() {
 
   connect(action_new_, &QAction::triggered, this, [this]() {
     project_path_.clear();
+    schema_version_ = project_schema::kCurrentVersion;
+    application_profile_.clear();
+    unit_contract_.clear();
+    mesh_snapshot_ = PhysicalGroupManifest();
+    input_snapshots_.clear();
     clear_model_tree_children();
     refresh_job_table();
     property_editor_->set_item(nullptr);
@@ -2608,9 +2614,10 @@ void MainWindow::build_menu() {
     if (path.isEmpty()) {
       return;
     }
-    load_project(path);
-    statusBar()->showMessage("Project loaded.", 2000);
-    refresh_module_pages();
+    if (load_project(path)) {
+      statusBar()->showMessage("Project loaded.", 2000);
+      refresh_module_pages();
+    }
   });
   connect(action_save_, &QAction::triggered, this, [this]() {
     if (project_path_.isEmpty()) {
@@ -3006,23 +3013,7 @@ QToolTip {
 }
 
 void MainWindow::build_model_tree() {
-  const QStringList root_nodes = {
-      "Parts",
-      "Sketches",
-      "Features",
-      "Datums",
-      "Materials",
-      "Sections",
-      "Steps",
-      "BC",
-      "Loads",
-      "Interactions",
-      "Functions",
-      "Variables",
-      "Outputs",
-      "Mesh",
-      "Jobs",
-      "Results"};
+  const QStringList root_nodes = project_schema::model_root_nodes();
   for (const auto& name : root_nodes) {
     auto* item = new QTreeWidgetItem(model_tree_);
     item->setText(0, name);
@@ -4243,87 +4234,43 @@ void MainWindow::update_job_detail(int row) {
   job_detail_->setPlainText(lines.join("\n"));
 }
 
-void MainWindow::load_project(const QString& path) {
+bool MainWindow::load_project(const QString& path) {
   try {
     suppress_dirty_ = true;
     YAML::Node root = YAML::LoadFile(path.toStdString());
 
     // Phase 0：schema 版本识别与兼容
-    schema_version_ = 2;
+    int loaded_schema_version = project_schema::kCurrentVersion;
     if (root["schema_version"] && root["schema_version"].IsScalar()) {
-      schema_version_ = root["schema_version"].as<int>();
+      loaded_schema_version = root["schema_version"].as<int>();
     } else if (root["version"] && root["version"].IsScalar()) {
       const int old_version = root["version"].as<int>();
       if (old_version > 2) {
         QMessageBox::warning(this, "Project Load",
                              "Unsupported project version.");
         suppress_dirty_ = false;
-        return;
+        return false;
       }
-      schema_version_ = 2;  // 从 v1 迁移到 v2 内存模型
+      loaded_schema_version = project_schema::kCurrentVersion;
     }
-    if (schema_version_ > 2) {
+    if (loaded_schema_version < 1 ||
+        loaded_schema_version > project_schema::kCurrentVersion) {
       QMessageBox::warning(this, "Project Load",
-                           QString("Unsupported schema version: %1").arg(schema_version_));
+                           QString("Unsupported schema version: %1")
+                               .arg(loaded_schema_version));
       suppress_dirty_ = false;
-      return;
+      return false;
     }
 
     // 读取应用档案与单位合同
-    application_profile_.clear();
-    if (root["application_profile"] && root["application_profile"].IsMap()) {
-      for (const auto& it : root["application_profile"]) {
-        const QString key = QString::fromStdString(it.first.as<std::string>());
-        const QString value = QString::fromStdString(it.second.as<std::string>());
-        application_profile_.insert(key, value);
-      }
-    }
-
-    unit_contract_.clear();
-    if (root["unit_contract"] && root["unit_contract"].IsMap()) {
-      for (const auto& it : root["unit_contract"]) {
-        const QString key = QString::fromStdString(it.first.as<std::string>());
-        const QString value = QString::fromStdString(it.second.as<std::string>());
-        unit_contract_.insert(key, value);
-      }
-    }
+    const QVariantMap loaded_application_profile =
+        project_schema::yaml_map_to_variant_map(root["application_profile"]);
+    const QVariantMap loaded_unit_contract =
+        project_schema::yaml_map_to_variant_map(root["unit_contract"]);
 
     // 读取网格快照
-    mesh_snapshot_ = PhysicalGroupManifest();
-    if (root["mesh_snapshot"] && root["mesh_snapshot"].IsMap()) {
-      const YAML::Node& ms = root["mesh_snapshot"];
-      mesh_snapshot_.mesh_path = QString::fromStdString(
-          ms["path"].as<std::string>(""));
-      mesh_snapshot_.mesh_sha256 = QString::fromStdString(
-          ms["sha256"].as<std::string>(""));
-      mesh_snapshot_.mesh_dim = ms["mesh_dim"].as<int>(-1);
-      mesh_snapshot_.node_count = ms["node_count"].as<int>(0);
-      mesh_snapshot_.element_count = ms["element_count"].as<int>(0);
-      mesh_snapshot_.element_type = QString::fromStdString(
-          ms["element_type"].as<std::string>(""));
-      if (ms["physical_groups"] && ms["physical_groups"].IsSequence()) {
-        for (const auto& pg : ms["physical_groups"]) {
-          PhysicalGroupEntry entry;
-          entry.name = QString::fromStdString(pg["name"].as<std::string>(""));
-          entry.dim = pg["dim"].as<int>(-1);
-          if (pg["tags"] && pg["tags"].IsSequence()) {
-            for (const auto& t : pg["tags"]) {
-              entry.tags.append(t.as<int>(0));
-            }
-          }
-          entry.entity_count = pg["entity_count"].as<int>(0);
-          entry.element_count = pg["element_count"].as<int>(0);
-          mesh_snapshot_.groups.append(entry);
-        }
-      }
-      if (ms["quality_summary"] && ms["quality_summary"].IsMap()) {
-        for (const auto& q : ms["quality_summary"]) {
-          const QString key = QString::fromStdString(q.first.as<std::string>());
-          const double value = q.second.as<double>(0.0);
-          mesh_snapshot_.quality_summary.insert(key, value);
-        }
-      }
-    }
+    const PhysicalGroupManifest loaded_mesh_snapshot =
+        project_schema::mesh_snapshot_from_yaml(root["mesh_snapshot"]);
 
     auto parse_map = [](const YAML::Node& node,
                         const QSet<QString>& force_string) {
@@ -4369,7 +4316,7 @@ void MainWindow::load_project(const QString& path) {
       suppress_dirty_ = false;
       QMessageBox::warning(this, "Project Load",
                            "Invalid project file (missing model).");
-      return;
+      return false;
     }
     clear_model_tree_children();
     for (const auto& it : model) {
@@ -4391,17 +4338,12 @@ void MainWindow::load_project(const QString& path) {
         auto* child = new QTreeWidgetItem(root_item);
         child->setText(0, name);
         child->setData(0, PropertyEditor::kKindRole, kind);
-        QVariantMap params;
-        const YAML::Node param_node = entry["params"];
-        if (param_node && param_node.IsMap()) {
-          for (const auto& p : param_node) {
-            const QString key =
-                QString::fromStdString(p.first.as<std::string>());
-            const QString value =
-                QString::fromStdString(p.second.as<std::string>());
-            params.insert(key, value);
-          }
-        }
+        QVariantMap params =
+            project_schema::yaml_map_to_variant_map(entry["params"]);
+        const QString status = QString::fromStdString(
+            entry["status"].as<std::string>(params.value("status").toString()
+                                                .toStdString()));
+        child->setData(0, PropertyEditor::kStatusRole, status);
         child->setData(0, PropertyEditor::kParamsRole,
                        normalize_params_for_kind(kind, params));
       }
@@ -4438,6 +4380,10 @@ void MainWindow::load_project(const QString& path) {
       const QVariantMap viewer_settings = parse_map(viewer_node, force_string);
       viewer_->apply_viewer_settings(viewer_settings);
     }
+    schema_version_ = loaded_schema_version;
+    application_profile_ = loaded_application_profile;
+    unit_contract_ = loaded_unit_contract;
+    mesh_snapshot_ = loaded_mesh_snapshot;
     suppress_dirty_ = false;
     refresh_job_table();
     refresh_results_panel();
@@ -4445,10 +4391,12 @@ void MainWindow::load_project(const QString& path) {
     add_recent_project(path);
     set_project_dirty(false);
     update_project_status();
+    return true;
   } catch (const std::exception& e) {
     suppress_dirty_ = false;
     QMessageBox::warning(this, "Project Load",
                          QString("Failed to load: %1").arg(e.what()));
+    return false;
   }
 }
 
@@ -4461,54 +4409,14 @@ bool MainWindow::save_project(const QString& path) {
         QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
 
     // Phase 0：写入应用档案与单位合同
-    if (!application_profile_.isEmpty()) {
-      YAML::Node app_node(YAML::NodeType::Map);
-      for (auto it = application_profile_.begin(); it != application_profile_.end(); ++it) {
-        app_node[it.key().toStdString()] = it.value().toString().toStdString();
-      }
-      root["application_profile"] = app_node;
-    }
-
-    if (!unit_contract_.isEmpty()) {
-      YAML::Node unit_node(YAML::NodeType::Map);
-      for (auto it = unit_contract_.begin(); it != unit_contract_.end(); ++it) {
-        unit_node[it.key().toStdString()] = it.value().toString().toStdString();
-      }
-      root["unit_contract"] = unit_node;
-    }
+    root["application_profile"] =
+        project_schema::variant_map_to_yaml(application_profile_);
+    root["unit_contract"] =
+        project_schema::variant_map_to_yaml(unit_contract_);
 
     // Phase 0：写入网格快照
-    if (mesh_snapshot_.is_valid()) {
-      YAML::Node ms_node(YAML::NodeType::Map);
-      ms_node["path"] = mesh_snapshot_.mesh_path.toStdString();
-      ms_node["sha256"] = mesh_snapshot_.mesh_sha256.toStdString();
-      ms_node["mesh_dim"] = mesh_snapshot_.mesh_dim;
-      ms_node["node_count"] = mesh_snapshot_.node_count;
-      ms_node["element_count"] = mesh_snapshot_.element_count;
-      ms_node["element_type"] = mesh_snapshot_.element_type.toStdString();
-      YAML::Node pg_list(YAML::NodeType::Sequence);
-      for (const auto& g : mesh_snapshot_.groups) {
-        YAML::Node pg(YAML::NodeType::Map);
-        pg["name"] = g.name.toStdString();
-        pg["dim"] = g.dim;
-        YAML::Node tags(YAML::NodeType::Sequence);
-        for (int t : g.tags) {
-          tags.push_back(t);
-        }
-        pg["tags"] = tags;
-        pg["entity_count"] = g.entity_count;
-        pg["element_count"] = g.element_count;
-        pg_list.push_back(pg);
-      }
-      ms_node["physical_groups"] = pg_list;
-      YAML::Node quality(YAML::NodeType::Map);
-      for (auto it = mesh_snapshot_.quality_summary.begin();
-           it != mesh_snapshot_.quality_summary.end(); ++it) {
-        quality[it.key().toStdString()] = it.value();
-      }
-      ms_node["quality_summary"] = quality;
-      root["mesh_snapshot"] = ms_node;
-    }
+    root["mesh_snapshot"] =
+        project_schema::mesh_snapshot_to_yaml(mesh_snapshot_);
 
     YAML::Node model(YAML::NodeType::Map);
     for (int i = 0; i < model_tree_->topLevelItemCount(); ++i) {
@@ -4525,14 +4433,15 @@ bool MainWindow::save_project(const QString& path) {
         YAML::Node entry;
         entry["name"] = child->text(0).toStdString();
         entry["kind"] = root_item->text(0).toStdString();
-        YAML::Node params(YAML::NodeType::Map);
         const QVariantMap map =
             child->data(0, PropertyEditor::kParamsRole).toMap();
-        for (auto it = map.begin(); it != map.end(); ++it) {
-          params[it.key().toStdString()] =
-              it.value().toString().toStdString();
+        QString status =
+            child->data(0, PropertyEditor::kStatusRole).toString();
+        if (status.isEmpty()) {
+          status = map.value("status").toString();
         }
-        entry["params"] = params;
+        entry["status"] = status.toStdString();
+        entry["params"] = project_schema::variant_map_to_yaml(map);
         list.push_back(entry);
       }
       model[root_item->text(0).toStdString()] = list;
@@ -4688,8 +4597,9 @@ void MainWindow::update_recent_menu() {
       if (path.isEmpty()) {
         return;
       }
-      load_project(path);
-      statusBar()->showMessage("Project loaded.", 2000);
+      if (load_project(path)) {
+        statusBar()->showMessage("Project loaded.", 2000);
+      }
     });
   }
   recent_menu_->addSeparator();

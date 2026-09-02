@@ -1,0 +1,77 @@
+schema_version: 2
+saved_at: "2026-09-02T10:00:00Z"
+
+application_profile:
+  profile_id: DamSafetyApp-opt
+  profile_version: 1.0.0
+  mapping_version: 1.0.0
+  solver_program: DamSafetyApp-opt
+
+unit_contract:
+  name: SI
+  length: m
+  force: N
+  time: s
+  mass: kg
+  pressure: Pa
+  temperature: K
+  display_to_solver_factors:
+    length: 0.001
+    force: 1.0
+    pressure: 1000000.0
+
+model:
+  Parts:
+    - name: concrete-cube
+      kind: Parts
+      status: ready
+      params:
+        source: contract-fixture
+  Assembly:
+    - name: assembly-1
+      kind: Assembly
+      status: ready
+      params:
+        instance_count: 1
+  Physics:
+    - name: solid-mechanics
+      kind: Physics
+      status: incomplete
+      params:
+        type: small_strain_solid
+  Constraints:
+    - name: coupling-1
+      kind: Constraints
+      status: disabled
+      params:
+        type: CoupledDirichletBC
+  Selections:
+    - name: bottom
+      kind: Selections
+      status: ready
+      params:
+        dimension: 2
+
+mesh_snapshot:
+  path: mesh/case.msh
+  sha256: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+  physical_groups:
+    - name: concrete
+      dim: 3
+      tags: [1]
+      entity_count: 1
+      element_count: 1
+      bound_object_ids: [solid-mechanics]
+  summary:
+    mesh_dim: 3
+    node_count: 8
+    element_count: 1
+    element_type: HEX8
+    quality_min: 0.8
+    quality_max: 1.0
+    quality_avg: 0.9
+
+gmsh: {}
+moose:
+  input_snapshots: []
+viewer: {}

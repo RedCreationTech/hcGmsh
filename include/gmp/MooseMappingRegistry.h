@@ -55,6 +55,7 @@ class MooseMappingRegistry {
   QStringList order_;
   QString version_;
   QString last_error_;
+  bool loaded_ = false;
 };
 
 }  // namespace gmp

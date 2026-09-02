@@ -61,7 +61,7 @@ class MainWindow : public QMainWindow {
   void add_item_under_root(QTreeWidgetItem* root);
   void remove_item(QTreeWidgetItem* item);
   void duplicate_item(QTreeWidgetItem* item);
-  void load_project(const QString& path);
+  bool load_project(const QString& path);
   bool save_project(const QString& path);
   void set_project_dirty(bool dirty);
   void update_window_title();

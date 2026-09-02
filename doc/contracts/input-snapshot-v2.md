@@ -29,6 +29,11 @@ case-20260902-100000/
 
 所有相对文件引用在快照根目录下可解析。
 
+- 主 `.i` 和所有引用文件必须使用快照根目录内的相对路径；绝对路径、空路径和 `..` 穿越直接拒绝。
+- 保留引用文件的相对子目录结构，不把不同目录文件压平到同一 basename。
+- 目标快照目录已存在时拒绝写入；再次生成必须使用新的版本目录，旧快照内容保持不变。
+- 任一必需引用文件缺失时整个快照生成失败，不得产出“成功但 `mesh_files` 为空”的 manifest。
+
 ---
 
 ## 3. manifest.json 字段
@@ -74,6 +79,7 @@ case-20260902-100000/
   "input_snapshot": {
     "input_file": "case.i",
     "input_sha256": "...",
+    "input_role": "input_config",
     "mesh_files": [
       { "name": "case.msh", "sha256": "...", "role": "input_mesh" }
     ],
@@ -131,6 +137,8 @@ case-20260902-100000/
 | `project_snapshot` | 只读项目快照 |
 | `generation_report` | 生成报告 |
 | `physical_groups` | Physical Groups 清单 |
+
+`.e` 默认视为计算结果，不按扩展名自动作为普通输入。只有显式导入 Exodus 网格或多阶段初始化/重启场景，且 manifest 明确标记为 `input_mesh`、`initial_state` 或 `restart_data` 时，才允许进入输入快照。
 
 ---
 

@@ -1,0 +1,6 @@
+schema_version: 3
+model:
+  Parts:
+    - name: must-not-load
+      kind: Parts
+      params: {}

@@ -6,6 +6,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
+#include <QSet>
 
 namespace gmp {
 
@@ -20,6 +22,7 @@ bool MooseMappingRegistry::load(const QString& file_path) {
   order_.clear();
   last_error_.clear();
   version_.clear();
+  loaded_ = false;
   file_path_ = file_path;
 
   QFile file(file_path);
@@ -35,27 +38,78 @@ bool MooseMappingRegistry::load(const QString& file_path) {
   }
 
   const QJsonObject root = doc.object();
-  version_ = root.value("version").toString("unknown");
+  version_ = root.value("version").toString();
+  static const QRegularExpression version_re(
+      QStringLiteral("^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"));
+  if (!version_re.match(version_).hasMatch()) {
+    last_error_ = QStringLiteral("Mapping registry has invalid semantic version: %1")
+                      .arg(version_);
+    return false;
+  }
 
+  if (!root.value("blocks").isObject() ||
+      root.value("blocks").toObject().isEmpty()) {
+    last_error_ = QStringLiteral("Mapping registry must define a non-empty blocks object");
+    return false;
+  }
   const QJsonObject blocks_obj = root.value("blocks").toObject();
   for (auto it = blocks_obj.begin(); it != blocks_obj.end(); ++it) {
+    if (!it.value().isObject()) {
+      last_error_ = QStringLiteral("Mapping block '%1' must be an object").arg(it.key());
+      return false;
+    }
     const QJsonObject block_obj = it.value().toObject();
     MooseMappingBlock block;
     block.name = it.key();
     block.description = block_obj.value("description").toString();
     block.raw = block_obj;
 
+    if (!block_obj.value("objects").isObject() ||
+        block_obj.value("objects").toObject().isEmpty()) {
+      last_error_ = QStringLiteral("Mapping block '%1' has no object schemas")
+                        .arg(it.key());
+      return false;
+    }
     const QJsonObject objects_obj = block_obj.value("objects").toObject();
     for (auto ot = objects_obj.begin(); ot != objects_obj.end(); ++ot) {
+      if (!ot.value().isObject()) {
+        last_error_ = QStringLiteral("Object schema '%1/%2' must be an object")
+                          .arg(it.key(), ot.key());
+        return false;
+      }
+      const QJsonObject schema = ot.value().toObject();
+      if (!schema.value("required_params").isArray() ||
+          !schema.value("param_schema").isObject()) {
+        last_error_ = QStringLiteral(
+                          "Object schema '%1/%2' is missing required_params or param_schema")
+                          .arg(it.key(), ot.key());
+        return false;
+      }
       block.objects.insert(ot.key(), ot.value().toObject());
     }
     blocks_.insert(block.name, block);
   }
 
+  if (!root.value("ordering").isArray() ||
+      root.value("ordering").toArray().isEmpty()) {
+    last_error_ = QStringLiteral("Mapping registry must define a non-empty ordering array");
+    return false;
+  }
   const QJsonArray order_arr = root.value("ordering").toArray();
+  QSet<QString> ordered_names;
   for (const QJsonValue& v : order_arr) {
     if (v.isString()) {
-      order_.append(v.toString());
+      const QString name = v.toString();
+      if (!blocks_.contains(name)) {
+        last_error_ = QStringLiteral("Ordering references unknown block: %1").arg(name);
+        return false;
+      }
+      if (ordered_names.contains(name)) {
+        last_error_ = QStringLiteral("Ordering contains duplicate block: %1").arg(name);
+        return false;
+      }
+      ordered_names.insert(name);
+      order_.append(name);
     }
   }
 
@@ -68,11 +122,12 @@ bool MooseMappingRegistry::load(const QString& file_path) {
     }
   }
 
+  loaded_ = true;
   return true;
 }
 
 bool MooseMappingRegistry::is_loaded() const {
-  return !blocks_.isEmpty();
+  return loaded_;
 }
 
 QString MooseMappingRegistry::version() const {

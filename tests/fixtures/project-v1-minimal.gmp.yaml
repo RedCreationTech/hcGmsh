@@ -1,0 +1,17 @@
+version: 1
+saved_at: "2026-08-01T00:00:00Z"
+model:
+  Parts:
+    - name: cube
+      kind: Parts
+      params: {}
+  Materials:
+    - name: steel
+      kind: Materials
+      params:
+        type: ComputeIsotropicElasticityTensor
+        youngs_modulus: "200e9"
+        poissons_ratio: "0.3"
+gmsh: {}
+moose: {}
+viewer: {}
