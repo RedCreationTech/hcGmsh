@@ -19,6 +19,9 @@ class QString;
 class QLabel;
 class QMenu;
 class QTableWidget;
+class QDockWidget;
+class QSplitter;
+class QCloseEvent;
 
 namespace gmp {
 
@@ -38,6 +41,9 @@ class MainWindow : public QMainWindow {
  // 文档截图巡览：依次切换各模块页与中栏页签，抓取窗口截图保存到 dir 后退出。
  // 由 main.cpp 在设置 GMP_SCREENSHOT_DIR 环境变量时触发。
  void run_screenshot_tour(const QString& dir);
+
+ protected:
+  void closeEvent(QCloseEvent* event) override;
 
  private:
   void build_menu();
@@ -96,6 +102,10 @@ class MainWindow : public QMainWindow {
   int child_count(const QString& root_name) const;
 
   QTabBar* module_tabs_ = nullptr;
+  QSplitter* main_split_ = nullptr;
+  QSplitter* vertical_split_ = nullptr;
+  QDockWidget* module_work_window_ = nullptr;
+  bool layout_ready_ = false;
   QTreeWidget* model_tree_ = nullptr;
   QStackedWidget* property_stack_ = nullptr;
   PropertyEditor* property_editor_ = nullptr;
@@ -135,6 +145,7 @@ class MainWindow : public QMainWindow {
   QString active_sketch_yaml_;  // 最近一次已同步的文档快照
 
   QMenu* recent_menu_ = nullptr;
+  QMenu* view_menu_ = nullptr;
   QAction* action_new_ = nullptr;
   QAction* action_open_ = nullptr;
   QAction* action_save_ = nullptr;

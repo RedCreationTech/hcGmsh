@@ -21,6 +21,8 @@
 #include <QHeaderView>
 #include <QStatusBar>
 #include <QSplitter>
+#include <QDockWidget>
+#include <QCloseEvent>
 #include <QStackedWidget>
 #include <QFrame>
 #include <QGroupBox>
@@ -565,12 +567,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     return container;
   };
 
-  auto* vertical_split = new QSplitter(Qt::Vertical, central);
+  vertical_split_ = new QSplitter(Qt::Vertical, central);
+  auto* vertical_split = vertical_split_;
+  vertical_split->setObjectName("mainVerticalSplit");
   vertical_split->setChildrenCollapsible(false);
   main_layout->addWidget(vertical_split, 1);
 
   // 不允许整栏折叠消失; 内容最小宽度已通过紧凑样式压小, 可拖到很窄
-  auto* main_split = new QSplitter(Qt::Horizontal, vertical_split);
+  main_split_ = new QSplitter(Qt::Horizontal, vertical_split);
+  auto* main_split = main_split_;
+  main_split->setObjectName("mainHorizontalSplit");
   main_split->setChildrenCollapsible(false);
   main_split->setHandleWidth(4);
   vertical_split->addWidget(main_split);
@@ -729,7 +735,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   center_scroll->setWidget(center_tabs);
   center_layout->addWidget(center_scroll);
 
-  auto* property_panel = new QFrame(main_split);
+  module_work_window_ = new QDockWidget("Module Workspace", this);
+  module_work_window_->setObjectName("moduleWorkspaceWindow");
+  module_work_window_->setFeatures(QDockWidget::DockWidgetClosable |
+                                   QDockWidget::DockWidgetMovable |
+                                   QDockWidget::DockWidgetFloatable);
+  module_work_window_->setMinimumSize(360, 420);
+  module_work_window_->resize(520, 720);
+  addDockWidget(Qt::RightDockWidgetArea, module_work_window_);
+  module_work_window_->setFloating(true);
+  module_work_window_->setAllowedAreas(Qt::NoDockWidgetArea);
+
+  auto* property_panel = new QFrame(module_work_window_);
   property_panel->setObjectName("propertyPanel");
   property_panel->setFrameShape(QFrame::StyledPanel);
   property_panel->setFrameShadow(QFrame::Sunken);
@@ -742,9 +759,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   property_title->setFont(property_title_font);
   property_layout->addWidget(property_title);
 
-  property_stack_ = new QStackedWidget();
-  // 右栏包一层滚动区: 不设最小/最大宽度, 分割条可自由拖动;
-  // 内容显示不开时由内部滚动条承载
+  property_stack_ = new QStackedWidget(property_panel);
+  // 兼容工作窗包一层滚动区；内容显示不开时由内部滚动条承载。
   auto* property_scroll = new QScrollArea(property_panel);
   property_scroll->setWidgetResizable(true);
   property_scroll->setFrameShape(QFrame::NoFrame);
@@ -755,10 +771,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   property_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
   property_scroll->setWidget(property_stack_);
   property_layout->addWidget(property_scroll, 1);
+  module_work_window_->setWidget(property_panel);
+  module_work_window_->hide();
+  if (view_menu_) {
+    auto* toggle_workspace = module_work_window_->toggleViewAction();
+    toggle_workspace->setText("Module Workspace");
+    view_menu_->addAction(toggle_workspace);
+  }
 
   main_split->addWidget(tree_panel);
   main_split->addWidget(center_panel);
-  main_split->addWidget(property_panel);
 
   std::function<void(int)> apply_toolbar_actions;
 
@@ -2067,6 +2089,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     if (property_title) {
       property_title->setText(title + " Module");
     }
+    if (module_work_window_) {
+      module_work_window_->setWindowTitle(title + " Workspace");
+    }
 
     while (QLayoutItem* item = command_layout->takeAt(0)) {
       if (item->widget()) {
@@ -2145,11 +2170,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   vertical_split->setStretchFactor(1, 1);
   main_split->setStretchFactor(0, 0);
   main_split->setStretchFactor(1, 1);
-  main_split->setStretchFactor(2, 0);
   const int left_w = qBound(180, int(width() * 0.16), 300);
-  const int right_w = qBound(280, int(width() * 0.21), 400);
-  const int center_w = std::max(480, width() - left_w - right_w);
-  main_split->setSizes({left_w, center_w, right_w});
+  const int center_w = std::max(480, width() - left_w);
+  main_split->setSizes({left_w, center_w});
+  vertical_split->setSizes({std::max(480, height() - 90), 80});
 
   connect(module_tabs_, &QTabBar::currentChanged, this,
           [this, apply_toolbar_actions, results_tab, sketch_tab,
@@ -2204,6 +2228,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
               QTimer::singleShot(0, this, [this]() { l10n::apply(this); });
             }
           });
+  connect(module_tabs_, &QTabBar::tabBarClicked, this, [this](int) {
+    if (layout_ready_ && module_work_window_) {
+      module_work_window_->show();
+      module_work_window_->raise();
+      module_work_window_->activateWindow();
+    }
+  });
   if (part_tab >= 0) {
     module_tabs_->setCurrentIndex(part_tab);
   } else {
@@ -2507,6 +2538,35 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   });
 
   setCentralWidget(central);
+  QSettings layout_settings("gmp-ise", "gmp_ise");
+  const QByteArray window_geometry =
+      layout_settings.value("ui/layout/v1/main_window_geometry").toByteArray();
+  if (!window_geometry.isEmpty()) {
+    restoreGeometry(window_geometry);
+  }
+  const QByteArray main_split_state =
+      layout_settings.value("ui/layout/v1/main_split_state").toByteArray();
+  if (!main_split_state.isEmpty()) {
+    main_split_->restoreState(main_split_state);
+  }
+  const QByteArray vertical_split_state =
+      layout_settings.value("ui/layout/v1/vertical_split_state").toByteArray();
+  if (!vertical_split_state.isEmpty()) {
+    vertical_split_->restoreState(vertical_split_state);
+  }
+  const QByteArray workspace_geometry =
+      layout_settings.value("ui/layout/v1/module_workspace_geometry")
+          .toByteArray();
+  if (!workspace_geometry.isEmpty()) {
+    module_work_window_->restoreGeometry(workspace_geometry);
+  }
+  layout_ready_ = true;
+  if (layout_settings.value("ui/layout/v1/module_workspace_visible", false)
+          .toBool()) {
+    module_work_window_->show();
+  } else {
+    module_work_window_->hide();
+  }
   project_status_label_ = new QLabel("Project: Untitled");
   dirty_status_label_ = new QLabel("Saved");
   statusBar()->addPermanentWidget(project_status_label_);
@@ -2518,6 +2578,26 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   if (l10n::current_language() == l10n::Language::Chinese) {
     QTimer::singleShot(0, this, [this]() { l10n::apply(this); });
   }
+}
+
+void MainWindow::closeEvent(QCloseEvent* event) {
+  QSettings settings("gmp-ise", "gmp_ise");
+  settings.setValue("ui/layout/v1/main_window_geometry", saveGeometry());
+  if (main_split_) {
+    settings.setValue("ui/layout/v1/main_split_state", main_split_->saveState());
+  }
+  if (vertical_split_) {
+    settings.setValue("ui/layout/v1/vertical_split_state",
+                      vertical_split_->saveState());
+  }
+  if (module_work_window_) {
+    settings.setValue("ui/layout/v1/module_workspace_geometry",
+                      module_work_window_->saveGeometry());
+    settings.setValue("ui/layout/v1/module_workspace_visible",
+                      module_work_window_->isVisible());
+  }
+  settings.sync();
+  QMainWindow::closeEvent(event);
 }
 
 void MainWindow::build_menu() {
@@ -2538,6 +2618,8 @@ void MainWindow::build_menu() {
   auto* model_menu = menuBar()->addMenu("&Model");
   action_sync_ = model_menu->addAction("Sync Model -> MOOSE Input");
   action_sync_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_R));
+
+  view_menu_ = menuBar()->addMenu("&View");
 
   auto* mesh_menu = menuBar()->addMenu("&Mesh");
   action_mesh_ = mesh_menu->addAction("Generate Mesh");
