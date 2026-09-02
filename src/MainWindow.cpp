@@ -112,6 +112,28 @@ enum class IconGlyph {
   Slice,
 };
 
+constexpr int kNavigationKindRole = Qt::UserRole + 100;
+constexpr int kNavigationNameRole = Qt::UserRole + 101;
+constexpr int kNavigationPathRole = Qt::UserRole + 102;
+
+bool apply_name_filter(QTreeWidgetItem* item, const QString& needle) {
+  if (!item) {
+    return false;
+  }
+  bool child_matches = false;
+  for (int i = 0; i < item->childCount(); ++i) {
+    child_matches = apply_name_filter(item->child(i), needle) || child_matches;
+  }
+  const bool own_match = needle.isEmpty() ||
+                         item->text(0).contains(needle, Qt::CaseInsensitive);
+  const bool visible = own_match || child_matches;
+  item->setHidden(!visible);
+  if (!needle.isEmpty() && child_matches) {
+    item->setExpanded(true);
+  }
+  return visible;
+}
+
 QIcon MakeIcon(IconGlyph glyph, int size = 18) {
   QPixmap pix(size, size);
   pix.fill(Qt::transparent);
@@ -677,28 +699,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* tree_outer = new QVBoxLayout(tree_panel);
   tree_outer->setContentsMargins(0, 0, 0, 0);
   tree_outer->setSpacing(0);
-  // 左栏包滚动区: 与中/右栏一致, 允许分割条拖到很窄, 内容滚动承载
-  auto* tree_scroll = new QScrollArea(tree_panel);
-  tree_scroll->setWidgetResizable(true);
-  tree_scroll->setFrameShape(QFrame::NoFrame);
-  tree_scroll->setMinimumWidth(0);
-  tree_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-  tree_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-  tree_outer->addWidget(tree_scroll);
-  auto* tree_content = new QWidget();
-  tree_scroll->setWidget(tree_content);
-  auto* tree_layout = new QVBoxLayout(tree_content);
-  tree_layout->setContentsMargins(0, 0, 0, 0);
-  tree_layout->setSpacing(3);
-  auto* model_tree_title = new QLabel("Model Tree", tree_panel);
-  QFont tree_title_font = model_tree_title->font();
-  tree_title_font.setBold(true);
-  model_tree_title->setFont(tree_title_font);
-  tree_layout->addWidget(model_tree_title);
+
+  navigation_tabs_ = new QTabWidget(tree_panel);
+  navigation_tabs_->setObjectName("navigationTabs");
+  tree_outer->addWidget(navigation_tabs_, 1);
+
+  auto* model_navigation_page = new QWidget(navigation_tabs_);
+  auto* tree_layout = new QVBoxLayout(model_navigation_page);
+  tree_layout->setContentsMargins(6, 6, 6, 6);
+  tree_layout->setSpacing(6);
+  navigation_tabs_->addTab(model_navigation_page, "Model");
+
+  auto* model_filter_row = new QHBoxLayout();
+  model_tree_filter_ = new QLineEdit(model_navigation_page);
+  model_tree_filter_->setObjectName("modelTreeFilter");
+  model_tree_filter_->setClearButtonEnabled(true);
+  model_tree_filter_->setPlaceholderText("Filter model objects...");
+  model_filter_row->addWidget(model_tree_filter_, 1);
+  tree_layout->addLayout(model_filter_row);
 
   workflow_status_label_ = new QLabel("Workflow: Part [0], Material [0], Section [0], "
                                      "Steps [0], BC [0], Loads [0], Mesh [0]",
-                                     tree_panel);
+                                     model_navigation_page);
   workflow_status_label_->setObjectName("workflowStatus");
   workflow_status_label_->setWordWrap(true);
   workflow_status_label_->setTextFormat(Qt::PlainText);
@@ -723,17 +745,99 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   tree_actions->addWidget(rename_btn);
   tree_actions->addWidget(remove_btn);
   tree_actions->addStretch(1);
-  auto* tree_actions_container = new QWidget(tree_panel);
+  auto* tree_actions_container = new QWidget(model_navigation_page);
   tree_actions_container->setLayout(tree_actions);
   tree_layout->addWidget(tree_actions_container);
 
-  model_tree_ = new QTreeWidget(tree_panel);
-  model_tree_->setHeaderLabel("Model Tree");
+  model_tree_ = new QTreeWidget(model_navigation_page);
+  model_tree_->setObjectName("modelTree");
+  model_tree_->setColumnCount(2);
+  model_tree_->setHeaderLabels({"Object", "Status"});
+  model_tree_->header()->setSectionResizeMode(QHeaderView::Interactive);
+  model_tree_->header()->setStretchLastSection(false);
+  model_tree_->header()->setSectionsMovable(false);
+  model_tree_->header()->setMinimumSectionSize(60);
+  model_tree_->header()->resizeSection(0, 165);
+  model_tree_->header()->resizeSection(1, 100);
+  model_tree_->setUniformRowHeights(true);
   // 不设最小宽度: 允许分割条自由拖动, 过窄时树内部出现横向滚动条
   model_tree_->setEditTriggers(QAbstractItemView::SelectedClicked |
                                QAbstractItemView::EditKeyPressed);
   tree_layout->addWidget(model_tree_, 1);
   build_model_tree();
+
+  auto* results_navigation_page = new QWidget(navigation_tabs_);
+  auto* results_navigation_layout = new QVBoxLayout(results_navigation_page);
+  results_navigation_layout->setContentsMargins(6, 6, 6, 6);
+  results_navigation_layout->setSpacing(6);
+  navigation_tabs_->addTab(results_navigation_page, "Results");
+
+  auto* results_filter_row = new QHBoxLayout();
+  results_tree_filter_ = new QLineEdit(results_navigation_page);
+  results_tree_filter_->setObjectName("resultsTreeFilter");
+  results_tree_filter_->setClearButtonEnabled(true);
+  results_tree_filter_->setPlaceholderText("Filter jobs and results...");
+  results_filter_row->addWidget(results_tree_filter_, 1);
+  results_navigation_layout->addLayout(results_filter_row);
+
+  results_navigation_tree_ = new QTreeWidget(results_navigation_page);
+  results_navigation_tree_->setObjectName("resultsNavigationTree");
+  results_navigation_tree_->setColumnCount(2);
+  results_navigation_tree_->setHeaderLabels({"Result / Job", "Status"});
+  results_navigation_tree_->header()->setSectionResizeMode(
+      QHeaderView::Interactive);
+  results_navigation_tree_->header()->setStretchLastSection(false);
+  results_navigation_tree_->header()->setSectionsMovable(false);
+  results_navigation_tree_->header()->setMinimumSectionSize(60);
+  results_navigation_tree_->header()->resizeSection(0, 165);
+  results_navigation_tree_->header()->resizeSection(1, 100);
+  results_navigation_tree_->setUniformRowHeights(true);
+  results_navigation_layout->addWidget(results_navigation_tree_, 1);
+
+  connect(model_tree_filter_, &QLineEdit::textChanged, this,
+          &MainWindow::apply_model_tree_filter);
+  connect(results_tree_filter_, &QLineEdit::textChanged, this,
+          &MainWindow::apply_results_tree_filter);
+  connect(navigation_tabs_, &QTabWidget::currentChanged, this,
+          [this](int index) {
+            if (index == 1) {
+              refresh_results_navigation();
+            }
+          });
+  connect(results_navigation_tree_, &QTreeWidget::itemSelectionChanged, this,
+          [this]() {
+            select_model_item_from_results_navigation(
+                results_navigation_tree_->currentItem());
+          });
+  connect(results_navigation_tree_, &QTreeWidget::itemDoubleClicked, this,
+          [this](QTreeWidgetItem* item, int) {
+            if (!item || !item->parent()) {
+              return;
+            }
+            select_model_item_from_results_navigation(item);
+            const QString kind = item->data(0, kNavigationKindRole).toString();
+            const QString path = item->data(0, kNavigationPathRole).toString();
+            if (kind == "Results") {
+              if (!path.isEmpty() && viewer_) {
+                const QString ext = QFileInfo(path).suffix().toLower();
+                if (ext == "e" || ext == "exo" || ext == "exodus") {
+                  viewer_->set_exodus_file(path);
+                } else if (ext == "msh") {
+                  viewer_->set_mesh_file(path);
+                }
+              }
+              if (results_work_window_) {
+                results_work_window_->show();
+                results_work_window_->raise();
+                results_work_window_->activateWindow();
+              }
+            } else if (kind == "Jobs" && job_work_window_) {
+              job_work_window_->show();
+              job_work_window_->raise();
+              job_work_window_->activateWindow();
+            }
+          });
+  refresh_results_navigation();
 
   auto* center_panel = new QFrame(main_split);
   center_panel->setObjectName("centerPanel");
@@ -2584,7 +2688,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   vertical_split->setStretchFactor(1, 1);
   main_split->setStretchFactor(0, 0);
   main_split->setStretchFactor(1, 1);
-  const int left_w = qBound(180, int(width() * 0.16), 300);
+  // I-02 增加状态列后给导航树一个可读的默认宽度；仍不设置 minimumWidth，
+  // 用户可随时向左收窄，把空间还给中央舞台。
+  const int left_w = qBound(250, int(width() * 0.22), 340);
   const int center_w = std::max(480, width() - left_w);
   main_split->setSizes({left_w, center_w});
   vertical_split->setSizes({std::max(480, height() - 90), 80});
@@ -2793,6 +2899,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
           &GmshPanel::select_physical_group);
   connect(viewer_, &VtkViewer::mesh_entity_picked, mesh_page,
           &GmshPanel::apply_entity_pick);
+  connect(viewer_, &VtkViewer::mesh_group_picked, this,
+          [this](int dim, int tag) {
+            select_model_item_for_mesh_reference(dim, tag, true);
+          });
+  connect(viewer_, &VtkViewer::mesh_entity_picked, this,
+          [this](int dim, int tag) {
+            select_model_item_for_mesh_reference(dim, tag, false);
+          });
   connect(mesh_page, &GmshPanel::mesh_written, this,
           [this](const QString& path) {
             upsert_mesh_item(path);
@@ -2950,8 +3064,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       } else if (kind == "Results") {
         tab = results_tab;
       } else if (kind == "BC" || kind == "Functions" || kind == "Variables" ||
-                 kind == "Outputs") {
+                 kind == "Outputs" || kind == "Physics" ||
+                 kind == "Constraints" || kind == "Selections" ||
+                 kind == "Input Cases") {
         tab = property_tab;
+      } else if (kind == "Assembly") {
+        tab = item->parent() ? property_tab : -1;
       }
       if (tab >= 0) {
         if (kind == "Sketches" && sketch_panel_ && item->parent()) {
@@ -2970,6 +3088,40 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
           preview_sketch(nullptr);
         } else if (tab != module_tabs_->currentIndex()) {
           module_tabs_->setCurrentIndex(tab);
+        }
+      }
+
+      if (item->parent() && viewer_) {
+        const QVariantMap params =
+            item->data(0, PropertyEditor::kParamsRole).toMap();
+        if (kind == "Mesh") {
+          const QString path = params.value("path").toString();
+          if (!path.isEmpty() && QFileInfo::exists(path)) {
+            viewer_->set_mesh_file(path);
+          }
+        } else if (kind == "Results") {
+          const QString path = params.value("path").toString();
+          const QString ext = QFileInfo(path).suffix().toLower();
+          if (!path.isEmpty() && QFileInfo::exists(path)) {
+            if (ext == "e" || ext == "exo" || ext == "exodus") {
+              viewer_->set_exodus_file(path);
+            } else if (ext == "msh") {
+              viewer_->set_mesh_file(path);
+            }
+          }
+        } else if (kind == "Selections") {
+          const int dim = params.value("dim", params.value("group_dim", -1))
+                              .toInt();
+          const int tag = params.value("tag", params.value("group_tag", -1))
+                              .toInt();
+          if (dim >= 0 && tag >= 0) {
+            viewer_->set_mesh_group_filter(dim, tag);
+          }
+        } else if (kind == "Parts" || kind == "Features") {
+          const int tag = params.value("gmsh_volume_tag", -1).toInt();
+          if (tag >= 0) {
+            viewer_->set_mesh_entity_filter(3, tag);
+          }
         }
       }
     }
@@ -3025,6 +3177,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             if (!item || !item->parent()) {
               return;
             }
+            invalidate_downstream_from(
+                item->data(0, PropertyEditor::kKindRole).toString());
             set_project_dirty(true);
             refresh_module_pages();
             if (property_editor_) {
@@ -3396,11 +3550,15 @@ void MainWindow::build_menu() {
   connect(lang_en, &QAction::triggered, this, [this]() {
     l10n::set_language(l10n::Language::English);
     l10n::apply(this);
+    refresh_tree_statuses();
+    refresh_results_navigation();
     update_window_title();
   });
   connect(lang_zh, &QAction::triggered, this, [this]() {
     l10n::set_language(l10n::Language::Chinese);
     l10n::apply(this);
+    refresh_tree_statuses();
+    refresh_results_navigation();
     update_window_title();
   });
 
@@ -4010,8 +4168,18 @@ void MainWindow::build_model_tree() {
       icon = MakeIcon(IconGlyph::Output);
     } else if (name == "Interactions") {
       icon = MakeIcon(IconGlyph::Interaction);
+    } else if (name == "Assembly") {
+      icon = MakeIcon(IconGlyph::Part);
+    } else if (name == "Physics") {
+      icon = MakeIcon(IconGlyph::Step);
+    } else if (name == "Constraints") {
+      icon = MakeIcon(IconGlyph::Interaction);
+    } else if (name == "Selections") {
+      icon = MakeIcon(IconGlyph::Pick);
     } else if (name == "Mesh") {
       icon = MakeIcon(IconGlyph::Mesh);
+    } else if (name == "Input Cases") {
+      icon = MakeIcon(IconGlyph::Output);
     } else if (name == "Jobs") {
       icon = MakeIcon(IconGlyph::Job);
     } else if (name == "Results") {
@@ -4029,27 +4197,92 @@ void MainWindow::build_model_tree() {
             if (!item) {
               return;
             }
+            model_tree_->setCurrentItem(item);
             QMenu menu(this);
             if (!item->parent()) {
-              auto* add_action =
-                  menu.addAction(QString("Add %1").arg(item->text(0)));
+              const QString kind = item->text(0);
+              if (kind == "Mesh" || kind == "Jobs" || kind == "Results") {
+                auto* open_action = menu.addAction(
+                    kind == "Mesh"
+                        ? "Open Mesh Workspace"
+                        : (kind == "Jobs" ? "Open Job Workspace"
+                                           : "Open Results Workspace"));
+                connect(open_action, &QAction::triggered, this,
+                        [this, kind]() {
+                          QDockWidget* workspace =
+                              kind == "Jobs"
+                                  ? job_work_window_
+                                  : (kind == "Results" ? results_work_window_
+                                                       : module_work_window_);
+                          if (workspace) {
+                            workspace->show();
+                            workspace->raise();
+                            workspace->activateWindow();
+                          }
+                        });
+                menu.addSeparator();
+              }
+              auto* add_action = menu.addAction(QString("Add %1").arg(kind));
               connect(add_action, &QAction::triggered, this,
                       [this, item]() { add_item_under_root(item); });
+              menu.addSeparator();
+              auto* expand_action = menu.addAction("Expand All");
+              auto* collapse_action = menu.addAction("Collapse All");
+              connect(expand_action, &QAction::triggered, model_tree_,
+                      &QTreeWidget::expandAll);
+              connect(collapse_action, &QAction::triggered, model_tree_,
+                      &QTreeWidget::collapseAll);
             } else {
-              auto* edit_action = menu.addAction("Edit Properties...");
-              auto* add_action = menu.addAction("Add");
+              const QString kind =
+                  item->data(0, PropertyEditor::kKindRole).toString();
+              QString open_label = "Edit Properties...";
+              if (kind == "Sketches") {
+                open_label = "Open Sketch Editor";
+              } else if (kind == "Parts") {
+                open_label = "Open Part Editor";
+              } else if (kind == "Mesh") {
+                open_label = "Open Mesh Workspace";
+              } else if (kind == "Jobs") {
+                open_label = "Open Job Workspace";
+              } else if (kind == "Results") {
+                open_label = "Open Result";
+              }
+              auto* edit_action = menu.addAction(open_label);
+              menu.addSeparator();
               auto* duplicate_action = menu.addAction("Duplicate");
               auto* rename_action = menu.addAction("Rename");
               auto* delete_action = menu.addAction("Remove");
-              connect(edit_action, &QAction::triggered, this, [this, item]() {
+              connect(edit_action, &QAction::triggered, this,
+                      [this, item, kind]() {
                 model_tree_->setCurrentItem(item);
-                if (action_edit_properties_) {
+                if (kind == "Mesh") {
+                  if (module_work_window_) {
+                    module_work_window_->show();
+                    module_work_window_->raise();
+                  }
+                } else if (kind == "Jobs") {
+                  if (job_work_window_) {
+                    job_work_window_->show();
+                    job_work_window_->raise();
+                  }
+                } else if (kind == "Results") {
+                  if (results_work_window_) {
+                    results_work_window_->show();
+                    results_work_window_->raise();
+                  }
+                  const QVariantMap params =
+                      item->data(0, PropertyEditor::kParamsRole).toMap();
+                  const QString path = params.value("path").toString();
+                  const QString ext = QFileInfo(path).suffix().toLower();
+                  if (viewer_ && !path.isEmpty()) {
+                    if (ext == "e" || ext == "exo" || ext == "exodus") {
+                      viewer_->set_exodus_file(path);
+                    } else if (ext == "msh") {
+                      viewer_->set_mesh_file(path);
+                    }
+                  }
+                } else if (action_edit_properties_) {
                   action_edit_properties_->trigger();
-                }
-              });
-              connect(add_action, &QAction::triggered, this, [this, item]() {
-                if (item->parent()) {
-                  add_item_under_root(item->parent());
                 }
               });
               connect(duplicate_action, &QAction::triggered, this,
@@ -4060,6 +4293,7 @@ void MainWindow::build_model_tree() {
               connect(delete_action, &QAction::triggered, this,
                       [this, item]() { remove_item(item); });
             }
+            l10n::apply(&menu);
             menu.exec(model_tree_->viewport()->mapToGlobal(pos));
           });
 }
@@ -4084,6 +4318,11 @@ void MainWindow::open_property_form(QTreeWidgetItem* item) {
   l10n::apply(form);
   connect(form, &FloatingPropertyForm::committed, this,
           [this](QTreeWidgetItem* committed_item) {
+            if (committed_item) {
+              invalidate_downstream_from(
+                  committed_item->data(0, PropertyEditor::kKindRole)
+                      .toString());
+            }
             set_project_dirty(true);
             if (model_tree_ && committed_item) {
               model_tree_->setCurrentItem(committed_item);
@@ -4308,6 +4547,382 @@ int MainWindow::child_count(const QString& root_name) const {
   return root ? root->childCount() : 0;
 }
 
+void MainWindow::apply_model_tree_filter(const QString& text) {
+  if (!model_tree_) {
+    return;
+  }
+  const QString needle = text.trimmed();
+  for (int i = 0; i < model_tree_->topLevelItemCount(); ++i) {
+    apply_name_filter(model_tree_->topLevelItem(i), needle);
+  }
+}
+
+void MainWindow::apply_results_tree_filter(const QString& text) {
+  if (!results_navigation_tree_) {
+    return;
+  }
+  const QString needle = text.trimmed();
+  for (int i = 0; i < results_navigation_tree_->topLevelItemCount(); ++i) {
+    apply_name_filter(results_navigation_tree_->topLevelItem(i), needle);
+  }
+}
+
+void MainWindow::refresh_tree_statuses() {
+  if (!model_tree_) {
+    return;
+  }
+  const QSignalBlocker tree_blocker(model_tree_);
+  const bool chinese = l10n::current_language() == l10n::Language::Chinese;
+  const QSet<QString> required_roots = {
+      "Parts", "Materials", "Sections", "Steps",
+      "BC",    "Loads",     "Mesh",     "Jobs"};
+
+  auto set_status = [](QTreeWidgetItem* item, const QString& text,
+                       IconGlyph glyph, const QString& tooltip) {
+    if (!item) {
+      return;
+    }
+    item->setText(1, text);
+    item->setIcon(1, MakeIcon(glyph, 14));
+    item->setToolTip(1, tooltip);
+  };
+
+  for (int i = 0; i < model_tree_->topLevelItemCount(); ++i) {
+    auto* root = model_tree_->topLevelItem(i);
+    if (!root) {
+      continue;
+    }
+    bool has_running = false;
+    bool has_failed = false;
+    bool has_invalid = false;
+    bool has_incomplete = false;
+    bool has_generated = false;
+    bool all_success = root->childCount() > 0;
+    for (int row = 0; row < root->childCount(); ++row) {
+      auto* child = root->child(row);
+      if (!child) {
+        continue;
+      }
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      if (child->icon(0).isNull() && !root->icon(0).isNull()) {
+        child->setIcon(0, root->icon(0));
+      }
+      QString raw =
+          child->data(0, PropertyEditor::kStatusRole).toString().trimmed();
+      if (raw.isEmpty()) {
+        raw = params.value("status").toString().trimmed();
+      }
+      const QString normalized = raw.toLower();
+      const QString path = params.value("path").toString();
+      const bool missing_file =
+          (root->text(0) == "Mesh" || root->text(0) == "Results") &&
+          !path.isEmpty() && !QFileInfo::exists(path);
+      if (normalized.contains("fail") || normalized.contains("error")) {
+        has_failed = true;
+        all_success = false;
+        set_status(child, chinese ? "失败" : "Failed", IconGlyph::Stop,
+                   raw.isEmpty() ? QString("Failed") : raw);
+      } else if (normalized.contains("run") ||
+                 normalized.contains("queue") ||
+                 normalized.contains("submit") ||
+                 normalized.contains("pending")) {
+        has_running = true;
+        all_success = false;
+        set_status(child, chinese ? "运行中" : "Running", IconGlyph::Run,
+                   raw.isEmpty() ? QString("Running") : raw);
+      } else if (normalized.contains("invalid") ||
+                 normalized.contains("stale") ||
+                 normalized.contains("outdated") || missing_file) {
+        has_invalid = true;
+        all_success = false;
+        set_status(child, chinese ? "失效" : "Invalid", IconGlyph::Sync,
+                   missing_file ? QString("Referenced file is unavailable: %1")
+                                      .arg(path)
+                                : raw);
+      } else if (normalized.contains("complete") ||
+                 normalized.contains("success") || normalized == "normal") {
+        set_status(child, chinese ? "成功" : "Success", IconGlyph::Check,
+                   raw);
+      } else if (normalized.contains("generated") ||
+                 normalized.contains("written")) {
+        has_generated = true;
+        all_success = false;
+        set_status(child, chinese ? "已生成" : "Generated",
+                   IconGlyph::Output, raw);
+      } else if (normalized.contains("new") || normalized.contains("idle") ||
+                 normalized.contains("missing") ||
+                 (!params.isEmpty() &&
+                  params.value("type").toString().isEmpty() &&
+                  params.value("path").toString().isEmpty())) {
+        has_incomplete = true;
+        all_success = false;
+        set_status(child, chinese ? "不完整" : "Incomplete",
+                   IconGlyph::Sync,
+                   raw.isEmpty() ? QString("Required configuration is incomplete")
+                                 : raw);
+      } else if (params.isEmpty()) {
+        has_incomplete = true;
+        all_success = false;
+        set_status(child, chinese ? "未配置" : "Unconfigured",
+                   IconGlyph::Result, "No configuration");
+      } else {
+        all_success = false;
+        set_status(child, chinese ? "就绪" : "Ready", IconGlyph::Check,
+                   raw.isEmpty() ? QString("Ready") : raw);
+      }
+    }
+
+    const int count = root->childCount();
+    if (has_failed || has_invalid) {
+      set_status(root,
+                 QString("%1 (%2)")
+                     .arg(chinese ? "有问题" : "Issues")
+                     .arg(count),
+                 IconGlyph::Sync,
+                 chinese ? "包含失败、失效或缺少文件的对象"
+                         : "Contains failed, invalid, or missing-file objects");
+    } else if (has_running) {
+      set_status(root,
+                 QString("%1 (%2)")
+                     .arg(chinese ? "运行中" : "Running")
+                     .arg(count),
+                 IconGlyph::Run,
+                 chinese ? "包含正在运行或排队的对象"
+                         : "Contains running or queued objects");
+    } else if (has_incomplete) {
+      set_status(root,
+                 QString("%1 (%2)")
+                     .arg(chinese ? "不完整" : "Incomplete")
+                     .arg(count),
+                 IconGlyph::Sync,
+                 chinese ? "包含尚未完成配置的对象"
+                         : "Contains incompletely configured objects");
+    } else if (all_success) {
+      set_status(root,
+                 QString("%1 (%2)").arg(chinese ? "成功" : "Success").arg(count),
+                 IconGlyph::Check,
+                 chinese ? "所有对象均已成功完成"
+                         : "All objects completed successfully");
+    } else if (has_generated) {
+      set_status(root,
+                 QString("%1 (%2)")
+                     .arg(chinese ? "已生成" : "Generated")
+                     .arg(count),
+                 IconGlyph::Output,
+                 chinese ? "对象已生成" : "Objects generated");
+    } else if (count > 0) {
+      set_status(root,
+                 QString("%1 (%2)")
+                     .arg(chinese ? "就绪" : "Ready")
+                     .arg(count),
+                 IconGlyph::Check, chinese ? "对象已配置" : "Objects configured");
+    } else if (required_roots.contains(root->text(0))) {
+      set_status(root, chinese ? "缺失 (0)" : "Missing (0)",
+                 IconGlyph::Stop,
+                 chinese ? "当前流程尚未配置此类对象"
+                         : "This workflow object type is not configured");
+    } else {
+      set_status(root, chinese ? "未配置 (0)" : "Unconfigured (0)",
+                 IconGlyph::Result, chinese ? "当前没有对象" : "No objects");
+    }
+  }
+  apply_model_tree_filter(model_tree_filter_ ? model_tree_filter_->text()
+                                             : QString());
+}
+
+void MainWindow::refresh_results_navigation() {
+  if (!results_navigation_tree_ || !model_tree_) {
+    return;
+  }
+  const QString selected_kind =
+      results_navigation_tree_->currentItem()
+          ? results_navigation_tree_->currentItem()
+                ->data(0, kNavigationKindRole)
+                .toString()
+          : QString();
+  const QString selected_name =
+      results_navigation_tree_->currentItem()
+          ? results_navigation_tree_->currentItem()
+                ->data(0, kNavigationNameRole)
+                .toString()
+          : QString();
+  const QSignalBlocker blocker(results_navigation_tree_);
+  results_navigation_tree_->clear();
+
+  for (const QString& kind : {QString("Jobs"), QString("Results")}) {
+    auto* source_root = find_root_item(kind);
+    auto* nav_root = new QTreeWidgetItem(results_navigation_tree_);
+    nav_root->setText(0, kind);
+    nav_root->setData(0, kNavigationKindRole, kind);
+    nav_root->setFlags(nav_root->flags() & ~Qt::ItemIsEditable);
+    nav_root->setIcon(0, MakeIcon(kind == "Jobs" ? IconGlyph::Job
+                                                 : IconGlyph::Result));
+    if (source_root) {
+      nav_root->setText(1, source_root->text(1));
+      nav_root->setIcon(1, source_root->icon(1));
+      nav_root->setToolTip(1, source_root->toolTip(1));
+      for (int row = 0; row < source_root->childCount(); ++row) {
+        auto* source = source_root->child(row);
+        if (!source) {
+          continue;
+        }
+        auto* item = new QTreeWidgetItem(nav_root);
+        item->setText(0, source->text(0));
+        item->setText(1, source->text(1));
+        item->setIcon(0, source->icon(0).isNull()
+                             ? MakeIcon(kind == "Jobs" ? IconGlyph::Job
+                                                       : IconGlyph::Result)
+                             : source->icon(0));
+        item->setIcon(1, source->icon(1));
+        item->setData(0, kNavigationKindRole, kind);
+        item->setData(0, kNavigationNameRole, source->text(0));
+        const QVariantMap params =
+            source->data(0, PropertyEditor::kParamsRole).toMap();
+        item->setData(0, kNavigationPathRole, params.value("path").toString());
+        item->setToolTip(0, params.value("path").toString());
+        if (kind == selected_kind && source->text(0) == selected_name) {
+          results_navigation_tree_->setCurrentItem(item);
+        }
+      }
+    }
+    nav_root->setExpanded(true);
+  }
+  apply_results_tree_filter(results_tree_filter_ ? results_tree_filter_->text()
+                                                 : QString());
+}
+
+void MainWindow::select_model_item_from_results_navigation(
+    QTreeWidgetItem* item) {
+  if (!item || !item->parent() || !model_tree_) {
+    return;
+  }
+  const QString kind = item->data(0, kNavigationKindRole).toString();
+  const QString name = item->data(0, kNavigationNameRole).toString();
+  const QString path = item->data(0, kNavigationPathRole).toString();
+  auto* root = find_root_item(kind);
+  if (!root) {
+    return;
+  }
+  for (int row = 0; row < root->childCount(); ++row) {
+    auto* candidate = root->child(row);
+    if (!candidate) {
+      continue;
+    }
+    const QVariantMap params =
+        candidate->data(0, PropertyEditor::kParamsRole).toMap();
+    if ((!path.isEmpty() && params.value("path").toString() == path) ||
+        (path.isEmpty() && candidate->text(0) == name)) {
+      model_tree_->setCurrentItem(candidate);
+      model_tree_->scrollToItem(candidate);
+      root->setExpanded(true);
+      break;
+    }
+  }
+}
+
+void MainWindow::select_model_item_for_mesh_reference(int dim, int tag,
+                                                       bool physical_group) {
+  if (!model_tree_) {
+    return;
+  }
+  QTreeWidgetItem* match = nullptr;
+  QTreeWidgetItem* matched_root = nullptr;
+  const QStringList root_order = physical_group
+                                     ? QStringList{"Selections"}
+                                     : QStringList{"Parts", "Features",
+                                                   "Selections"};
+  for (const QString& root_name : root_order) {
+    auto* root = find_root_item(root_name);
+    for (int row = 0; root && row < root->childCount(); ++row) {
+      auto* candidate = root->child(row);
+      if (!candidate) {
+        continue;
+      }
+      const QVariantMap params =
+          candidate->data(0, PropertyEditor::kParamsRole).toMap();
+      const int candidate_dim = root_name == "Parts" || root_name == "Features"
+                                    ? 3
+                                    : params.value(
+                                          "dim", params.value("group_dim", -1))
+                                          .toInt();
+      const int candidate_tag = root_name == "Parts" || root_name == "Features"
+                                    ? params.value("gmsh_volume_tag", -1).toInt()
+                                    : params.value(
+                                          "tag", params.value("group_tag", -1))
+                                          .toInt();
+      if (candidate_dim == dim && candidate_tag == tag) {
+        match = candidate;
+        matched_root = root;
+        break;
+      }
+    }
+    if (match) {
+      break;
+    }
+  }
+  auto* fallback_root = find_root_item(physical_group ? "Selections" : "Parts");
+  if (!matched_root) {
+    matched_root = fallback_root;
+  }
+  if (!matched_root) {
+    return;
+  }
+  matched_root->setExpanded(true);
+  model_tree_->setCurrentItem(match ? match : matched_root);
+  model_tree_->scrollToItem(match ? match : matched_root);
+  if (navigation_tabs_) {
+    navigation_tabs_->setCurrentIndex(0);
+  }
+  statusBar()->showMessage(
+      match ? QString("Selection located: %1").arg(match->text(0))
+            : QString("Picked mesh entity (%1, %2); no named Selection is bound.")
+                  .arg(dim)
+                  .arg(tag),
+      2500);
+}
+
+void MainWindow::invalidate_downstream_from(const QString& source_kind) {
+  if (suppress_dirty_ || source_kind.isEmpty() || source_kind == "Jobs" ||
+      source_kind == "Results") {
+    return;
+  }
+
+  QStringList targets;
+  if (source_kind == "Mesh") {
+    targets = {"Input Cases", "Jobs"};
+  } else if (source_kind == "Input Cases") {
+    targets = {"Jobs"};
+  } else {
+    targets = {"Mesh", "Input Cases", "Jobs"};
+  }
+
+  const QSignalBlocker blocker(model_tree_);
+  for (const QString& target_kind : targets) {
+    auto* root = find_root_item(target_kind);
+    for (int row = 0; root && row < root->childCount(); ++row) {
+      auto* child = root->child(row);
+      if (!child) {
+        continue;
+      }
+      const QString current =
+          child->data(0, PropertyEditor::kStatusRole).toString().toLower();
+      const QString param_status =
+          child->data(0, PropertyEditor::kParamsRole)
+              .toMap()
+              .value("status")
+              .toString()
+              .toLower();
+      const QString effective = current.isEmpty() ? param_status : current;
+      if (effective.contains("run") || effective.contains("queue") ||
+          effective.contains("submit")) {
+        continue;
+      }
+      child->setData(0, PropertyEditor::kStatusRole, "Stale");
+    }
+  }
+}
+
 void MainWindow::refresh_workflow_status() {
   if (!workflow_status_label_) {
     return;
@@ -4339,6 +4954,8 @@ void MainWindow::refresh_workflow_status() {
   segments << format_state(jobs, "Jobs");
 
   workflow_status_label_->setText(QString("Workflow status: ") + segments.join(" | "));
+  refresh_tree_statuses();
+  refresh_results_navigation();
 }
 
 void MainWindow::ensure_basic_workflow_nodes() {
@@ -4556,8 +5173,11 @@ QTreeWidgetItem* MainWindow::add_child_item(QTreeWidgetItem* root,
   item->setText(0, name);
   item->setData(0, PropertyEditor::kKindRole, kind);
   item->setData(0, PropertyEditor::kParamsRole, normalized);
+  item->setIcon(0, root->icon(0));
   root->setExpanded(true);
   model_tree_->setCurrentItem(item);
+  invalidate_downstream_from(kind);
+  set_project_dirty(true);
   refresh_module_pages();
   if (property_editor_) {
     property_editor_->refresh_form_options();
@@ -4586,6 +5206,10 @@ void MainWindow::upsert_mesh_item(const QString& path) {
     item->setText(0, name);
     item->setData(0, PropertyEditor::kParamsRole, params);
   }
+  item = find_child_by_param(root, "path", path);
+  if (item) {
+    item->setData(0, PropertyEditor::kStatusRole, "Generated");
+  }
   set_project_dirty(true);
 }
 
@@ -4612,6 +5236,10 @@ void MainWindow::upsert_result_item(const QString& path,
   } else {
     item->setText(0, name);
     item->setData(0, PropertyEditor::kParamsRole, params);
+  }
+  item = find_child_by_param(root, "path", path);
+  if (item) {
+    item->setData(0, PropertyEditor::kStatusRole, "Success");
   }
   set_project_dirty(true);
   refresh_results_panel();
@@ -4724,6 +5352,29 @@ void MainWindow::sync_results_tree_selection(const QListWidgetItem* row) {
       model_tree_->setCurrentItem(node);
       node->setExpanded(true);
       root->setExpanded(true);
+      refresh_results_navigation();
+      if (navigation_tabs_) {
+        navigation_tabs_->setCurrentIndex(1);
+      }
+      if (results_navigation_tree_) {
+        for (int top = 0;
+             top < results_navigation_tree_->topLevelItemCount(); ++top) {
+          auto* nav_root = results_navigation_tree_->topLevelItem(top);
+          if (!nav_root ||
+              nav_root->data(0, kNavigationKindRole).toString() != "Results") {
+            continue;
+          }
+          for (int child = 0; child < nav_root->childCount(); ++child) {
+            auto* nav_item = nav_root->child(child);
+            if (nav_item &&
+                nav_item->data(0, kNavigationPathRole).toString() == path) {
+              results_navigation_tree_->setCurrentItem(nav_item);
+              results_navigation_tree_->scrollToItem(nav_item);
+              break;
+            }
+          }
+        }
+      }
       break;
     }
   }
@@ -4773,6 +5424,9 @@ QVariantMap MainWindow::default_params_for_kind(const QString& kind) const {
   }
   if (kind == "Results") {
     return {{"status", "Ready"}};
+  }
+  if (kind == "Input Cases") {
+    return {{"status", "New"}};
   }
   return {};
 }
@@ -4916,6 +5570,32 @@ void MainWindow::sync_model_to_input() {
       build_executioner_block(find_root_item("Steps"));
   moose_panel_->apply_model_blocks(functions, variables, materials, bcs, kernels,
                                    outputs, executioner);
+  const QVariantMap settings = moose_panel_->moose_settings();
+  const QString input_path = settings.value("input_path").toString();
+  auto* input_root = find_root_item("Input Cases");
+  if (input_root) {
+    auto* input_item = find_child_by_param(input_root, "path", input_path);
+    const QString input_name = QFileInfo(input_path).fileName().isEmpty()
+                                   ? QString("generated_input.i")
+                                   : QFileInfo(input_path).fileName();
+    const QVariantMap input_params{
+        {"path", input_path},
+        {"template_key", settings.value("template_key").toString()},
+        {"generated_at",
+         QDateTime::currentDateTimeUtc().toString(Qt::ISODate)},
+        {"status", "Generated"}};
+    if (!input_item) {
+      input_item = add_child_item(input_root, input_name, "Input Cases",
+                                  input_params);
+    } else {
+      input_item->setText(0, input_name);
+      input_item->setData(0, PropertyEditor::kParamsRole, input_params);
+    }
+    if (input_item) {
+      input_item->setData(0, PropertyEditor::kStatusRole, "Generated");
+    }
+  }
+  refresh_workflow_status();
   console_->appendPlainText("Model tree synced to MOOSE input.");
   statusBar()->showMessage("Model synced to MOOSE input.", 2000);
 }
@@ -5200,8 +5880,10 @@ void MainWindow::add_item_under_root(QTreeWidgetItem* root) {
   item->setData(0, PropertyEditor::kKindRole, kind);
   item->setData(0, PropertyEditor::kParamsRole,
                 default_params_for_kind(kind));
+  item->setIcon(0, root->icon(0));
   root->setExpanded(true);
   model_tree_->setCurrentItem(item);
+  invalidate_downstream_from(kind);
   set_project_dirty(true);
   refresh_module_pages();
   if (property_editor_) {
@@ -5214,8 +5896,11 @@ void MainWindow::remove_item(QTreeWidgetItem* item) {
     return;
   }
   auto* parent = item->parent();
+  const QString kind =
+      item->data(0, PropertyEditor::kKindRole).toString();
   parent->removeChild(item);
   delete item;
+  invalidate_downstream_from(kind);
   set_project_dirty(true);
   refresh_module_pages();
   if (property_editor_) {
@@ -5238,8 +5923,11 @@ void MainWindow::duplicate_item(QTreeWidgetItem* item) {
                  item->data(0, PropertyEditor::kKindRole));
   child->setData(0, PropertyEditor::kParamsRole,
                  item->data(0, PropertyEditor::kParamsRole));
+  child->setIcon(0, parent->icon(0));
   parent->setExpanded(true);
   model_tree_->setCurrentItem(child);
+  invalidate_downstream_from(
+      item->data(0, PropertyEditor::kKindRole).toString());
   set_project_dirty(true);
   refresh_module_pages();
   if (property_editor_) {
@@ -5443,6 +6131,7 @@ bool MainWindow::load_project(const QString& path) {
         auto* child = new QTreeWidgetItem(root_item);
         child->setText(0, name);
         child->setData(0, PropertyEditor::kKindRole, kind);
+        child->setIcon(0, root_item->icon(0));
         QVariantMap params =
             project_schema::yaml_map_to_variant_map(entry["params"]);
         const QString status = QString::fromStdString(
@@ -6187,6 +6876,207 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     }
                   },
                   this});
+    steps.append({"i02_navigation_status_filter",
+                  [this]() {
+                    if (!navigation_tabs_ || navigation_tabs_->count() != 2 ||
+                        navigation_tabs_->tabText(0) == "Material Library" ||
+                        !model_tree_ || model_tree_->columnCount() != 2 ||
+                        !results_navigation_tree_ ||
+                        results_navigation_tree_->columnCount() != 2 ||
+                        model_tree_->header()->sectionResizeMode(0) !=
+                            QHeaderView::Interactive ||
+                        model_tree_->header()->sectionResizeMode(1) !=
+                            QHeaderView::Interactive ||
+                        results_navigation_tree_->header()->sectionResizeMode(
+                            0) != QHeaderView::Interactive ||
+                        results_navigation_tree_->header()->sectionResizeMode(
+                            1) != QHeaderView::Interactive ||
+                        !find_root_item("Assembly") ||
+                        !find_root_item("Physics") ||
+                        !find_root_item("Constraints") ||
+                        !find_root_item("Selections") ||
+                        !find_root_item("Input Cases")) {
+                      qFatal("I-02 navigation/schema contract failed");
+                    }
+                    auto* material_root = find_root_item("Materials");
+                    auto* parts_root = find_root_item("Parts");
+                    auto* selections_root = find_root_item("Selections");
+                    auto* mesh_root = find_root_item("Mesh");
+                    auto* jobs_root = find_root_item("Jobs");
+                    auto* results_root = find_root_item("Results");
+                    if (!material_root || !parts_root || !selections_root ||
+                        !mesh_root || !jobs_root || !results_root) {
+                      qFatal("I-02 fixture roots are missing");
+                    }
+                    if (parts_root->childCount() == 0) {
+                      add_child_item(parts_root, "part_i02", "Parts",
+                                     {{"type", "Part"},
+                                      {"gmsh_volume_tag", 101}});
+                    } else {
+                      QVariantMap params =
+                          parts_root->child(0)
+                              ->data(0, PropertyEditor::kParamsRole)
+                              .toMap();
+                      params.insert("gmsh_volume_tag", 101);
+                      parts_root->child(0)->setData(
+                          0, PropertyEditor::kParamsRole, params);
+                    }
+                    add_child_item(selections_root, "selection_i02",
+                                   "Selections",
+                                   {{"type", "PhysicalGroup"},
+                                    {"group_dim", 2},
+                                    {"group_tag", 17}});
+                    auto* mesh_item = add_child_item(
+                        mesh_root, "mesh_i02", "Mesh",
+                        {{"status", "Generated"}, {"path", ""}});
+                    mesh_item->setData(0, PropertyEditor::kStatusRole,
+                                       "Generated");
+                    auto* input_root = find_root_item("Input Cases");
+                    if (input_root->childCount() == 0) {
+                      auto* input_item = add_child_item(
+                          input_root, "case_i02.i", "Input Cases",
+                          {{"status", "Generated"}, {"path", "case_i02.i"}});
+                      input_item->setData(0, PropertyEditor::kStatusRole,
+                                          "Generated");
+                    }
+                    add_child_item(jobs_root, "job_i02", "Jobs",
+                                   {{"status", "Completed"}});
+                    add_child_item(results_root, "result_i02", "Results",
+                                   {{"status", "Success"}, {"path", ""}});
+                    refresh_workflow_status();
+                    for (int row = 0; row < model_tree_->topLevelItemCount();
+                         ++row) {
+                      auto* root = model_tree_->topLevelItem(row);
+                      if (!root || root->text(1).isEmpty() ||
+                          root->icon(1).isNull()) {
+                        qFatal("I-02 status icon/badge contract failed");
+                      }
+                    }
+                    model_tree_filter_->setText("material_i01_committed");
+                    qApp->processEvents();
+                    const auto clear_buttons =
+                        model_tree_filter_->findChildren<QToolButton*>();
+                    if (clear_buttons.isEmpty() ||
+                        clear_buttons.first()->height() >
+                            model_tree_filter_->height()) {
+                      qFatal("I-02 embedded filter clear button size failed");
+                    }
+                    if (material_root->isHidden() || !parts_root->isHidden()) {
+                      qFatal("I-02 model name filter contract failed");
+                    }
+                    model_tree_filter_->clear();
+                    if (parts_root->isHidden()) {
+                      qFatal("I-02 clearing model filter did not restore tree");
+                    }
+                  },
+                  this});
+    steps.append({"i02_tree_stage_round_trip",
+                  [this]() {
+                    auto* parts_root = find_root_item("Parts");
+                    auto* selections_root = find_root_item("Selections");
+                    auto* part = parts_root && parts_root->childCount() > 0
+                                     ? parts_root->child(0)
+                                     : nullptr;
+                    auto* selection =
+                        selections_root && selections_root->childCount() > 0
+                            ? selections_root->child(
+                                  selections_root->childCount() - 1)
+                            : nullptr;
+                    if (!part || !selection || !viewer_) {
+                      qFatal("I-02 tree/stage fixture is missing");
+                    }
+                    model_tree_->setCurrentItem(selection);
+                    viewer_->mesh_group_picked(2, 17);
+                    if (model_tree_->currentItem() != selection ||
+                        navigation_tabs_->currentIndex() != 0) {
+                      qFatal("I-02 stage group pick did not locate Selection");
+                    }
+                    viewer_->mesh_entity_picked(3, 101);
+                    if (model_tree_->currentItem() != part ||
+                        !context_object_selector_ ||
+                        context_object_selector_->currentText() !=
+                            part->text(0)) {
+                      qFatal("I-02 stage entity pick did not locate Part");
+                    }
+                  },
+                  this});
+    steps.append({"i02_results_navigation",
+                  [this]() {
+                    refresh_workflow_status();
+                    navigation_tabs_->setCurrentIndex(1);
+                    QTreeWidgetItem* result_nav = nullptr;
+                    for (int top = 0;
+                         top < results_navigation_tree_->topLevelItemCount();
+                         ++top) {
+                      auto* root = results_navigation_tree_->topLevelItem(top);
+                      for (int row = 0; root && row < root->childCount(); ++row) {
+                        if (root->child(row)->text(0) == "result_i02") {
+                          result_nav = root->child(row);
+                          break;
+                        }
+                      }
+                    }
+                    if (!result_nav) {
+                      qFatal("I-02 Results navigation did not mirror result");
+                    }
+                    results_navigation_tree_->setCurrentItem(result_nav);
+                    if (!model_tree_->currentItem() ||
+                        model_tree_->currentItem()->text(0) != "result_i02") {
+                      qFatal("I-02 Results navigation did not sync Model tree");
+                    }
+                    results_tree_filter_->setText("result_i02");
+                    qApp->processEvents();
+                    QTreeWidgetItem* filtered_result = nullptr;
+                    for (int top = 0;
+                         top < results_navigation_tree_->topLevelItemCount();
+                         ++top) {
+                      auto* root = results_navigation_tree_->topLevelItem(top);
+                      for (int row = 0; root && row < root->childCount(); ++row) {
+                        if (root->child(row)->text(0) == "result_i02") {
+                          filtered_result = root->child(row);
+                          break;
+                        }
+                      }
+                    }
+                    if (!filtered_result || filtered_result->isHidden()) {
+                      qFatal("I-02 Results name filter hid matching result");
+                    }
+                    results_tree_filter_->clear();
+                    navigation_tabs_->setCurrentIndex(0);
+                    if (!model_tree_->currentItem() ||
+                        model_tree_->currentItem()->text(0) != "result_i02") {
+                      qFatal("I-02 tab switch changed project selection");
+                    }
+                  },
+                  this});
+    steps.append({"i02_downstream_invalidation",
+                  [this]() {
+                    auto* material_root = find_root_item("Materials");
+                    auto* material = material_root && material_root->childCount() > 0
+                                         ? material_root->child(0)
+                                         : nullptr;
+                    if (!material) {
+                      qFatal("I-02 invalidation source is missing");
+                    }
+                    QVariantMap params =
+                        material->data(0, PropertyEditor::kParamsRole).toMap();
+                    params.insert("i02_revision", 2);
+                    material->setData(0, PropertyEditor::kParamsRole, params);
+                    refresh_workflow_status();
+                    for (const QString& kind :
+                         {QString("Mesh"), QString("Input Cases"),
+                          QString("Jobs")}) {
+                      auto* root = find_root_item(kind);
+                      if (!root || root->childCount() == 0 ||
+                          root->child(0)
+                                  ->data(0, PropertyEditor::kStatusRole)
+                                  .toString() != "Stale" ||
+                          root->child(0)->text(1).isEmpty()) {
+                        qFatal("I-02 downstream invalidation contract failed");
+                      }
+                    }
+                  },
+                  this});
     steps.append({"module_repeat_Part",
                   [this]() {
                     for (int i = 0; i < module_tabs_->count(); ++i) {
@@ -6203,8 +7093,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   this});
     steps.append({"part_fixture_for_double_click",
                   [this]() {
-                    if (auto* root = find_root_item("Parts");
-                        root && root->childCount() == 0) {
+                    auto* root = find_root_item("Parts");
+                    bool found = false;
+                    for (int row = 0; root && row < root->childCount(); ++row) {
+                      found = found || root->child(row)->text(0) == "part_tour";
+                    }
+                    if (root && !found) {
                       add_child_item(root, "part_tour", "Parts",
                                      {{"type", "Part"}});
                     }

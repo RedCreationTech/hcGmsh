@@ -10,6 +10,7 @@
 - Phase 1 先将旧页面整体迁入非模态“模块工作窗”，保持对象、信号和现有功能可用。
 - Phase 2 再将对象编辑页替换为带确定/取消语义的 `FloatingPropertyForm`，不得在 Phase 1 临时实现字段即时写回的新表单。
 - I-01A 将兼容工作窗从旧右侧窄栏排版调整为宽窗任务布局：禁止嵌套滚动，主要操作横排，复杂表单和复合工作窗按页签分区。
+- I-02 将左侧导航拆为 Model/Results 两个页签，增加名称过滤、状态列和 Input Cases；导航切换不替换中央舞台。
 - Job 和 Results 最终使用各自的非模态单实例工作窗；Visualization、Mesh 使用独立工作窗加舞台高频工具。
 - 页面完成最终迁移并通过入口回归前，不删除旧对象、不断开信号、不复用其索引。
 
@@ -44,9 +45,9 @@
 
 - [x] `module_tabs_::currentChanged` 保留为内部兼容状态机；可见的工作上下文“模块”选择器切换正确页面并打开/激活对应工作窗。
 - [x] 模型树单击只同步选择和上下文，不强制弹出编辑窗；显式模块入口可打开兼容工作窗。
-- [ ] `GmshPanel::mesh_written`、MoosePanel 运行/日志、Results 列表和 VTK 信号在换父容器后仍连接。
-- [ ] PropertyEditor 的 `set_item()`、`refresh_form_options()` 在兼容工作窗关闭时仍安全。
-- [ ] 草图进入/退出 2D 会话不依赖永久右栏可见性。
+- [x] `GmshPanel::mesh_written`、MoosePanel 运行/日志、Results 列表和 VTK 信号在换父容器后仍连接；I-02 新增树—舞台双向定位自动回归。
+- [x] PropertyEditor 的 `set_item()`、`refresh_form_options()` 在兼容工作窗关闭时仍安全。
+- [x] 草图进入/退出 2D 会话不依赖永久右栏可见性。
 - [x] Job/Results 工作窗关闭不销毁页面，不停止作业、不卸载结果。
 - [x] Module Workspace 与主窗口布局状态可恢复；多屏幕越界恢复仍由 L-05 完成。
 

@@ -90,7 +90,8 @@ void test_project_schema(TestContext& test) {
   for (const QString& required : {QStringLiteral("Assembly"),
                                   QStringLiteral("Physics"),
                                   QStringLiteral("Constraints"),
-                                  QStringLiteral("Selections")}) {
+                                  QStringLiteral("Selections"),
+                                  QStringLiteral("Input Cases")}) {
     test.expect(roots.contains(required), "schema root exists: " + required);
   }
 

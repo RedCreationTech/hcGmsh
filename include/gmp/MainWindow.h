@@ -8,6 +8,7 @@
 
 class QPlainTextEdit;
 class QAction;
+class QLineEdit;
 class QStackedWidget;
 class QTabBar;
 class QComboBox;
@@ -87,7 +88,15 @@ class MainWindow : public QMainWindow {
   void export_debug_bundle();
   void refresh_job_table();
   void refresh_results_panel();
+  void refresh_results_navigation();
   void sync_results_tree_selection(const QListWidgetItem* row);
+  void apply_model_tree_filter(const QString& text);
+  void apply_results_tree_filter(const QString& text);
+  void refresh_tree_statuses();
+  void select_model_item_from_results_navigation(QTreeWidgetItem* item);
+  void select_model_item_for_mesh_reference(int dim, int tag,
+                                            bool physical_group);
+  void invalidate_downstream_from(const QString& source_kind);
   void start_submit_workflow();
   void ensure_basic_workflow_nodes();
   int append_job_row(const QString& name, const QVariantMap& params);
@@ -127,7 +136,11 @@ class MainWindow : public QMainWindow {
   QTabWidget* results_work_tabs_ = nullptr;
   StageLeftToolbar* stage_left_toolbar_ = nullptr;
   bool layout_ready_ = false;
+  QTabWidget* navigation_tabs_ = nullptr;
   QTreeWidget* model_tree_ = nullptr;
+  QTreeWidget* results_navigation_tree_ = nullptr;
+  QLineEdit* model_tree_filter_ = nullptr;
+  QLineEdit* results_tree_filter_ = nullptr;
   QStackedWidget* property_stack_ = nullptr;
   PropertyEditor* property_editor_ = nullptr;
   FloatingPropertyForm* floating_property_form_ = nullptr;

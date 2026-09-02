@@ -32,6 +32,7 @@ QString localized_kind(const QString& kind) {
       {"Outputs", "输出"},            {"Features", "特征"},
       {"Datums", "基准"},             {"Assembly", "装配"},
       {"Constraints", "约束"},        {"Selections", "选择集"},
+      {"Input Cases", "输入算例"},
   };
   return names.value(kind, kind);
 }
