@@ -661,7 +661,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* center_tabs = new QTabWidget(center_panel);
   viewer_ = new VtkViewer(center_tabs);
   center_tabs->addTab(viewer_, "Viewport");
-  auto* plot_page = new QWidget(center_tabs);
+  auto* plot_page = new QWidget();
   auto* plot_layout = new QVBoxLayout(plot_page);
   plot_layout->setContentsMargins(8, 8, 8, 8);
   plot_layout->setSpacing(6);
@@ -689,7 +689,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   plot_view->setFont(mono);
   plot_layout->addWidget(plot_view, 1);
 
-  auto* table_page = new QWidget(center_tabs);
+  auto* table_page = new QWidget();
   auto* table_layout = new QVBoxLayout(table_page);
   table_layout->setContentsMargins(8, 8, 8, 8);
   table_layout->setSpacing(6);
@@ -711,19 +711,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   table_view->setLineWrapMode(QPlainTextEdit::NoWrap);
   table_view->setFont(mono);
   table_layout->addWidget(table_view, 1);
-  center_tabs->addTab(plot_page, "Plot");
-  center_tabs->addTab(table_page, "Table");
-  // 页签条与边栏按钮(打开视口/曲线/表格)重复, 隐藏页签条,
-  // 切换完全由边栏按钮驱动; 标题跟随当前页
+  // 中央区域只保留 Viewport；Plot/Table 在 Results 工作窗中展示。
   center_tabs->tabBar()->hide();
   center_tabs->setCurrentIndex(0);
-  connect(center_tabs, &QTabWidget::currentChanged, this,
-          [center_title](int index) {
-            const QStringList titles = {"Viewport", "Plot Preview", "Table Preview"};
-            if (index >= 0 && index < titles.size()) {
-              center_title->setText(titles.at(index));
-            }
-          });
   // 中栏包滚动区: 视口控制行最宽可达 1300+px, 不允许它撑死布局;
   // 窗口较窄时由内部横向滚动条承载, 分割条保持可拖动
   auto* center_scroll = new QScrollArea(center_panel);
@@ -778,6 +768,35 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     toggle_workspace->setText("Module Workspace");
     view_menu_->addAction(toggle_workspace);
   }
+
+  auto make_floating_workspace = [this](const QString& title,
+                                        const QString& object_name,
+                                        const QSize& initial_size) {
+    auto* workspace = new QDockWidget(title, this);
+    workspace->setObjectName(object_name);
+    workspace->setFeatures(QDockWidget::DockWidgetClosable |
+                           QDockWidget::DockWidgetMovable |
+                           QDockWidget::DockWidgetFloatable);
+    workspace->setMinimumSize(420, 420);
+    workspace->resize(initial_size);
+    addDockWidget(Qt::RightDockWidgetArea, workspace);
+    workspace->setFloating(true);
+    workspace->setAllowedAreas(Qt::NoDockWidgetArea);
+    workspace->hide();
+    if (view_menu_) {
+      auto* toggle = workspace->toggleViewAction();
+      toggle->setText(title);
+      view_menu_->addAction(toggle);
+    }
+    return workspace;
+  };
+  job_work_window_ = make_floating_workspace(
+      "Job Workspace", "jobWorkspaceWindow", QSize(820, 680));
+  visualization_work_window_ = make_floating_workspace(
+      "Visualization Workspace", "visualizationWorkspaceWindow",
+      QSize(560, 720));
+  results_work_window_ = make_floating_workspace(
+      "Results Workspace", "resultsWorkspaceWindow", QSize(840, 680));
 
   main_split->addWidget(tree_panel);
   main_split->addWidget(center_panel);
@@ -1515,9 +1534,31 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "Visualization",
       "Control tabs live in this side panel; the viewport stays clean for the 3D scene.",
       {
-          {"Open Visualization Tab", [center_tabs]() { center_tabs->setCurrentIndex(0); }},
-          {"Show Plot Preview", [center_tabs]() { center_tabs->setCurrentIndex(1); }},
-          {"Show Table Preview", [center_tabs]() { center_tabs->setCurrentIndex(2); }},
+          {"Focus Viewport", [this]() {
+             if (viewer_) {
+               viewer_->setFocus();
+             }
+           }},
+          {"Show Plot Preview", [this]() {
+             if (results_work_tabs_) {
+               results_work_tabs_->setCurrentIndex(1);
+             }
+             if (results_work_window_) {
+               results_work_window_->show();
+               results_work_window_->raise();
+               results_work_window_->activateWindow();
+             }
+           }},
+          {"Show Table Preview", [this]() {
+             if (results_work_tabs_) {
+               results_work_tabs_->setCurrentIndex(2);
+             }
+             if (results_work_window_) {
+               results_work_window_->show();
+               results_work_window_->raise();
+               results_work_window_->activateWindow();
+             }
+           }},
       });
 
   // 视口控制页签(Scalar/Mesh/View/...)迁移到右侧边栏,
@@ -1596,7 +1637,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   results_preview_->setLineWrapMode(QPlainTextEdit::NoWrap);
   results_layout->addWidget(results_preview_, 1);
 
-  auto open_result_in_viewer = [this, center_tabs](const QListWidgetItem* row) {
+  auto open_result_in_viewer = [this](const QListWidgetItem* row) {
     if (!row || !viewer_) {
       return;
     }
@@ -1612,7 +1653,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       viewer_->set_mesh_file(path);
     }
     sync_results_tree_selection(row);
-    center_tabs->setCurrentIndex(0);
+    viewer_->setFocus();
     statusBar()->showMessage("Opened result in viewer.", 1500);
   };
 
@@ -1665,7 +1706,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
           this,
           [this]() { refresh_results_panel(); });
   connect(results_open_view, &QPushButton::clicked, this,
-          [this, center_tabs, open_result_in_viewer]() {
+          [this, open_result_in_viewer]() {
             if (!results_list_) {
               return;
             }
@@ -1770,6 +1811,35 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             results_preview_->setPlainText(details);
           });
 
+  results_work_tabs_ = new QTabWidget(results_work_window_);
+  results_work_tabs_->setObjectName("resultsWorkspaceTabs");
+  results_work_tabs_->addTab(results_page, "Results");
+  results_work_tabs_->addTab(plot_page, "Plot");
+  results_work_tabs_->addTab(table_page, "Table");
+  results_work_window_->setWidget(results_work_tabs_);
+  auto* job_workspace_scroll = new QScrollArea(job_work_window_);
+  job_workspace_scroll->setWidgetResizable(true);
+  job_workspace_scroll->setFrameShape(QFrame::NoFrame);
+  job_workspace_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  job_workspace_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  job_workspace_scroll->setWidget(job_container);
+  job_work_window_->setWidget(job_workspace_scroll);
+  visualization_work_window_->setWidget(visualization_page);
+  job_work_window_->resize(820, 680);
+  visualization_work_window_->resize(560, 720);
+  results_work_window_->resize(840, 680);
+  plot_open_btn->setText("Focus Viewport");
+  table_open_btn->setText("Focus Viewport");
+
+  auto show_workspace = [](QDockWidget* workspace) {
+    if (!workspace) {
+      return;
+    }
+    workspace->show();
+    workspace->raise();
+    workspace->activateWindow();
+  };
+
   assign_module_actions(part_tab,
                        {
                            {"Open Part Root", [this]() {
@@ -1800,11 +1870,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                                module_tabs_->setCurrentIndex(target);
                              }
                            }},
-                           {"Open Job Module", [this, module_tab_index]() {
+                           {"Open Job Module",
+                            [this, module_tab_index, show_workspace]() {
                              const int target = module_tab_index("Job");
                              if (target >= 0) {
                                module_tabs_->setCurrentIndex(target);
                              }
+                             show_workspace(job_work_window_);
                            }},
                        });
 
@@ -1981,6 +2053,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   assign_module_actions(job_tab,
                        {
+                           {"Open Job Workspace", [this, show_workspace]() {
+                             show_workspace(job_work_window_);
+                           }},
                            {"Prepare Workflow Defaults",
                             [this]() { ensure_basic_workflow_nodes(); }},
                            {"Sync to Input", [this]() { sync_model_to_input(); }},
@@ -2006,12 +2081,30 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   assign_module_actions(viz_tab,
                        {
-                           {"Open Viewport", [center_tabs]() { center_tabs->setCurrentIndex(0); }},
-                           {"Open Plot", [center_tabs]() { center_tabs->setCurrentIndex(1); }},
-                           {"Open Table", [center_tabs]() { center_tabs->setCurrentIndex(2); }},
+                           {"Open Visualization Workspace",
+                            [this, show_workspace]() {
+                              show_workspace(visualization_work_window_);
+                            }},
+                           {"Focus Viewport", [this]() {
+                              if (viewer_) {
+                                viewer_->setFocus();
+                              }
+                            }},
+                           {"Open Plot", [this, show_workspace]() {
+                              if (results_work_tabs_) {
+                                results_work_tabs_->setCurrentIndex(1);
+                              }
+                              show_workspace(results_work_window_);
+                            }},
+                           {"Open Table", [this, show_workspace]() {
+                              if (results_work_tabs_) {
+                                results_work_tabs_->setCurrentIndex(2);
+                              }
+                              show_workspace(results_work_window_);
+                            }},
                        });
 
-  auto open_selected_result_in_viewer = [this, center_tabs]() {
+  auto open_selected_result_in_viewer = [this]() {
     if (!results_list_) {
       return;
     }
@@ -2030,7 +2123,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     } else {
       viewer_->set_mesh_file(path);
     }
-    center_tabs->setCurrentIndex(0);
+    viewer_->setFocus();
     sync_results_tree_selection(row);
   };
   auto open_selected_result_as_text = [this, open_result_as_text]() {
@@ -2052,6 +2145,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   assign_module_actions(results_tab,
                        {
+                           {"Open Results Workspace",
+                            [this, show_workspace]() {
+                              if (results_work_tabs_) {
+                                results_work_tabs_->setCurrentIndex(0);
+                              }
+                              show_workspace(results_work_window_);
+                            }},
                            {"Refresh Results", [this]() {
                              refresh_results_panel();
                            }},
@@ -2138,6 +2238,44 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     s->setWidget(w);
     return s;
   };
+  auto make_workspace_launcher =
+      [this, show_workspace](const QString& title, const QString& description,
+                             QDockWidget* workspace) {
+        auto* page = new QWidget(property_stack_);
+        auto* layout = new QVBoxLayout(page);
+        layout->setContentsMargins(18, 18, 18, 18);
+        layout->setSpacing(10);
+        auto* heading = new QLabel(title, page);
+        QFont heading_font = heading->font();
+        heading_font.setBold(true);
+        heading_font.setPointSize(heading_font.pointSize() + 2);
+        heading->setFont(heading_font);
+        auto* note = new QLabel(description, page);
+        note->setWordWrap(true);
+        auto* open = new QPushButton("Open " + title, page);
+        connect(open, &QPushButton::clicked, page,
+                [workspace, show_workspace]() { show_workspace(workspace); });
+        layout->addWidget(heading);
+        layout->addWidget(note);
+        layout->addWidget(open);
+        layout->addStretch(1);
+        return page;
+      };
+  auto* job_launcher = make_workspace_launcher(
+      "Job Workspace",
+      "Job management runs in an independent non-modal window. Closing the "
+      "window does not stop an active job.",
+      job_work_window_);
+  auto* visualization_launcher = make_workspace_launcher(
+      "Visualization Workspace",
+      "Visualization controls run beside the central viewport without "
+      "replacing it.",
+      visualization_work_window_);
+  auto* results_launcher = make_workspace_launcher(
+      "Results Workspace",
+      "Results, Plot and Table use an independent window; the central "
+      "viewport remains visible.",
+      results_work_window_);
   property_stack_->addWidget(wrap_scroll(property_editor_));
   property_stack_->addWidget(part_page);
   property_stack_->addWidget(material_page);
@@ -2148,9 +2286,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   property_stack_->addWidget(load_page);
   property_stack_->addWidget(wrap_scroll(sketch_panel_));
   property_stack_->addWidget(mesh_page);
-  property_stack_->addWidget(wrap_scroll(job_container));
-  property_stack_->addWidget(visualization_page);
-  property_stack_->addWidget(wrap_scroll(results_page));
+  property_stack_->addWidget(job_launcher);
+  property_stack_->addWidget(visualization_launcher);
+  property_stack_->addWidget(results_launcher);
   // QStackedWidget 的最小宽度默认取所有页面的最大值(如 Job 页的7列表格),
   // 会把整个右栏撑宽并迫使每页都出现横向滚动条。
   // 各页改为 Ignored, 栈只按当前页内容计算宽度。
@@ -2228,13 +2366,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
               QTimer::singleShot(0, this, [this]() { l10n::apply(this); });
             }
           });
-  connect(module_tabs_, &QTabBar::tabBarClicked, this, [this](int) {
-    if (layout_ready_ && module_work_window_) {
-      module_work_window_->show();
-      module_work_window_->raise();
-      module_work_window_->activateWindow();
-    }
-  });
+  connect(module_tabs_, &QTabBar::tabBarClicked, this,
+          [this, job_tab, viz_tab, results_tab, show_workspace](int index) {
+            if (!layout_ready_) {
+              return;
+            }
+            if (index == job_tab) {
+              show_workspace(job_work_window_);
+            } else if (index == viz_tab) {
+              show_workspace(visualization_work_window_);
+            } else if (index == results_tab) {
+              if (results_work_tabs_) {
+                results_work_tabs_->setCurrentIndex(0);
+              }
+              show_workspace(results_work_window_);
+            } else {
+              show_workspace(module_work_window_);
+            }
+          });
   if (part_tab >= 0) {
     module_tabs_->setCurrentIndex(part_tab);
   } else {
@@ -2272,7 +2421,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
           [plot_refresh_btn]() { plot_refresh_btn->click(); });
   connect(gmsh_panel_, &GmshPanel::mesh_written, table_refresh_btn,
           [table_refresh_btn]() { table_refresh_btn->click(); });
-  connect(center_tabs, &QTabWidget::currentChanged, this,
+  connect(results_work_tabs_, &QTabWidget::currentChanged, this,
           [this, plot_view, plot_status, table_view, table_status]() {
             if (!viewer_) {
               return;
@@ -2291,9 +2440,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             }
           });
   connect(plot_open_btn, &QPushButton::clicked, this,
-          [this, center_tabs]() { center_tabs->setCurrentIndex(0); });
+          [this]() {
+            if (viewer_) {
+              viewer_->setFocus();
+            }
+          });
   connect(table_open_btn, &QPushButton::clicked, this,
-          [this, center_tabs]() { center_tabs->setCurrentIndex(2); });
+          [this]() {
+            if (viewer_) {
+              viewer_->setFocus();
+            }
+          });
 
   connect(mesh_page, &GmshPanel::mesh_written, job_page,
           &MoosePanel::set_mesh_path);
@@ -2560,6 +2717,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   if (!workspace_geometry.isEmpty()) {
     module_work_window_->restoreGeometry(workspace_geometry);
   }
+  auto restore_workspace_geometry = [&layout_settings](QDockWidget* workspace,
+                                                       const QString& key) {
+    const QByteArray geometry = layout_settings.value(key).toByteArray();
+    if (workspace && !geometry.isEmpty()) {
+      workspace->restoreGeometry(geometry);
+    }
+  };
+  restore_workspace_geometry(job_work_window_,
+                             "ui/layout/v1/job_workspace_geometry");
+  restore_workspace_geometry(visualization_work_window_,
+                             "ui/layout/v1/visualization_workspace_geometry");
+  restore_workspace_geometry(results_work_window_,
+                             "ui/layout/v1/results_workspace_geometry");
   layout_ready_ = true;
   if (layout_settings.value("ui/layout/v1/module_workspace_visible", false)
           .toBool()) {
@@ -2567,6 +2737,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   } else {
     module_work_window_->hide();
   }
+  auto restore_workspace_visibility = [&layout_settings](
+                                          QDockWidget* workspace,
+                                          const QString& key) {
+    if (!workspace) {
+      return;
+    }
+    workspace->setVisible(layout_settings.value(key, false).toBool());
+  };
+  restore_workspace_visibility(job_work_window_,
+                               "ui/layout/v1/job_workspace_visible");
+  restore_workspace_visibility(
+      visualization_work_window_,
+      "ui/layout/v1/visualization_workspace_visible");
+  restore_workspace_visibility(results_work_window_,
+                               "ui/layout/v1/results_workspace_visible");
   project_status_label_ = new QLabel("Project: Untitled");
   dirty_status_label_ = new QLabel("Saved");
   statusBar()->addPermanentWidget(project_status_label_);
@@ -2596,6 +2781,18 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     settings.setValue("ui/layout/v1/module_workspace_visible",
                       module_work_window_->isVisible());
   }
+  auto save_workspace = [&settings](QDockWidget* workspace,
+                                    const QString& key_prefix) {
+    if (!workspace) {
+      return;
+    }
+    settings.setValue(key_prefix + "_geometry", workspace->saveGeometry());
+    settings.setValue(key_prefix + "_visible", workspace->isVisible());
+  };
+  save_workspace(job_work_window_, "ui/layout/v1/job_workspace");
+  save_workspace(visualization_work_window_,
+                 "ui/layout/v1/visualization_workspace");
+  save_workspace(results_work_window_, "ui/layout/v1/results_workspace");
   settings.sync();
   QMainWindow::closeEvent(event);
 }
@@ -4796,7 +4993,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
     });
   }
 
-  QList<QPair<QString, std::function<void()>>> steps;
+  struct TourStep {
+    QString name;
+    std::function<void()> activate;
+    QWidget* capture = nullptr;
+  };
+  QList<TourStep> steps;
   const QStringList modules = {"Sketch",   "Part",     "Property",
                                "Material", "Section",  "Assembly",
                                "Step",     "Interaction", "Load",
@@ -4806,26 +5008,42 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
     steps.append({QString("module_%1_%2")
                       .arg(i, 2, 10, QLatin1Char('0'))
                       .arg(modules[i]),
-                  [this, i]() { module_tabs_->setCurrentIndex(i); }});
+                  [this, i]() { module_tabs_->setCurrentIndex(i); }, this});
   }
-  // viewer_ 作为 QTabWidget 的页，其直接父对象是内部 QStackedWidget，需向上找 QTabWidget
-  QTabWidget* center_tabs = nullptr;
-  for (QWidget* p = viewer_ ? viewer_->parentWidget() : nullptr; p;
-       p = p->parentWidget()) {
-    if ((center_tabs = qobject_cast<QTabWidget*>(p))) {
-      break;
+  steps.append({"center_Viewport", [this]() {
+                  if (viewer_) {
+                    viewer_->setFocus();
+                  }
+                },
+                this});
+  auto reveal_workspace = [](QDockWidget* workspace) {
+    if (!workspace) {
+      return;
     }
-  }
-  if (center_tabs) {
-    const QStringList pages = {"Viewport", "Plot", "Table"};
-    const int vis_index = modules.indexOf("Visualization");
-    for (int i = 0; i < pages.size() && i < center_tabs->count(); ++i) {
-      steps.append({QString("center_%1").arg(pages[i]),
-                    [this, center_tabs, i, vis_index]() {
-                      module_tabs_->setCurrentIndex(vis_index);
-                      center_tabs->setCurrentIndex(i);
-                    }});
-    }
+    workspace->show();
+    workspace->raise();
+    workspace->activateWindow();
+  };
+  steps.append({"workspace_Job",
+                [this, reveal_workspace]() {
+                  reveal_workspace(job_work_window_);
+                },
+                job_work_window_});
+  steps.append({"workspace_Visualization",
+                [this, reveal_workspace]() {
+                  reveal_workspace(visualization_work_window_);
+                },
+                visualization_work_window_});
+  const QStringList result_pages = {"Results", "Plot", "Table"};
+  for (int i = 0; i < result_pages.size(); ++i) {
+    steps.append({QString("workspace_Results_%1").arg(result_pages.at(i)),
+                  [this, reveal_workspace, i]() {
+                    if (results_work_tabs_) {
+                      results_work_tabs_->setCurrentIndex(i);
+                    }
+                    reveal_workspace(results_work_window_);
+                  },
+                  results_work_window_});
   }
 
   auto state = std::make_shared<int>(-1);
@@ -4835,15 +5053,28 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
             ++(*state);
             if (*state >= steps.size()) {
               timer->stop();
+              if (module_work_window_) {
+                module_work_window_->hide();
+              }
+              if (job_work_window_) {
+                job_work_window_->hide();
+              }
+              if (visualization_work_window_) {
+                visualization_work_window_->hide();
+              }
+              if (results_work_window_) {
+                results_work_window_->hide();
+              }
               QApplication::quit();
               return;
             }
             qInfo("[tour] step %d -> %s", *state,
-                  qPrintable(steps[*state].first));
-            steps[*state].second();
-            const QString file = dir + "/" + steps[*state].first + ".png";
-            QTimer::singleShot(500, this, [this, file]() {
-              const bool ok = grab().save(file);
+                  qPrintable(steps[*state].name));
+            steps[*state].activate();
+            const QString file = dir + "/" + steps[*state].name + ".png";
+            QWidget* capture = steps[*state].capture ? steps[*state].capture : this;
+            QTimer::singleShot(500, this, [capture, file]() {
+              const bool ok = capture && capture->grab().save(file);
               qInfo("[tour] saved %s ok=%d", qPrintable(file), ok);
             });
           });

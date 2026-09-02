@@ -22,6 +22,7 @@ class QTableWidget;
 class QDockWidget;
 class QSplitter;
 class QCloseEvent;
+class QTabWidget;
 
 namespace gmp {
 
@@ -105,6 +106,10 @@ class MainWindow : public QMainWindow {
   QSplitter* main_split_ = nullptr;
   QSplitter* vertical_split_ = nullptr;
   QDockWidget* module_work_window_ = nullptr;
+  QDockWidget* job_work_window_ = nullptr;
+  QDockWidget* visualization_work_window_ = nullptr;
+  QDockWidget* results_work_window_ = nullptr;
+  QTabWidget* results_work_tabs_ = nullptr;
   bool layout_ready_ = false;
   QTreeWidget* model_tree_ = nullptr;
   QStackedWidget* property_stack_ = nullptr;

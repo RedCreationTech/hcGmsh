@@ -26,17 +26,17 @@
 | 7 | Load | Load 页签；Load/BC 快捷动作 | 模块工作窗 | 模态 Load/BC 表单 | 载荷、边界条件、Step 关联 | 已临时迁移 |
 | 8 | SketchPanel | Sketch 页签；草图列表和 2D 编辑命令 | 模块工作窗，舞台保持 2D 编辑模式 | 舞台左侧 Sketch 工具 + 草图工作窗 | 新建/打开/完成草图、撤销重做、2D/3D 切换 | 已临时迁移 |
 | 9 | GmshPanel | Mesh 页签；导入、生成、预览网格 | 模块工作窗 | 舞台左侧 Mesh 工具 + Mesh 工作窗 | `.geo`、`.msh`、Physical Groups、预览 | 已临时迁移 |
-| 10 | Job 容器/MoosePanel | Job 页签；生成、校验、运行、表格、日志 | 模块工作窗 | 独立非模态单实例 Job 工作窗 | 运行/停止/重试、日志、作业状态；关闭窗不停止作业 | 已临时迁移 |
-| 11 | Visualization | Visualization 页签；显示控制、Plot/Table | 模块工作窗 | 舞台高频工具 + Visualization 工作窗 | 数据加载、显示参数、相机与结果不卸载 | 已临时迁移 |
-| 12 | Results | Results 页签；结果筛选、详情、打开方式 | 模块工作窗 | 独立非模态单实例 Results 工作窗 | 筛选、Plot/Table、文本、追溯；关闭窗不卸载结果 | 已临时迁移 |
+| 10 | Job 容器/MoosePanel | Job 页签；生成、校验、运行、表格、日志 | 模块工作窗 | 独立非模态单实例 Job 工作窗 | 运行/停止/重试、日志、作业状态；关闭窗不停止作业 | ✅ 已迁移并回归 |
+| 11 | Visualization | Visualization 页签；显示控制、Plot/Table | 模块工作窗 | 舞台高频工具 + Visualization 工作窗 | 数据加载、显示参数、相机与结果不卸载 | 详细控制已迁入独立窗，舞台工具待 L-03 |
+| 12 | Results | Results 页签；结果筛选、详情、打开方式 | 模块工作窗 | 独立非模态单实例 Results 工作窗 | 筛选、Plot/Table、文本、追溯；关闭窗不卸载结果 | ✅ 已迁移并回归 |
 
 ## 3. 中央工作区迁移项
 
 | 当前对象 | 当前行为 | 目标行为 | 计划任务 |
 |---|---|---|---|
-| `center_tabs/Viewport` | 中央显示 3D/2D 舞台 | 保留为唯一中央内容 | L-01/L-02 |
-| `center_tabs/Plot` | 切换后替换舞台 | 移入 Results/Visualization 工作窗 | L-02 |
-| `center_tabs/Table` | 切换后替换舞台 | 移入 Results/Visualization 工作窗 | L-02 |
+| `center_tabs/Viewport` | 中央显示 3D/2D 舞台 | 已保留为唯一中央内容 | L-01/L-02 ✅ |
+| `center_tabs/Plot` | 原先切换后替换舞台 | 已移入 Results Workspace | L-02 ✅ |
+| `center_tabs/Table` | 原先切换后替换舞台 | 已移入 Results Workspace | L-02 ✅ |
 | 底部 Console | 与主内容垂直分割，默认占用较高 | 默认紧凑，允许展开并持久化 | L-01 |
 
 ## 4. 入口与信号保护清单
@@ -46,7 +46,7 @@
 - [ ] `GmshPanel::mesh_written`、MoosePanel 运行/日志、Results 列表和 VTK 信号在换父容器后仍连接。
 - [ ] PropertyEditor 的 `set_item()`、`refresh_form_options()` 在兼容工作窗关闭时仍安全。
 - [ ] 草图进入/退出 2D 会话不依赖永久右栏可见性。
-- [ ] Job/Results 工作窗关闭不销毁页面，不停止作业、不卸载结果。
+- [x] Job/Results 工作窗关闭不销毁页面，不停止作业、不卸载结果。
 - [x] Module Workspace 与主窗口布局状态可恢复；多屏幕越界恢复仍由 L-05 完成。
 
 ## 5. L-00 验收结论
