@@ -7,6 +7,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QDateTime>
 #include <QRegularExpression>
 #include <QSet>
 
@@ -235,6 +236,139 @@ SnapshotExportResult export_job_snapshot(const QString& dest_dir,
   }
 
   result.ok = true;
+  return result;
+}
+
+SnapshotExportResult export_job_snapshot_v2(const QString& dest_dir,
+                                            const QString& input_text,
+                                            const QString& input_file,
+                                            const MooseTemplateInfo& tpl,
+                                            const SnapshotExportConfig& cfg) {
+  // v2 入口复用 v1 的文件复制与哈希逻辑，再组装 v2 manifest。
+  SnapshotExportResult result =
+      export_job_snapshot(dest_dir, input_text, input_file, tpl);
+  if (!result.ok) {
+    return result;
+  }
+
+  // 构建 v2 manifest（覆盖 v1 生成的 manifest）。
+  QJsonObject manifest;
+  manifest.insert("contract", "CONTRACT-JOB");
+  manifest.insert("contract_version", "2.0.0");
+  manifest.insert("schema_version", "2.0.0");
+  manifest.insert("case_name",
+                  cfg.case_name.isEmpty()
+                      ? (tpl.valid ? tpl.key
+                                   : QFileInfo(input_file).completeBaseName())
+                      : cfg.case_name);
+  manifest.insert("case_id", cfg.case_id);
+
+  // application_profile
+  if (cfg.profile.valid) {
+    QJsonObject profile_obj;
+    profile_obj.insert("profile_id", cfg.profile.id);
+    profile_obj.insert("profile_version", cfg.profile.version);
+    profile_obj.insert("mapping_version", cfg.profile.mapping_version);
+    profile_obj.insert("solver_program", cfg.profile.solver_program);
+    profile_obj.insert("support_level", cfg.profile.support_level);
+    manifest.insert("application_profile", profile_obj);
+  }
+
+  // unit_contract
+  QJsonObject unit_obj;
+  for (auto it = cfg.profile.unit_contract.begin();
+       it != cfg.profile.unit_contract.end(); ++it) {
+    unit_obj.insert(it.key(), it.value());
+  }
+  if (!cfg.unit_factors.isEmpty()) {
+    QJsonObject factor_obj;
+    for (auto it = cfg.unit_factors.begin(); it != cfg.unit_factors.end(); ++it) {
+      factor_obj.insert(it.key(), it.value());
+    }
+    unit_obj.insert("display_to_solver_factors", factor_obj);
+  }
+  if (!unit_obj.isEmpty()) {
+    manifest.insert("unit_contract", unit_obj);
+  }
+
+  manifest.insert("input_mode", cfg.input_mode);
+  manifest.insert("generator_version",
+                  cfg.generator_version.isEmpty() ? "gmp-ise" : cfg.generator_version);
+  manifest.insert("base_model_hash", cfg.base_model_hash);
+  manifest.insert("extension_hash", cfg.extension_hash);
+  manifest.insert("final_input_hash", result.input_sha256);
+  manifest.insert("created_at",
+                  QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+
+  // input_snapshot
+  QJsonObject snapshot;
+  snapshot.insert("input_file", input_file);
+  snapshot.insert("input_sha256", result.input_sha256);
+  QJsonArray mesh_arr;
+  for (const auto& name : result.mesh_files) {
+    bool ok = false;
+    const QString sha = sha256_file_hex(QDir(dest_dir).filePath(name), &ok);
+    QJsonObject entry;
+    entry.insert("name", name);
+    entry.insert("sha256", ok ? sha : QString());
+    entry.insert("role", "input_mesh");
+    mesh_arr.append(entry);
+  }
+  snapshot.insert("mesh_files", mesh_arr);
+  QJsonArray extra_arr;
+  for (const auto& name : result.extra_files) {
+    bool ok = false;
+    const QString sha = sha256_file_hex(QDir(dest_dir).filePath(name), &ok);
+    QJsonObject entry;
+    entry.insert("name", name);
+    entry.insert("sha256", ok ? sha : QString());
+    entry.insert("role", "extra");
+    extra_arr.append(entry);
+  }
+  snapshot.insert("extra_files", extra_arr);
+  manifest.insert("input_snapshot", snapshot);
+
+  // traceability
+  QJsonObject trace;
+  trace.insert("project_path", cfg.project_path);
+  trace.insert("project_version", cfg.project_sha256);
+  trace.insert("mesh_snapshot_sha256", cfg.physical_groups.mesh_sha256);
+  QJsonArray pg_arr;
+  for (const auto& g : cfg.physical_groups.groups) {
+    QJsonObject pg;
+    pg.insert("name", g.name);
+    pg.insert("dim", g.dim);
+    pg_arr.append(pg);
+  }
+  trace.insert("physical_groups", pg_arr);
+  manifest.insert("traceability", trace);
+
+  // recommended_command
+  QString cmd = cfg.recommended_command;
+  if (cmd.isEmpty() && cfg.profile.valid) {
+    QString template_cmd = cfg.profile.check_command;
+    cmd = template_cmd.replace("{solver}", cfg.profile.solver_program)
+             .replace("{input}", input_file);
+  }
+  manifest.insert("recommended_command", cmd);
+
+  // notes / extra
+  for (auto it = cfg.extra.begin(); it != cfg.extra.end(); ++it) {
+    manifest.insert(it.key(), QJsonValue::fromVariant(it.value()));
+  }
+
+  result.manifest = manifest;
+  {
+    QFile file(result.manifest_path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+      result.ok = false;
+      result.error = "failed to write manifest: " + result.manifest_path;
+      return result;
+    }
+    file.write(QJsonDocument(manifest).toJson(QJsonDocument::Indented));
+    file.write("\n");
+  }
+
   return result;
 }
 

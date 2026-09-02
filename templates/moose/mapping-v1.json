@@ -1,0 +1,311 @@
+{
+  "version": "1.0.0",
+  "description": "MOOSE 输入 blocks 与对象类型的版本化映射注册表（Phase 0 基线）",
+  "blocks": {
+    "Mesh": {
+      "description": "网格定义",
+      "objects": {
+        "FileMesh": {
+          "required_params": ["type", "file"],
+          "optional_params": [
+            "dim",
+            "construct_side_list_from_node_list",
+            "construct_node_list_from_side_list",
+            "uniform_refine",
+            "displacements",
+            "parallel_type"
+          ],
+          "param_schema": {
+            "type": { "type": "enum", "value": "FileMesh", "readonly": true },
+            "file": {
+              "type": "file_path",
+              "relative_to": "snapshot_root",
+              "label": "网格文件",
+              "description": "案例包根目录下的相对路径"
+            },
+            "dim": { "type": "integer", "enum": [1, 2, 3], "label": "空间维度" }
+          }
+        }
+      }
+    },
+    "Variables": {
+      "description": "主变量",
+      "objects": {
+        "MooseVariable": {
+          "required_params": ["order", "family"],
+          "optional_params": ["block", "initial_condition"],
+          "param_schema": {
+            "order": { "type": "enum", "enum": ["FIRST", "SECOND"], "label": "阶次" },
+            "family": { "type": "enum", "enum": ["LAGRANGE", "MONOMIAL"], "label": "函数族" },
+            "block": { "type": "physical_group_list", "dim": 3, "label": "作用区域" }
+          }
+        }
+      }
+    },
+    "ICs": {
+      "description": "初始条件",
+      "objects": {
+        "ConstantIC": {
+          "required_params": ["type", "variable", "value"],
+          "optional_params": ["block"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "ConstantIC", "readonly": true },
+            "variable": { "type": "variable_ref", "label": "变量" },
+            "value": { "type": "scalar", "label": "初始值" }
+          }
+        }
+      }
+    },
+    "Kernels": {
+      "description": "控制方程 Kernel",
+      "objects": {
+        "StressDivergenceRZTensors": {
+          "required_params": ["type", "variable", "displacements"],
+          "optional_params": ["block", "use_displaced_mesh"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "StressDivergenceRZTensors", "readonly": true },
+            "variable": { "type": "variable_ref", "label": "变量" },
+            "displacements": { "type": "variable_list", "label": "位移变量" }
+          }
+        },
+        "StressDivergenceTensors": {
+          "required_params": ["type", "variable", "displacements"],
+          "optional_params": ["block", "use_displaced_mesh"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "StressDivergenceTensors", "readonly": true },
+            "variable": { "type": "variable_ref", "label": "变量" },
+            "displacements": { "type": "variable_list", "label": "位移变量" }
+          }
+        }
+      }
+    },
+    "Physics": {
+      "description": "应用级 Physics 块（部分 MOOSE 应用使用）",
+      "objects": {
+        "SolidMechanics": {
+          "required_params": ["type"],
+          "optional_params": ["block", "displacements", "strain", "add_automatically"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "SolidMechanics", "readonly": true },
+            "displacements": { "type": "variable_list", "label": "位移变量" },
+            "strain": { "type": "enum", "enum": ["SMALL", "FINITE"], "label": "应变模型" }
+          }
+        }
+      }
+    },
+    "AuxVariables": {
+      "description": "辅助变量",
+      "objects": {
+        "MooseVariable": {
+          "required_params": ["order", "family"],
+          "optional_params": ["block"],
+          "param_schema": {
+            "order": { "type": "enum", "enum": ["FIRST", "SECOND"], "label": "阶次" },
+            "family": { "type": "enum", "enum": ["LAGRANGE", "MONOMIAL"], "label": "函数族" }
+          }
+        }
+      }
+    },
+    "AuxKernels": {
+      "description": "辅助 Kernel",
+      "objects": {
+        "RankTwoAux": {
+          "required_params": ["type", "variable", "rank_two_tensor", "index_i", "index_j"],
+          "optional_params": ["block", "execute_on", "boundary"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "RankTwoAux", "readonly": true },
+            "rank_two_tensor": { "type": "material_property_ref", "label": "二阶张量" },
+            "index_i": { "type": "integer", "label": "指标 i" },
+            "index_j": { "type": "integer", "label": "指标 j" }
+          }
+        }
+      }
+    },
+    "Materials": {
+      "description": "材料与本构",
+      "objects": {
+        "ComputeIsotropicElasticityTensor": {
+          "required_params": ["type", "youngs_modulus", "poissons_ratio"],
+          "optional_params": ["block"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "ComputeIsotropicElasticityTensor", "readonly": true },
+            "youngs_modulus": { "type": "scalar", "unit": "pressure", "label": "弹性模量" },
+            "poissons_ratio": { "type": "scalar", "label": "泊松比" }
+          }
+        },
+        "ComputeLinearElasticStress": {
+          "required_params": ["type"],
+          "optional_params": ["block"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "ComputeLinearElasticStress", "readonly": true }
+          }
+        }
+      }
+    },
+    "BCs": {
+      "description": "边界条件",
+      "objects": {
+        "DirichletBC": {
+          "required_params": ["type", "variable", "boundary", "value"],
+          "optional_params": ["function", "preset"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "DirichletBC", "readonly": true },
+            "variable": { "type": "variable_ref", "label": "变量" },
+            "boundary": { "type": "physical_group_list", "dim": 2, "label": "边界" },
+            "value": { "type": "scalar", "label": "边界值" }
+          }
+        },
+        "NeumannBC": {
+          "required_params": ["type", "variable", "boundary", "value"],
+          "optional_params": ["function"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "NeumannBC", "readonly": true },
+            "boundary": { "type": "physical_group_list", "dim": 2, "label": "边界" },
+            "value": { "type": "scalar", "label": "边界值" }
+          }
+        }
+      }
+    },
+    "Functions": {
+      "description": "函数",
+      "objects": {
+        "ParsedFunction": {
+          "required_params": ["type", "expression"],
+          "optional_params": ["vars", "vals"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "ParsedFunction", "readonly": true },
+            "expression": { "type": "string", "label": "表达式" }
+          }
+        }
+      }
+    },
+    "Constraints": {
+      "description": "约束（耦合、绑定等）",
+      "objects": {
+        "CoupledDirichletBC": {
+          "required_params": ["type", "variable", "primary", "secondary"],
+          "optional_params": ["value"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "CoupledDirichletBC", "readonly": true },
+            "primary": { "type": "physical_group_list", "label": "主面" },
+            "secondary": { "type": "physical_group_list", "label": "从面" }
+          }
+        }
+      },
+      "support_note": "仅当应用档案声明支持时生成；否则标记为不支持。"
+    },
+    "Contact": {
+      "description": "接触",
+      "objects": {
+        "Contact": {
+          "required_params": ["type", "model", "formulation", "master", "slave"],
+          "optional_params": ["normal_smoothing_distance", "tangential_tolerance"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "Contact", "readonly": true },
+            "model": { "type": "enum", "enum": ["frictionless", "coulomb"], "label": "接触模型" },
+            "formulation": { "type": "enum", "enum": ["default", "kinematic", "penalty"], "label": " formulation" },
+            "master": { "type": "physical_group_list", "label": "主面" },
+            "slave": { "type": "physical_group_list", "label": "从面" }
+          }
+        }
+      },
+      "support_note": "仅当应用档案声明支持时生成；否则标记为不支持。"
+    },
+    "Executioner": {
+      "description": "求解器执行配置",
+      "objects": {
+        "Transient": {
+          "required_params": ["type", "end_time", "dt", "solve_type"],
+          "optional_params": ["dtmin", "dtmax", "num_steps", "l_max_its", "nl_max_its"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "Transient", "readonly": true },
+            "end_time": { "type": "scalar", "unit": "time", "label": "终止时间" },
+            "dt": { "type": "scalar", "unit": "time", "label": "初始时间步" },
+            "solve_type": { "type": "enum", "enum": ["PJFNK", "NEWTON"], "label": "求解类型" }
+          }
+        },
+        "Steady": {
+          "required_params": ["type", "solve_type"],
+          "optional_params": ["l_max_its", "nl_max_its"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "Steady", "readonly": true },
+            "solve_type": { "type": "enum", "enum": ["PJFNK", "NEWTON"], "label": "求解类型" }
+          }
+        }
+      }
+    },
+    "Preconditioning": {
+      "description": "预处理",
+      "objects": {
+        "SMP": {
+          "required_params": ["type"],
+          "optional_params": ["full", "pc_hypre", "petsc_options"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "SMP", "readonly": true }
+          }
+        }
+      }
+    },
+    "Postprocessors": {
+      "description": "历史输出后处理",
+      "objects": {
+        "NodalVariableValue": {
+          "required_params": ["type", "variable", "nodeid"],
+          "optional_params": ["execute_on"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "NodalVariableValue", "readonly": true },
+            "variable": { "type": "variable_ref", "label": "变量" },
+            "nodeid": { "type": "integer", "label": "节点编号" }
+          }
+        }
+      }
+    },
+    "VectorPostprocessors": {
+      "description": "向量后处理",
+      "objects": {
+        "NodalValueSampler": {
+          "required_params": ["type", "variable", "boundary", "sort_by"],
+          "optional_params": ["execute_on"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "NodalValueSampler", "readonly": true },
+            "variable": { "type": "variable_ref", "label": "变量" },
+            "boundary": { "type": "physical_group_list", "label": "边界" }
+          }
+        }
+      }
+    },
+    "Outputs": {
+      "description": "输出",
+      "objects": {
+        "Exodus": {
+          "required_params": ["type"],
+          "optional_params": ["interval", "sync_only", "sync_times", "file_base"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "Exodus", "readonly": true },
+            "interval": { "type": "integer", "label": "输出间隔" }
+          }
+        },
+        "CSV": {
+          "required_params": ["type"],
+          "optional_params": ["interval", "sync_only"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "CSV", "readonly": true }
+          }
+        },
+        "Console": {
+          "required_params": ["type"],
+          "optional_params": ["execute_on"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "Console", "readonly": true }
+          }
+        }
+      }
+    }
+  },
+  "ordering": [
+    "Mesh", "GlobalParams", "Variables", "ICs", "Kernels", "Physics",
+    "AuxVariables", "AuxKernels", "Materials", "BCs", "Functions",
+    "Constraints", "Contact", "Executioner", "Preconditioning",
+    "Postprocessors", "VectorPostprocessors", "Outputs"
+  ]
+}

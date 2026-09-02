@@ -93,6 +93,12 @@ add_executable(gmp_ise
   src/MoosePanel.cpp
   src/MooseTemplates.cpp
   src/MooseSnapshot.cpp
+  src/MooseMappingRegistry.cpp
+  include/gmp/MooseMappingRegistry.h
+  src/ApplicationProfile.cpp
+  include/gmp/ApplicationProfile.h
+  src/PhysicalGroupManifest.cpp
+  include/gmp/PhysicalGroupManifest.h
   src/SimClient.cpp
   src/ArtifactDialog.cpp
   include/gmp/MooseTemplates.h
@@ -123,7 +129,8 @@ target_link_libraries(gmp_ise PRIVATE Qt6::Widgets Qt6::Network)
 # TASK-E2E-10: MOOSE 模板库根目录（templates/moose/），运行期可被
 # GMP_MOOSE_TEMPLATES 环境变量覆盖
 target_compile_definitions(gmp_ise PRIVATE
-  GMP_TEMPLATE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates/moose")
+  GMP_TEMPLATE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates/moose"
+  GMP_PROFILE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates/moose/profiles")
 
 add_subdirectory(external/yaml-cpp)
 target_link_libraries(gmp_ise PRIVATE yaml-cpp)
@@ -151,3 +158,18 @@ if(GMP_ENABLE_VTK_VIEWER)
     vtk_module_autoinit(TARGETS gmp_ise MODULES ${VTK_LIBRARIES})
   endif()
 endif()
+
+# Phase 0 自测程序：验证 ApplicationProfile、MooseMappingRegistry、PhysicalGroupManifest、Snapshot v2
+add_executable(gmp_ise_phase0_test tests/test_phase0.cpp
+  src/ApplicationProfile.cpp include/gmp/ApplicationProfile.h
+  src/MooseMappingRegistry.cpp include/gmp/MooseMappingRegistry.h
+  src/MooseSnapshot.cpp include/gmp/MooseSnapshot.h
+  src/MooseTemplates.cpp include/gmp/MooseTemplates.h
+  src/PhysicalGroupManifest.cpp include/gmp/PhysicalGroupManifest.h
+  src/Env.cpp include/gmp/Env.h
+)
+target_include_directories(gmp_ise_phase0_test PRIVATE include)
+target_link_libraries(gmp_ise_phase0_test PRIVATE Qt6::Core Qt6::Network yaml-cpp)
+target_compile_definitions(gmp_ise_phase0_test PRIVATE
+  GMP_TEMPLATE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates/moose"
+  GMP_PROFILE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates/moose/profiles")

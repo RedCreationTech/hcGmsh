@@ -4247,6 +4247,84 @@ void MainWindow::load_project(const QString& path) {
   try {
     suppress_dirty_ = true;
     YAML::Node root = YAML::LoadFile(path.toStdString());
+
+    // Phase 0：schema 版本识别与兼容
+    schema_version_ = 2;
+    if (root["schema_version"] && root["schema_version"].IsScalar()) {
+      schema_version_ = root["schema_version"].as<int>();
+    } else if (root["version"] && root["version"].IsScalar()) {
+      const int old_version = root["version"].as<int>();
+      if (old_version > 2) {
+        QMessageBox::warning(this, "Project Load",
+                             "Unsupported project version.");
+        suppress_dirty_ = false;
+        return;
+      }
+      schema_version_ = 2;  // 从 v1 迁移到 v2 内存模型
+    }
+    if (schema_version_ > 2) {
+      QMessageBox::warning(this, "Project Load",
+                           QString("Unsupported schema version: %1").arg(schema_version_));
+      suppress_dirty_ = false;
+      return;
+    }
+
+    // 读取应用档案与单位合同
+    application_profile_.clear();
+    if (root["application_profile"] && root["application_profile"].IsMap()) {
+      for (const auto& it : root["application_profile"]) {
+        const QString key = QString::fromStdString(it.first.as<std::string>());
+        const QString value = QString::fromStdString(it.second.as<std::string>());
+        application_profile_.insert(key, value);
+      }
+    }
+
+    unit_contract_.clear();
+    if (root["unit_contract"] && root["unit_contract"].IsMap()) {
+      for (const auto& it : root["unit_contract"]) {
+        const QString key = QString::fromStdString(it.first.as<std::string>());
+        const QString value = QString::fromStdString(it.second.as<std::string>());
+        unit_contract_.insert(key, value);
+      }
+    }
+
+    // 读取网格快照
+    mesh_snapshot_ = PhysicalGroupManifest();
+    if (root["mesh_snapshot"] && root["mesh_snapshot"].IsMap()) {
+      const YAML::Node& ms = root["mesh_snapshot"];
+      mesh_snapshot_.mesh_path = QString::fromStdString(
+          ms["path"].as<std::string>(""));
+      mesh_snapshot_.mesh_sha256 = QString::fromStdString(
+          ms["sha256"].as<std::string>(""));
+      mesh_snapshot_.mesh_dim = ms["mesh_dim"].as<int>(-1);
+      mesh_snapshot_.node_count = ms["node_count"].as<int>(0);
+      mesh_snapshot_.element_count = ms["element_count"].as<int>(0);
+      mesh_snapshot_.element_type = QString::fromStdString(
+          ms["element_type"].as<std::string>(""));
+      if (ms["physical_groups"] && ms["physical_groups"].IsSequence()) {
+        for (const auto& pg : ms["physical_groups"]) {
+          PhysicalGroupEntry entry;
+          entry.name = QString::fromStdString(pg["name"].as<std::string>(""));
+          entry.dim = pg["dim"].as<int>(-1);
+          if (pg["tags"] && pg["tags"].IsSequence()) {
+            for (const auto& t : pg["tags"]) {
+              entry.tags.append(t.as<int>(0));
+            }
+          }
+          entry.entity_count = pg["entity_count"].as<int>(0);
+          entry.element_count = pg["element_count"].as<int>(0);
+          mesh_snapshot_.groups.append(entry);
+        }
+      }
+      if (ms["quality_summary"] && ms["quality_summary"].IsMap()) {
+        for (const auto& q : ms["quality_summary"]) {
+          const QString key = QString::fromStdString(q.first.as<std::string>());
+          const double value = q.second.as<double>(0.0);
+          mesh_snapshot_.quality_summary.insert(key, value);
+        }
+      }
+    }
+
     auto parse_map = [](const YAML::Node& node,
                         const QSet<QString>& force_string) {
       QVariantMap map;
@@ -4344,6 +4422,14 @@ void MainWindow::load_project(const QString& path) {
       const QVariantMap moose_settings = parse_map(moose_node, force_string);
       moose_panel_->apply_moose_settings(moose_settings);
     }
+    input_snapshots_.clear();
+    if (moose_node && moose_node.IsMap() && moose_node["input_snapshots"] &&
+        moose_node["input_snapshots"].IsSequence()) {
+      for (const auto& s : moose_node["input_snapshots"]) {
+        input_snapshots_.append(
+            QString::fromStdString(s.as<std::string>("")));
+      }
+    }
 
     YAML::Node viewer_node = root["viewer"];
     if (viewer_node && viewer_node.IsMap() && viewer_) {
@@ -4369,9 +4455,61 @@ void MainWindow::load_project(const QString& path) {
 bool MainWindow::save_project(const QString& path) {
   try {
     YAML::Node root;
-    root["version"] = 1;
+    root["schema_version"] = schema_version_;
+    root["version"] = 2;  // 保留旧字段以兼容只读 version 的工具
     root["saved_at"] =
         QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
+
+    // Phase 0：写入应用档案与单位合同
+    if (!application_profile_.isEmpty()) {
+      YAML::Node app_node(YAML::NodeType::Map);
+      for (auto it = application_profile_.begin(); it != application_profile_.end(); ++it) {
+        app_node[it.key().toStdString()] = it.value().toString().toStdString();
+      }
+      root["application_profile"] = app_node;
+    }
+
+    if (!unit_contract_.isEmpty()) {
+      YAML::Node unit_node(YAML::NodeType::Map);
+      for (auto it = unit_contract_.begin(); it != unit_contract_.end(); ++it) {
+        unit_node[it.key().toStdString()] = it.value().toString().toStdString();
+      }
+      root["unit_contract"] = unit_node;
+    }
+
+    // Phase 0：写入网格快照
+    if (mesh_snapshot_.is_valid()) {
+      YAML::Node ms_node(YAML::NodeType::Map);
+      ms_node["path"] = mesh_snapshot_.mesh_path.toStdString();
+      ms_node["sha256"] = mesh_snapshot_.mesh_sha256.toStdString();
+      ms_node["mesh_dim"] = mesh_snapshot_.mesh_dim;
+      ms_node["node_count"] = mesh_snapshot_.node_count;
+      ms_node["element_count"] = mesh_snapshot_.element_count;
+      ms_node["element_type"] = mesh_snapshot_.element_type.toStdString();
+      YAML::Node pg_list(YAML::NodeType::Sequence);
+      for (const auto& g : mesh_snapshot_.groups) {
+        YAML::Node pg(YAML::NodeType::Map);
+        pg["name"] = g.name.toStdString();
+        pg["dim"] = g.dim;
+        YAML::Node tags(YAML::NodeType::Sequence);
+        for (int t : g.tags) {
+          tags.push_back(t);
+        }
+        pg["tags"] = tags;
+        pg["entity_count"] = g.entity_count;
+        pg["element_count"] = g.element_count;
+        pg_list.push_back(pg);
+      }
+      ms_node["physical_groups"] = pg_list;
+      YAML::Node quality(YAML::NodeType::Map);
+      for (auto it = mesh_snapshot_.quality_summary.begin();
+           it != mesh_snapshot_.quality_summary.end(); ++it) {
+        quality[it.key().toStdString()] = it.value();
+      }
+      ms_node["quality_summary"] = quality;
+      root["mesh_snapshot"] = ms_node;
+    }
+
     YAML::Node model(YAML::NodeType::Map);
     for (int i = 0; i < model_tree_->topLevelItemCount(); ++i) {
       auto* root_item = model_tree_->topLevelItem(i);
@@ -4442,6 +4580,14 @@ bool MainWindow::save_project(const QString& path) {
             moose_node[it.key().toStdString()] = val.toString().toStdString();
             break;
         }
+      }
+      // Phase 0：写入历史输入快照列表
+      if (!input_snapshots_.isEmpty()) {
+        YAML::Node snaps(YAML::NodeType::Sequence);
+        for (const QString& s : input_snapshots_) {
+          snaps.push_back(s.toStdString());
+        }
+        moose_node["input_snapshots"] = snaps;
       }
       root["moose"] = moose_node;
     }

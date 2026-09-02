@@ -4,6 +4,8 @@
 #include <QStringList>
 #include <QVariantMap>
 
+#include "gmp/PhysicalGroupManifest.h"
+
 class QPlainTextEdit;
 class QAction;
 class QStackedWidget;
@@ -145,6 +147,13 @@ class MainWindow : public QMainWindow {
   QAction* action_run_ = nullptr;
   QAction* action_check_ = nullptr;
   QAction* action_stop_ = nullptr;
+
+  // Phase 0 数据合同字段
+  int schema_version_ = 2;
+  QVariantMap application_profile_;
+  QVariantMap unit_contract_;
+  PhysicalGroupManifest mesh_snapshot_;
+  QStringList input_snapshots_;
 };
 
 }  // namespace gmp

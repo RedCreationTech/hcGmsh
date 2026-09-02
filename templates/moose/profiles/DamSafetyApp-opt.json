@@ -1,0 +1,36 @@
+{
+  "id": "DamSafetyApp-opt",
+  "display_name": "DamSafetyApp（优化版）",
+  "version": "1.0.0",
+  "status": "production",
+  "status_note": "",
+  "solver_program": "DamSafetyApp-opt",
+  "compute_environment": "linux-x86_64-gnu-mpi",
+  "physics": [
+    {
+      "id": "small_strain_solid",
+      "display_name": "三维小应变准静态固体力学",
+      "dimensions": [3],
+      "supported_blocks": [
+        "Mesh", "GlobalParams", "Variables", "ICs", "Kernels", "Materials",
+        "BCs", "Functions", "Constraints", "Contact", "Executioner",
+        "Preconditioning", "Postprocessors", "VectorPostprocessors", "Outputs"
+      ]
+    }
+  ],
+  "mapping_registry": {
+    "path": "../mapping-v1.json",
+    "version": "1.0.0"
+  },
+  "check_command": "{solver} -i {input} --check-input",
+  "support_level": "production",
+  "unit_contract": {
+    "name": "SI",
+    "length": "m",
+    "force": "N",
+    "time": "s",
+    "mass": "kg",
+    "pressure": "Pa",
+    "temperature": "K"
+  }
+}
