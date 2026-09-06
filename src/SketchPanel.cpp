@@ -11,6 +11,7 @@
 #include <QVBoxLayout>
 
 #include "gmp/SketchDocument.h"
+#include "gmp/L10n.h"
 #include "gmp/VtkViewer.h"
 
 namespace gmp {
@@ -83,27 +84,50 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   edit_name_->setFont(nfont);
   edit_layout->addWidget(edit_name_);
 
+  // 编辑器按“绘制工具 / 约束与尺寸”双栏排布，避免少量控件被通用工作窗
+  // 拉成狭长的大面板。
+  auto* controls_row = new QHBoxLayout();
+  controls_row->setContentsMargins(0, 0, 0, 0);
+  controls_row->setSpacing(12);
+  auto* tool_column = new QWidget(edit_box_);
+  auto* tool_layout = new QVBoxLayout(tool_column);
+  tool_layout->setContentsMargins(0, 0, 0, 0);
+  tool_layout->setSpacing(5);
+  auto* setup_column = new QWidget(edit_box_);
+  auto* setup_layout = new QVBoxLayout(setup_column);
+  setup_layout->setContentsMargins(0, 0, 0, 0);
+  setup_layout->setSpacing(5);
+  controls_row->addWidget(tool_column, 1);
+  controls_row->addWidget(setup_column, 1);
+
   // 工具按钮组: int id 与 VtkViewer::SketchTool 一致
-  edit_layout->addWidget(new QLabel("Tools:", edit_box_));
-  auto* tool_group = new QButtonGroup(edit_box_);
-  tool_group->setExclusive(true);
+  tool_layout->addWidget(new QLabel("Tools:", tool_column));
+  tool_group_ = new QButtonGroup(edit_box_);
+  tool_group_->setExclusive(true);
   auto* tool_row1 = new QHBoxLayout();
   tool_row1->setContentsMargins(0, 0, 0, 0);
   auto* tool_row2 = new QHBoxLayout();
   tool_row2->setContentsMargins(0, 0, 0, 0);
   auto make_tool = [&](const QString& text, int id, const QString& tip,
                        QHBoxLayout* target) {
-    auto* btn = new QPushButton(text, edit_box_);
+    auto* btn = new QPushButton(text, tool_column);
+    btn->setObjectName(QString("sketchTool_%1").arg(id));
     btn->setCheckable(true);
+    btn->setProperty("gmpSketchTool", true);
+    btn->setMinimumWidth(64);
     btn->setToolTip(tip);
-    tool_group->addButton(btn, id);
+    tool_group_->addButton(btn, id);
     target->addWidget(btn);
     return btn;
   };
   auto* select_btn = make_tool("Select", SketchToolSelect,
-                               "Click to select an entity; Shift+click toggles "
-                               "multi-selection.",
+                               "Click a complete shape; Option/Alt selects one "
+                               "sub-entity; combine with Shift for multi-selection.",
                                tool_row1);
+  make_tool("Move", SketchToolMove,
+            "Drag a complete shape. Hold Option/Alt to drag one sub-entity; "
+            "combine with Shift for multi-selection.",
+            tool_row1);
   make_tool("Line", SketchToolDrawLine,
             "Draw a line: click start point, then end point. Endpoints snap "
             "to existing points.",
@@ -116,8 +140,8 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
             "end angle.",
             tool_row2);
   make_tool("Delete", SketchToolDelete,
-            "Click an entity to delete it. The Delete key removes the current "
-            "selection.",
+            "Click a complete shape to delete it; Option/Alt deletes one "
+            "sub-entity. The Delete key removes the current selection.",
             tool_row2);
   make_tool("Rectangle", SketchToolDrawRectangle,
             "Draw an axis-aligned rectangle: click one corner, then the "
@@ -125,19 +149,30 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
             tool_row2);
   tool_row1->addStretch(1);
   tool_row2->addStretch(1);
-  edit_layout->addLayout(tool_row1);
-  edit_layout->addLayout(tool_row2);
+  tool_layout->addLayout(tool_row1);
+  tool_layout->addLayout(tool_row2);
   select_btn->setChecked(true);
+  tool_status_label_ = new QLabel("Current tool: Select", tool_column);
+  tool_status_label_->setObjectName("sketchCurrentTool");
+  tool_status_label_->setProperty("gmpActiveTool", true);
+  tool_layout->addWidget(tool_status_label_);
+  auto* selection_hint = new QLabel(
+      "Selection: shape by default; Option/Alt = sub-entity; Shift = multi-select.",
+      tool_column);
+  selection_hint->setWordWrap(true);
+  selection_hint->setStyleSheet("color: #607086;");
+  tool_layout->addWidget(selection_hint);
+  tool_layout->addStretch(1);
 
   // 几何约束按钮: int id 与 SketchConstraintType 一致
-  edit_layout->addWidget(new QLabel("Constraints:", edit_box_));
+  setup_layout->addWidget(new QLabel("Constraints:", setup_column));
   auto* c_row1 = new QHBoxLayout();
   c_row1->setContentsMargins(0, 0, 0, 0);
   auto* c_row2 = new QHBoxLayout();
   c_row2->setContentsMargins(0, 0, 0, 0);
   auto make_constraint = [&](const QString& text, SketchConstraintType type,
                              const QString& tip, QHBoxLayout* target) {
-    auto* btn = new QPushButton(text, edit_box_);
+    auto* btn = new QPushButton(text, setup_column);
     btn->setToolTip(tip);
     target->addWidget(btn);
     connect(btn, &QPushButton::clicked, this,
@@ -156,38 +191,44 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
                   "together.", c_row2);
   c_row1->addStretch(1);
   c_row2->addStretch(1);
-  edit_layout->addLayout(c_row1);
-  edit_layout->addLayout(c_row2);
+  setup_layout->addLayout(c_row1);
+  setup_layout->addLayout(c_row2);
 
   // driving 尺寸: 选中线 -> Distance; 选中圆/弧 -> Radius
-  edit_layout->addWidget(new QLabel("Dimension:", edit_box_));
+  setup_layout->addWidget(new QLabel("Dimension:", setup_column));
   auto* d_row = new QHBoxLayout();
   d_row->setContentsMargins(0, 0, 0, 0);
-  dim_value_ = new QDoubleSpinBox(edit_box_);
+  dim_value_ = new QDoubleSpinBox(setup_column);
+  dim_value_->setMaximumWidth(110);
   dim_value_->setRange(0.0001, 1e7);
   dim_value_->setDecimals(4);
   dim_value_->setValue(10.0);
   dim_value_->setToolTip("Target value for the driving dimension (mm).");
-  auto* dim_dist_btn = new QPushButton("Add Distance", edit_box_);
+  auto* dim_dist_btn = new QPushButton("Add Distance", setup_column);
   dim_dist_btn->setToolTip("Add a driving distance (length) dimension to the "
                            "selected line.");
-  auto* dim_radius_btn = new QPushButton("Add Radius", edit_box_);
+  auto* dim_radius_btn = new QPushButton("Add Radius", setup_column);
   dim_radius_btn->setToolTip("Add a driving radius dimension to the selected "
                              "circle or arc.");
   d_row->addWidget(dim_value_);
   d_row->addWidget(dim_dist_btn);
   d_row->addWidget(dim_radius_btn);
   d_row->addStretch(1);
-  edit_layout->addLayout(d_row);
+  setup_layout->addLayout(d_row);
+  setup_layout->addStretch(1);
+  edit_layout->addLayout(controls_row);
 
   // 光标世界坐标 + 状态提示
+  auto* feedback_row = new QHBoxLayout();
+  feedback_row->setContentsMargins(0, 0, 0, 0);
   cursor_label_ = new QLabel("Cursor: --", edit_box_);
-  edit_layout->addWidget(cursor_label_);
+  feedback_row->addWidget(cursor_label_);
   status_label_ = new QLabel(edit_box_);
   status_label_->setWordWrap(true);
-  edit_layout->addWidget(status_label_);
+  feedback_row->addWidget(status_label_, 1);
+  edit_layout->addLayout(feedback_row);
 
-  // 撤销/重做 (快照栈由 MainWindow 维护)
+  // 撤销/重做与完成编辑同处底部操作行；主操作保持合理宽度。
   auto* ur_row = new QHBoxLayout();
   ur_row->setContentsMargins(0, 0, 0, 0);
   undo_btn_ = new QPushButton("Undo", edit_box_);
@@ -199,11 +240,14 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   ur_row->addWidget(undo_btn_);
   ur_row->addWidget(redo_btn_);
   ur_row->addStretch(1);
-  edit_layout->addLayout(ur_row);
-
   auto* finish_btn = new QPushButton("Finish Edit", edit_box_);
+  finish_btn->setObjectName("finishSketchEditButton");
+  finish_btn->setProperty("gmpPrimaryAction", true);
+  finish_btn->setMinimumWidth(120);
+  finish_btn->setMaximumWidth(160);
   finish_btn->setToolTip("Close the sketch editor and return to the 3D view.");
-  edit_layout->addWidget(finish_btn);
+  ur_row->addWidget(finish_btn);
+  edit_layout->addLayout(ur_row);
 
   edit_box_->setVisible(false);
   layout->addWidget(edit_box_);
@@ -223,7 +267,7 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   connect(refresh_btn, &QPushButton::clicked, this,
           &SketchPanel::refresh_requested);
 
-  connect(tool_group, &QButtonGroup::idClicked, this,
+  connect(tool_group_, &QButtonGroup::idClicked, this,
           &SketchPanel::tool_selected);
   connect(dim_dist_btn, &QPushButton::clicked, this, [this]() {
     emit dimension_requested(static_cast<int>(SketchConstraintType::Distance),
@@ -260,8 +304,48 @@ void SketchPanel::set_editing(bool editing, const QString& sketch_name) {
       cursor_label_->setText("Cursor: --");
     }
     // 进入编辑默认回到 Select 工具, 并通知外部同步视口工具
+    set_tool_checked(SketchToolSelect);
     emit tool_selected(SketchToolSelect);
     set_undo_redo_state(false, false);  // 栈由 MainWindow 在新会话清空
+  }
+}
+
+void SketchPanel::set_tool_checked(int tool) {
+  if (!tool_group_) {
+    return;
+  }
+  if (tool < 0) {
+    tool_group_->setExclusive(false);
+    for (auto* button : tool_group_->buttons()) {
+      button->setChecked(false);
+    }
+    tool_group_->setExclusive(true);
+    if (tool_status_label_) {
+      tool_status_label_->setText(
+          l10n::current_language() == l10n::Language::Chinese
+              ? QString::fromUtf8("当前交互：视图导航")
+              : QString("Current interaction: View navigation"));
+    }
+    return;
+  }
+  if (auto* button = tool_group_->button(tool)) {
+    button->setChecked(true);
+  }
+  if (tool_status_label_) {
+    const QStringList english = {"Select", "Line", "Circle", "Arc",
+                                 "Delete", "Rectangle", "Move"};
+    const QStringList chinese = {QString::fromUtf8("选择"),
+                                 QString::fromUtf8("直线"),
+                                 QString::fromUtf8("圆"),
+                                 QString::fromUtf8("圆弧"),
+                                 QString::fromUtf8("删除"),
+                                 QString::fromUtf8("矩形"),
+                                 QString::fromUtf8("移动")};
+    const bool zh = l10n::current_language() == l10n::Language::Chinese;
+    const QString name = (zh ? chinese : english).value(tool, "-");
+    tool_status_label_->setText(
+        zh ? QString::fromUtf8("当前工具：%1").arg(name)
+           : QString("Current tool: %1").arg(name));
   }
 }
 

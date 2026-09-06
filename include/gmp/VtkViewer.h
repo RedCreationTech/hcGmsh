@@ -5,6 +5,7 @@
 #include <QDateTime>
 #include <QList>
 #include <QVariantMap>
+#include <vector>
 
 #include "gmp/SketchDocument.h"
 
@@ -50,7 +51,6 @@ class vtkInteractorStyle;
 class vtkInteractorStyleImage;
 
 #include <vtkSmartPointer.h>
-#include <vector>
 #endif
 
 class QStackedWidget;
@@ -65,7 +65,8 @@ enum SketchTool {
   SketchToolDrawCircle = 2, // 圆心 + 半径点
   SketchToolDrawArc = 3,    // 三点式: 圆心 + 起点(定半径/起始角) + 终点角
   SketchToolDelete = 4,     // 点击删除图元
-  SketchToolDrawRectangle = 5  // 两对角点轴对齐矩形 (生成 4 线 + 角点重合约束)
+  SketchToolDrawRectangle = 5,  // 两对角点轴对齐矩形 (生成 4 线 + 角点重合约束)
+  SketchToolMove = 6        // 默认移动完整图形；Alt/Option 移动子图元
 };
 
 class VtkViewer : public QWidget {
@@ -81,8 +82,8 @@ class VtkViewer : public QWidget {
 
  public slots:
   // 2D 草图模式: 相机切到 XY 正交俯视(平行投影, +Z 看向原点, view-up +Y),
-  // 交互样式换成 vtkInteractorStyleImage(禁旋转); 关闭后恢复透视投影与原样式。
-  // 2D 模式下 apply_view_preset 不生效。
+  // 交互样式换成二维草图样式(禁旋转，支持左键平移/缩放); 关闭后恢复
+  // 透视投影与原样式。
   void set_2d_mode(bool on);
   bool is_2d_mode() const { return mode_2d_; }
 
@@ -98,6 +99,8 @@ class VtkViewer : public QWidget {
   // 切换当前绘制工具, 取值为 SketchTool 枚举; 切换会取消进行中的绘制
   void set_sketch_tool(int tool);
   int sketch_tool() const { return sketch_tool_; }
+  // -1=草图工具接管左键，1=二维平移，2=二维缩放。
+  int sketch_navigation_mode() const { return sketch_navigation_mode_; }
   // 当前选中图元 id 列表
   QList<int> sketch_selection() const { return sketch_selection_; }
   // 为当前选中图元添加几何约束 (type 为 SketchConstraintType 的 int 值:
@@ -112,6 +115,12 @@ class VtkViewer : public QWidget {
   void refresh_sketch();
   void set_exodus_file(const QString& path);
   void set_exodus_history(const QStringList& paths);
+  // 清空当前 3D 网格/结果管线与所有附属 actor；草图会话不受影响。
+  void clear_stage_data();
+  QString current_file() const { return current_file_; }
+  bool has_stage_data() const { return !current_file_.isEmpty(); }
+  bool stage_data_visible() const;
+  int visible_mesh_entity_count(int dim) const;
   bool save_screenshot(const QString& path);
   void set_mesh_file(const QString& path);
   void set_mesh_group_filter(int dim, int tag);
@@ -137,6 +146,8 @@ signals:
   void sketch_modified();
   // 草图选中集变化
   void sketch_selection_changed();
+  // 草图工具的唯一状态回写入口；所有工具栏/面板据此同步高亮状态。
+  void sketch_tool_changed(int tool);
   // 草图编辑中鼠标的世界坐标 (XY 平面, 毫米), 供面板显示
   void sketch_cursor_moved(double x, double y);
   void stage_picking_changed(bool enabled);
@@ -186,8 +197,10 @@ signals:
   // ---- 草图编辑内部实现 (非 VTK 构建下为空实现) ----
   void rebuild_sketch_actors();    // 全量重建草图/选中高亮 actor
   void update_sketch_preview();    // 仅重建橡皮筋预览 actor
-  void sketch_press(const SketchPoint2d& pt, bool shift);  // 左键按下分发
+  void sketch_press(const SketchPoint2d& pt, bool shift,
+                    bool subentity);  // 左键按下；Alt/Option 选择子图元
   void sketch_move(const SketchPoint2d& pt);               // 鼠标移动(预览/坐标)
+  void sketch_release();                                   // 完成一次图元拖动
   void sketch_delete_selected();
   bool sketch_display_to_world(int x, int y, SketchPoint2d* out) const;
   double sketch_pick_tol() const;  // 拾取/吸附容差 (世界单位, 约 10 像素)
@@ -203,11 +216,16 @@ signals:
   SketchDocument sketch_preview_doc_;     // 完成编辑后的只读舞台快照
   bool sketch_preview_only_ = false;
   int sketch_tool_ = SketchToolSelect;
+  int sketch_navigation_mode_ = -1;
   QList<int> sketch_selection_;           // 选中图元 id
   SketchPoint2d sketch_cursor_{};         // 最近一次鼠标世界坐标
   int sketch_stage_ = 0;                  // 绘制进度: 0=待首点 1/2=已定锚点
   SketchPoint2d sketch_anchor1_{};        // 第一个锚点 (线起点/圆心)
   SketchPoint2d sketch_anchor2_{};        // 第二个锚点 (弧起点, 定半径/起始角)
+  bool sketch_dragging_ = false;
+  bool sketch_drag_changed_ = false;
+  SketchPoint2d sketch_drag_anchor_{};
+  std::vector<SketchEntity> sketch_drag_entities_;
   QLabel* file_label_ = nullptr;
   QPushButton* open_btn_ = nullptr;
   QComboBox* array_combo_ = nullptr;
@@ -360,6 +378,7 @@ signals:
   vtkSmartPointer<vtkPolyDataMapper> sketch_preview_mapper_; // 橡皮筋预览
   vtkSmartPointer<vtkActor> sketch_preview_actor_;
   vtkSmartPointer<vtkCallbackCommand> sketch_move_callback_; // 鼠标移动观察器
+  vtkSmartPointer<vtkCallbackCommand> sketch_release_callback_;
   vtkSmartPointer<vtkCallbackCommand> sketch_key_callback_;  // Delete 键观察器
   // 草图会话期间暂存的 3D 场景 actor 可见性 (退出会话时恢复),
   // 避免 2D 草图与 3D 网格/结果叠显

@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantMap>
+#include <QList>
 #include <vector>
 
 class QCheckBox;
@@ -26,6 +27,7 @@ class GmshPanel : public QWidget {
 
  public slots:
   void generate_mesh();
+  void set_external_busy(bool busy);
   void set_mesh_generation_dim(int dim);
   QVariantMap gmsh_settings() const;
   void apply_gmsh_settings(const QVariantMap& settings);
@@ -36,6 +38,8 @@ class GmshPanel : public QWidget {
   bool eventFilter(QObject* obj, QEvent* event) override;
 
  signals:
+  void mesh_generation_started();
+  void mesh_generation_finished(bool success, const QString& message);
   void mesh_written(const QString& path);
   void boundary_groups(const QStringList& names);
   void volume_groups(const QStringList& names);
@@ -101,6 +105,7 @@ class GmshPanel : public QWidget {
   std::vector<std::pair<int, int>> resolve_occ_dim_tags(
       int dim_filter, const std::vector<DimTagToken>& tokens) const;
   void append_log(const QString& text);
+  void set_mesh_generation_running(bool running);
 
   QLineEdit* geo_path_ = nullptr;
   QLabel* entity_summary_ = nullptr;
@@ -178,6 +183,9 @@ class GmshPanel : public QWidget {
   QDoubleSpinBox* field_size_min_ = nullptr;
   QDoubleSpinBox* field_size_max_ = nullptr;
   QPlainTextEdit* field_list_ = nullptr;
+  QList<QPushButton*> mesh_generate_buttons_;
+  bool mesh_generation_running_ = false;
+  bool mesh_external_busy_ = false;
 
   QComboBox* algo2d_ = nullptr;
   QComboBox* algo3d_ = nullptr;

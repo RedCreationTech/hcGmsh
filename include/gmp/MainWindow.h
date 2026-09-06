@@ -1,6 +1,9 @@
 #pragma once
 
 #include <QMainWindow>
+#include <QHash>
+#include <QList>
+#include <QPair>
 #include <QStringList>
 #include <QVariantMap>
 
@@ -8,6 +11,7 @@
 
 class QPlainTextEdit;
 class QAction;
+class QPushButton;
 class QLineEdit;
 class QStackedWidget;
 class QTabBar;
@@ -65,10 +69,26 @@ class MainWindow : public QMainWindow {
   QTreeWidgetItem* find_child_by_param(QTreeWidgetItem* root,
                                        const QString& key,
                                        const QString& value) const;
+  bool child_name_exists(QTreeWidgetItem* root, const QString& name,
+                         const QTreeWidgetItem* exclude = nullptr) const;
+  QString unique_child_name(QTreeWidgetItem* root,
+                            const QString& preferred,
+                            const QTreeWidgetItem* exclude = nullptr) const;
+  bool prompt_unique_child_name(QTreeWidgetItem* root, const QString& title,
+                                const QString& initial_name,
+                                QString* accepted_name,
+                                QTreeWidgetItem* exclude = nullptr);
   QTreeWidgetItem* add_child_item(QTreeWidgetItem* root,
                                   const QString& name,
                                   const QString& kind,
                                   const QVariantMap& params);
+  QTreeWidgetItem* active_part_item() const;
+  QTreeWidgetItem* attach_feature_to_part(QTreeWidgetItem* part,
+                                          const QString& type,
+                                          const QVariantMap& params,
+                                          int gmsh_volume_tag,
+                                          const QList<int>& gmsh_volume_tags,
+                                          const QString& brep_path);
   void upsert_mesh_item(const QString& path);
   void upsert_result_item(const QString& path, const QString& job_name);
   QVariantMap default_params_for_kind(const QString& kind) const;
@@ -77,6 +97,7 @@ class MainWindow : public QMainWindow {
   void add_item_under_root(QTreeWidgetItem* root);
   void remove_item(QTreeWidgetItem* item);
   void duplicate_item(QTreeWidgetItem* item);
+  void rename_item(QTreeWidgetItem* item);
   void open_property_form(QTreeWidgetItem* item);
   bool load_project(const QString& path);
   bool save_project(const QString& path);
@@ -117,6 +138,13 @@ class MainWindow : public QMainWindow {
                                const QString& empty_text) const;
   void refresh_module_pages();
   void refresh_work_context();
+  // Module Workspace 复用内容容器，但不同内容使用独立尺寸/位置配置。
+  // Sketch Editor 使用紧凑 profile，不继承 Part/Material 等通用大窗尺寸。
+  void apply_module_workspace_profile(bool sketch_editor);
+  void remember_active_object_for_module(int module_index);
+  void restore_active_object_for_module(int module_index);
+  void sync_active_ui_context();
+  void update_command_availability();
   QString context_root_for_module(int module_index) const;
   QString build_step_sequence_preview() const;
   void refresh_workflow_status();
@@ -136,6 +164,7 @@ class MainWindow : public QMainWindow {
   QTabWidget* results_work_tabs_ = nullptr;
   StageLeftToolbar* stage_left_toolbar_ = nullptr;
   bool layout_ready_ = false;
+  bool module_workspace_sketch_profile_ = false;
   QTabWidget* navigation_tabs_ = nullptr;
   QTreeWidget* model_tree_ = nullptr;
   QTreeWidget* results_navigation_tree_ = nullptr;
@@ -164,6 +193,7 @@ class MainWindow : public QMainWindow {
   bool suppress_dirty_ = false;
   QLabel* project_status_label_ = nullptr;
   QLabel* dirty_status_label_ = nullptr;
+  QLabel* active_context_status_label_ = nullptr;
   QLabel* workflow_status_label_ = nullptr;
   QTreeWidgetItem* active_job_item_ = nullptr;
   int active_job_row_ = -1;
@@ -178,6 +208,17 @@ class MainWindow : public QMainWindow {
   QStringList sketch_undo_stack_;
   QStringList sketch_redo_stack_;
   QString active_sketch_yaml_;  // 最近一次已同步的文档快照
+
+  struct ActiveUiContext {
+    int module_index = -1;
+    QString object_root;
+    QString object_name;
+    QList<QPair<int, int>> stage_selections;
+    bool mesh_running = false;
+    bool job_running = false;
+    bool synchronizing = false;
+  } active_ui_context_;
+  QHash<int, QString> module_object_memory_;
 
   QMenu* recent_menu_ = nullptr;
   QMenu* view_menu_ = nullptr;
@@ -201,6 +242,9 @@ class MainWindow : public QMainWindow {
   QAction* action_stage_clear_ = nullptr;
   QAction* action_stage_slice_ = nullptr;
   QAction* action_reset_tool_layout_ = nullptr;
+  QPushButton* job_run_button_ = nullptr;
+  QPushButton* job_stop_button_ = nullptr;
+  QPushButton* job_retry_button_ = nullptr;
   bool tool_drag_guard_active_ = false;
   bool tool_drag_restore_picking_ = false;
 

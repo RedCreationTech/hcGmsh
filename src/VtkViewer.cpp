@@ -130,6 +130,42 @@ class StageInteractorStyle : public vtkInteractorStyleTrackballCamera {
 
 vtkStandardNewMacro(StageInteractorStyle);
 
+// vtkInteractorStyleImage 默认把左键拖动解释为窗宽/窗位，不能直接作为
+// CAD 草图导航。这里复用其成熟的中键平移、右键缩放实现，并按舞台按钮把
+// 左键事件映射过去；选择/绘制模式仍由 VtkViewer 的草图回调接管。
+class SketchInteractorStyle : public vtkInteractorStyleImage {
+ public:
+  static SketchInteractorStyle* New();
+  vtkTypeMacro(SketchInteractorStyle, vtkInteractorStyleImage);
+
+  void SetStageMode(int mode) { mode_ = std::clamp(mode, 0, 2); }
+
+  void OnLeftButtonDown() override {
+    if (mode_ == 1) {
+      Superclass::OnMiddleButtonDown();
+    } else if (mode_ == 2) {
+      Superclass::OnRightButtonDown();
+    } else {
+      Superclass::OnLeftButtonDown();
+    }
+  }
+
+  void OnLeftButtonUp() override {
+    if (mode_ == 1) {
+      Superclass::OnMiddleButtonUp();
+    } else if (mode_ == 2) {
+      Superclass::OnRightButtonUp();
+    } else {
+      Superclass::OnLeftButtonUp();
+    }
+  }
+
+ private:
+  int mode_ = 0;
+};
+
+vtkStandardNewMacro(SketchInteractorStyle);
+
 // 统一约束色标条样式：尺寸按视口比例自适应（随黑色显示区缩放），
 // 必须先关闭 VTK 默认的约束字体模式，否则它会自动放大字体填满色标条。
 void style_scalar_bar(vtkScalarBarActor* bar) {
@@ -1265,6 +1301,9 @@ void VtkViewer::set_exodus_file(const QString& path) {
 
   first_render_ = true;
   mode_ = DataMode::Exodus;
+  if (actor_) {
+    actor_->SetVisibility(1);
+  }
   reader_->SetFileName(path.toUtf8().constData());
   reader_->UpdateInformation();
   reader_->SetAllArrayStatus(vtkExodusIIReader::NODAL, 1);
@@ -1286,6 +1325,134 @@ void VtkViewer::set_exodus_file(const QString& path) {
   update_pipeline();
 #else
   Q_UNUSED(path);
+#endif
+}
+
+void VtkViewer::clear_stage_data() {
+  current_file_.clear();
+  pending_reload_ = false;
+  setup_watcher(QString());
+  if (debounce_timer_) {
+    debounce_timer_->stop();
+  }
+  if (file_label_) {
+    file_label_->setText("No file loaded");
+  }
+
+#ifdef GMP_ENABLE_VTK_VIEWER
+  pipeline_ready_ = false;
+  first_render_ = true;
+  mode_ = DataMode::None;
+  mesh_grid_ = nullptr;
+  mesh_quality_ready_ = false;
+  mesh_groups_.clear();
+  mesh_elem_types_.clear();
+  mesh_entities_.clear();
+  time_steps_.clear();
+  selected_group_dim_ = -1;
+  selected_group_id_ = -1;
+  selected_cell_id_ = -1;
+  selected_entity_dim_ = -1;
+  selected_entity_tag_ = -1;
+
+  for (vtkActor* actor : {actor_.GetPointer(), nodes_actor_.GetPointer(),
+                          outline_actor_.GetPointer(),
+                          mesh_select_actor_.GetPointer()}) {
+    if (actor) {
+      actor->SetVisibility(0);
+    }
+  }
+  if (scalar_bar_) {
+    scalar_bar_->SetVisibility(0);
+  }
+  if (slice_enable_) {
+    const QSignalBlocker blocker(slice_enable_);
+    slice_enable_->setChecked(false);
+  }
+  if (pick_enable_) {
+    const QSignalBlocker blocker(pick_enable_);
+    pick_enable_->setChecked(false);
+  }
+  if (probe_enable_) {
+    const QSignalBlocker blocker(probe_enable_);
+    probe_enable_->setChecked(false);
+  }
+  if (array_combo_) {
+    const QSignalBlocker blocker(array_combo_);
+    array_combo_->clear();
+  }
+  if (array_list_) {
+    array_list_->clear();
+  }
+  if (time_slider_) {
+    const QSignalBlocker blocker(time_slider_);
+    time_slider_->setRange(0, 0);
+    time_slider_->setValue(0);
+    time_slider_->setEnabled(false);
+  }
+  if (time_label_) {
+    time_label_->setText("t=0");
+  }
+  update_mesh_controls();
+  update_plot_view();
+  update_table_view();
+  if (renderer_) {
+    renderer_->ResetCamera();
+  }
+  if (render_window_) {
+    render_window_->Render();
+  }
+#endif
+
+  emit stage_picking_changed(false);
+  emit stage_slice_changed(false);
+  emit stage_command_feedback("已清空舞台中的网格/结果显示。");
+}
+
+bool VtkViewer::stage_data_visible() const {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  return (actor_ && actor_->GetVisibility() != 0) ||
+         (nodes_actor_ && nodes_actor_->GetVisibility() != 0) ||
+         (outline_actor_ && outline_actor_->GetVisibility() != 0) ||
+         (mesh_select_actor_ && mesh_select_actor_->GetVisibility() != 0) ||
+         (scalar_bar_ && scalar_bar_->GetVisibility() != 0);
+#else
+  return false;
+#endif
+}
+
+int VtkViewer::visible_mesh_entity_count(int dim) const {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (mode_ != DataMode::Mesh || !mesh_geom_) {
+    return 0;
+  }
+  mesh_geom_->Update();
+  auto* visible = mesh_geom_->GetOutput();
+  auto* cells = visible ? visible->GetCellData() : nullptr;
+  auto* dims = cells
+                   ? vtkIntArray::SafeDownCast(cells->GetArray("entity_dim"))
+                   : nullptr;
+  auto* tags = cells
+                   ? vtkIntArray::SafeDownCast(cells->GetArray("entity_tag"))
+                   : nullptr;
+  if (!dims || !tags) {
+    return 0;
+  }
+  std::vector<int> unique_tags;
+  const vtkIdType count = std::min(dims->GetNumberOfTuples(),
+                                   tags->GetNumberOfTuples());
+  for (vtkIdType cell = 0; cell < count; ++cell) {
+    if (dims->GetValue(cell) == dim) {
+      unique_tags.push_back(tags->GetValue(cell));
+    }
+  }
+  std::sort(unique_tags.begin(), unique_tags.end());
+  unique_tags.erase(std::unique(unique_tags.begin(), unique_tags.end()),
+                    unique_tags.end());
+  return static_cast<int>(unique_tags.size());
+#else
+  Q_UNUSED(dim);
+  return 0;
 #endif
 }
 
@@ -1952,18 +2119,20 @@ void VtkViewer::init_vtk() {
       if (!self || !iren) {
         return;
       }
-      // 草图编辑会话中左键完全由绘制/选择逻辑接管,
-      // 不再转发给交互样式(避免 vtkInteractorStyleImage 的窗宽窗位拖拽)
+      // 草图选择/绘制时由草图逻辑接管左键；二维平移/缩放时不终止事件，
+      // 让当前 SketchInteractorStyle 完成相机操作。
       if (self->sketch_doc_) {
-        int spos[2] = {0, 0};
-        iren->GetEventPosition(spos);
-        SketchPoint2d wpt;
-        if (!self->sketch_preview_only_ &&
-            self->sketch_display_to_world(spos[0], spos[1], &wpt)) {
-          self->sketch_press(wpt, iren->GetShiftKey() != 0);
-        }
-        if (self->pick_callback_) {
-          self->pick_callback_->AbortFlagOn();
+        if (self->sketch_navigation_mode_ < 0) {
+          int spos[2] = {0, 0};
+          iren->GetEventPosition(spos);
+          SketchPoint2d wpt;
+          if (self->sketch_display_to_world(spos[0], spos[1], &wpt)) {
+            self->sketch_press(wpt, iren->GetShiftKey() != 0,
+                               iren->GetAltKey() != 0);
+          }
+          if (self->pick_callback_) {
+            self->pick_callback_->AbortFlagOn();
+          }
         }
         return;
       }
@@ -1993,7 +2162,7 @@ void VtkViewer::init_vtk() {
       auto* self = static_cast<VtkViewer*>(client_data);
       auto* iren = vtkRenderWindowInteractor::SafeDownCast(caller);
       if (!self || !iren || !self->sketch_doc_ ||
-          self->sketch_preview_only_) {
+          self->sketch_preview_only_ || self->sketch_navigation_mode_ >= 0) {
         return;
       }
       int pos[2] = {0, 0};
@@ -2004,6 +2173,23 @@ void VtkViewer::init_vtk() {
       }
     });
     interactor->AddObserver(vtkCommand::MouseMoveEvent, sketch_move_callback_);
+  }
+  if (interactor && !sketch_release_callback_) {
+    sketch_release_callback_ = vtkSmartPointer<vtkCallbackCommand>::New();
+    sketch_release_callback_->SetClientData(this);
+    sketch_release_callback_->SetCallback(
+        [](vtkObject*, unsigned long, void* client_data, void*) {
+          auto* self = static_cast<VtkViewer*>(client_data);
+          if (!self || !self->sketch_doc_ || !self->sketch_dragging_) {
+            return;
+          }
+          self->sketch_release();
+          if (self->sketch_release_callback_) {
+            self->sketch_release_callback_->AbortFlagOn();
+          }
+        });
+    interactor->AddObserver(vtkCommand::LeftButtonReleaseEvent,
+                            sketch_release_callback_, 1.0f);
   }
   if (interactor && !sketch_key_callback_) {
     sketch_key_callback_ = vtkSmartPointer<vtkCallbackCommand>::New();
@@ -2870,8 +3056,14 @@ void VtkViewer::setup_watcher(const QString& file_path) {
     connect(watcher_, &QFileSystemWatcher::directoryChanged, this,
             [this](const QString&) { schedule_reload(); });
   }
-  watcher_->removePaths(watcher_->files());
-  watcher_->removePaths(watcher_->directories());
+  const QStringList watched_files = watcher_->files();
+  if (!watched_files.isEmpty()) {
+    watcher_->removePaths(watched_files);
+  }
+  const QStringList watched_directories = watcher_->directories();
+  if (!watched_directories.isEmpty()) {
+    watcher_->removePaths(watched_directories);
+  }
 
   if (file_path.isEmpty()) {
     return;
@@ -4033,6 +4225,31 @@ void VtkViewer::apply_view_preset(int preset) {
 
 void VtkViewer::set_stage_interaction_mode(int mode) {
 #ifdef GMP_ENABLE_VTK_VIEWER
+  mode = qBound(0, mode, 2);
+  if (sketch_doc_) {
+    // 二维草图不提供旋转；“旋转”按钮回到当前草图工具，平移/缩放则
+    // 显式放行左键事件给二维交互样式。
+    sketch_navigation_mode_ = mode == 0 ? -1 : mode;
+    if (auto* style = SketchInteractorStyle::SafeDownCast(style_2d_)) {
+      style->SetStageMode(mode);
+    }
+    emit stage_picking_changed(false);
+    if (vtk_widget_) {
+      vtk_widget_->setCursor(mode == 1   ? Qt::SizeAllCursor
+                             : mode == 2 ? Qt::SizeVerCursor
+                                         : Qt::ArrowCursor);
+      vtk_widget_->setFocus();
+    }
+    if (mode == 0) {
+      emit stage_command_feedback(
+          "二维草图不支持旋转；已回到当前草图选择/绘制工具。");
+    } else {
+      const QStringList names = {"", "平移", "缩放"};
+      emit stage_command_feedback(
+          QString("二维草图%1模式：按住左键拖动。").arg(names.at(mode)));
+    }
+    return;
+  }
   if (auto* style = StageInteractorStyle::SafeDownCast(style_3d_)) {
     style->SetStageMode(mode);
   }
@@ -4058,6 +4275,27 @@ void VtkViewer::set_stage_interaction_mode(int mode) {
 
 void VtkViewer::apply_stage_view(int preset) {
 #ifdef GMP_ENABLE_VTK_VIEWER
+  if (sketch_doc_) {
+    if (preset != 0 && preset != 3) {
+      emit stage_command_feedback(
+          "二维草图仅支持适配窗口和顶视图。");
+      return;
+    }
+    if (renderer_ && render_window_) {
+      if (auto* cam = renderer_->GetActiveCamera()) {
+        cam->SetParallelProjection(true);
+        cam->SetPosition(0.0, 0.0, 1.0);
+        cam->SetFocalPoint(0.0, 0.0, 0.0);
+        cam->SetViewUp(0.0, 1.0, 0.0);
+      }
+      renderer_->ResetCamera();
+      renderer_->ResetCameraClippingRange();
+      render_window_->Render();
+    }
+    emit stage_command_feedback(
+        preset == 0 ? "草图已适配窗口。" : "草图已恢复顶视图。");
+    return;
+  }
   if (mode_ == DataMode::None || (!mesh_grid_ && !mapper_)) {
     emit stage_command_feedback(
         "当前没有可取景的数据；请先加载 .msh 或 .e 文件。");
@@ -4079,6 +4317,21 @@ void VtkViewer::apply_stage_view(int preset) {
 
 void VtkViewer::set_stage_picking(bool enabled) {
 #ifdef GMP_ENABLE_VTK_VIEWER
+  if (sketch_doc_) {
+    if (enabled) {
+      set_sketch_tool(SketchToolSelect);
+      emit stage_command_feedback(
+          sketch_preview_only_ ? "草图预览选择已启用：单击图元。"
+                               : "草图选择已启用：单击图元，Shift 可多选。");
+    } else {
+      // Select 是草图中的一个互斥工具而非可独立关闭的开关。若顶部 Pick
+      // 动作在 Select 状态下被再次点击，恢复其选中态，避免按钮显示“关闭”
+      // 而视口实际上仍在执行选择。
+      emit sketch_tool_changed(sketch_tool_);
+      emit stage_picking_changed(sketch_tool_ == SketchToolSelect);
+    }
+    return;
+  }
   if (mode_ == DataMode::Mesh && pick_enable_) {
     if (probe_enable_ && probe_enable_->isChecked()) {
       probe_enable_->setChecked(false);
@@ -4113,7 +4366,10 @@ void VtkViewer::set_stage_picking(bool enabled) {
 
 void VtkViewer::clear_stage_selection() {
 #ifdef GMP_ENABLE_VTK_VIEWER
-  if (mode_ == DataMode::Exodus && probe_clear_) {
+  if (sketch_doc_) {
+    set_sketch_selection({});
+    emit stage_command_feedback("已清除草图选择。");
+  } else if (mode_ == DataMode::Exodus && probe_clear_) {
     probe_clear_->click();
     emit stage_command_feedback("已清除结果探针信息。");
   } else if (mode_ == DataMode::Mesh && pick_clear_) {
@@ -4196,7 +4452,12 @@ void VtkViewer::set_2d_mode(bool on) {
             vtkInteractorStyle::SafeDownCast(iren->GetInteractorStyle());
       }
       if (!style_2d_) {
-        style_2d_ = vtkSmartPointer<vtkInteractorStyleImage>::New();
+        style_2d_ = vtkSmartPointer<SketchInteractorStyle>::New();
+      }
+      if (auto* style = SketchInteractorStyle::SafeDownCast(style_2d_)) {
+        style->SetStageMode(sketch_navigation_mode_ < 0
+                                ? 0
+                                : sketch_navigation_mode_);
       }
       iren->SetInteractorStyle(style_2d_);
     }
@@ -4312,8 +4573,16 @@ double dist2d(const SketchPoint2d& a, const SketchPoint2d& b) {
 
 void VtkViewer::set_sketch_document(SketchDocument* doc) {
   sketch_preview_only_ = false;
+  sketch_navigation_mode_ = -1;
+  sketch_tool_ = SketchToolSelect;
+  sketch_dragging_ = false;
+  sketch_drag_changed_ = false;
+  sketch_drag_entities_.clear();
   if (sketch_doc_ == doc) {
     refresh_sketch();
+    emit sketch_tool_changed(sketch_tool_);
+    emit stage_picking_changed(doc != nullptr &&
+                               sketch_tool_ == SketchToolSelect);
     return;
   }
   const bool had_doc = (sketch_doc_ != nullptr);
@@ -4440,6 +4709,8 @@ void VtkViewer::set_sketch_document(SketchDocument* doc) {
     set_2d_mode(false);
   }
 #endif
+  emit sketch_tool_changed(sketch_tool_);
+  emit stage_picking_changed(doc != nullptr);
   emit sketch_selection_changed();
 }
 
@@ -4452,16 +4723,46 @@ void VtkViewer::set_sketch_preview(const SketchDocument* doc) {
   sketch_preview_doc_ = *doc;
   set_sketch_document(&sketch_preview_doc_);
   sketch_preview_only_ = true;
+  sketch_tool_ = SketchToolSelect;
+  sketch_navigation_mode_ = -1;
   sketch_selection_.clear();
   sketch_stage_ = 0;
   rebuild_sketch_actors();
 }
 
 void VtkViewer::set_sketch_tool(int tool) {
-  if (sketch_preview_only_) {
+  if (sketch_preview_only_ && tool != SketchToolSelect) {
+    emit stage_command_feedback(
+        "草图预览为只读；可选择图元，整体平移请使用鼠标中键拖动。");
+    emit sketch_tool_changed(SketchToolSelect);
+    emit stage_picking_changed(true);
     return;
   }
-  sketch_tool_ = tool;
+  sketch_tool_ = qBound(static_cast<int>(SketchToolSelect), tool,
+                        static_cast<int>(SketchToolMove));
+  sketch_navigation_mode_ = -1;
+  sketch_dragging_ = false;
+  sketch_drag_changed_ = false;
+  sketch_drag_entities_.clear();
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (auto* style = SketchInteractorStyle::SafeDownCast(style_2d_)) {
+    style->SetStageMode(0);
+  }
+  if (vtk_widget_) {
+    vtk_widget_->setCursor(sketch_tool_ == SketchToolMove
+                               ? Qt::SizeAllCursor
+                               : Qt::ArrowCursor);
+  }
+#endif
+  emit sketch_tool_changed(sketch_tool_);
+  emit stage_picking_changed(sketch_tool_ == SketchToolSelect);
+  if (sketch_tool_ == SketchToolMove) {
+    emit stage_command_feedback(
+        "移动图形：左键拖动完整图形；Option/Alt 选择子图元，Shift 可多选。");
+  } else if (sketch_tool_ == SketchToolSelect) {
+    emit stage_command_feedback(
+        "草图选择：单击完整图形；Option/Alt 选择子图元，Shift 可多选。");
+  }
   // 切换工具时取消进行中的绘制
   if (sketch_stage_ != 0) {
     sketch_stage_ = 0;
@@ -4669,38 +4970,105 @@ void VtkViewer::update_sketch_preview() {
 #endif
 }
 
-void VtkViewer::sketch_press(const SketchPoint2d& pt, bool shift) {
-  if (!sketch_doc_ || sketch_preview_only_) {
+void VtkViewer::sketch_press(const SketchPoint2d& pt, bool shift,
+                             bool subentity) {
+  if (!sketch_doc_ ||
+      (sketch_preview_only_ && sketch_tool_ != SketchToolSelect)) {
     return;
   }
   const double tol = sketch_pick_tol();
+  const auto hit_selection = [this, subentity](int hit) {
+    QList<int> ids;
+    if (hit < 0) {
+      return ids;
+    }
+    if (subentity) {
+      ids.append(hit);
+      return ids;
+    }
+    for (const int id : sketch_doc_->shape_entity_ids(hit)) {
+      ids.append(id);
+    }
+    return ids;
+  };
+  const auto update_selection = [this, shift](const QList<int>& target,
+                                               bool preserve_if_selected) {
+    QList<int> sel = sketch_selection_;
+    bool all_selected = !target.isEmpty();
+    for (const int id : target) {
+      all_selected = all_selected && sel.contains(id);
+    }
+    if (shift) {
+      if (all_selected) {
+        for (const int id : target) {
+          sel.removeAll(id);
+        }
+      } else {
+        for (const int id : target) {
+          if (!sel.contains(id)) {
+            sel.append(id);
+          }
+        }
+      }
+    } else if (!preserve_if_selected || !all_selected) {
+      sel = target;
+    }
+    set_sketch_selection(sel);
+    return sel;
+  };
   switch (sketch_tool_) {
     case SketchToolSelect: {
       const int hit = sketch_doc_->hit_test(pt, tol);
-      QList<int> sel = sketch_selection_;
       if (hit >= 0) {
-        if (shift) {
-          if (sel.contains(hit)) {
-            sel.removeAll(hit);
-          } else {
-            sel.append(hit);
-          }
-        } else {
-          sel = {hit};
-        }
+        update_selection(hit_selection(hit), false);
       } else if (!shift) {
-        sel.clear();
+        set_sketch_selection({});
       }
-      set_sketch_selection(sel);
+      return;
+    }
+    case SketchToolMove: {
+      const int hit = sketch_doc_->hit_test(pt, tol);
+      if (hit < 0) {
+        if (!shift) {
+          set_sketch_selection({});
+        }
+        sketch_dragging_ = false;
+        sketch_drag_entities_.clear();
+        return;
+      }
+      const QList<int> target = hit_selection(hit);
+      const QList<int> sel = update_selection(target, true);
+      if (!sel.contains(hit)) {
+        return;
+      }
+      sketch_drag_entities_.clear();
+      for (const int id : sel) {
+        if (const auto* entity = sketch_doc_->entity(id)) {
+          sketch_drag_entities_.push_back(*entity);
+        }
+      }
+      sketch_drag_anchor_ = pt;
+      sketch_dragging_ = !sketch_drag_entities_.empty();
+      sketch_drag_changed_ = false;
+#ifdef GMP_ENABLE_VTK_VIEWER
+      if (sketch_dragging_ && vtk_widget_) {
+        vtk_widget_->setCursor(Qt::ClosedHandCursor);
+      }
+#endif
       return;
     }
     case SketchToolDelete: {
       const int hit = sketch_doc_->hit_test(pt, tol);
       if (hit >= 0) {
-        sketch_doc_->remove_entity(hit);
+        bool removed = false;
+        for (const int id : hit_selection(hit)) {
+          removed = sketch_doc_->remove_entity(id) || removed;
+        }
         set_sketch_selection(sketch_selection_);
-        rebuild_sketch_actors();
-        emit sketch_modified();
+        if (removed) {
+          rebuild_sketch_actors();
+          emit sketch_modified();
+        }
       }
       return;
     }
@@ -4801,10 +5169,12 @@ void VtkViewer::sketch_press(const SketchPoint2d& pt, bool shift) {
         sketch_stage_ = 0;
         if (std::fabs(x2 - x1) > tol && std::fabs(y2 - y1) > tol) {
           const SketchPoint2d corners[4] = {{x1, y1}, {x2, y1}, {x2, y2}, {x1, y2}};
+          const int rectangle_shape_id = sketch_doc_->create_shape_id();
           int line_ids[4] = {-1, -1, -1, -1};
           for (int i = 0; i < 4; ++i) {
             SketchEntity e;
             e.type = SketchEntityType::Line;
+            e.shape_id = rectangle_shape_id;
             e.p1 = corners[i];
             e.p2 = corners[(i + 1) % 4];
             line_ids[i] = sketch_doc_->add_entity(e);
@@ -4834,8 +5204,52 @@ void VtkViewer::sketch_press(const SketchPoint2d& pt, bool shift) {
 void VtkViewer::sketch_move(const SketchPoint2d& pt) {
   sketch_cursor_ = pt;
   emit sketch_cursor_moved(pt.x, pt.y);
+  if (sketch_tool_ == SketchToolMove && sketch_dragging_ && sketch_doc_) {
+    const double dx = pt.x - sketch_drag_anchor_.x;
+    const double dy = pt.y - sketch_drag_anchor_.y;
+    if (std::hypot(dx, dy) > 1e-12) {
+      std::vector<int> dragged_ids;
+      for (const auto& original : sketch_drag_entities_) {
+        auto* current = sketch_doc_->entity(original.id);
+        if (!current) {
+          continue;
+        }
+        *current = original;
+        dragged_ids.push_back(original.id);
+      }
+      sketch_drag_changed_ =
+          sketch_doc_->translate_entities(dragged_ids, dx, dy) ||
+          sketch_drag_changed_;
+      rebuild_sketch_actors();
+    }
+    return;
+  }
   if (sketch_stage_ > 0) {
     update_sketch_preview();
+  }
+}
+
+void VtkViewer::sketch_release() {
+  if (!sketch_dragging_) {
+    return;
+  }
+  sketch_dragging_ = false;
+  sketch_drag_entities_.clear();
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (vtk_widget_) {
+    vtk_widget_->setCursor(Qt::SizeAllCursor);
+  }
+#endif
+  if (!sketch_drag_changed_) {
+    return;
+  }
+  sketch_drag_changed_ = false;
+  // 无约束时保留鼠标给出的精确平移；有约束时再让求解器传播/恢复约束。
+  if (sketch_doc_ && !sketch_doc_->constraints().empty()) {
+    solve_sketch_and_refresh();
+  } else {
+    rebuild_sketch_actors();
+    emit sketch_modified();
   }
 }
 

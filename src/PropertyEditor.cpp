@@ -1144,7 +1144,14 @@ QString PropertyEditor::build_node_summary(const QString& kind,
     if (!params.value("feature").toString().isEmpty()) {
       parts << QString("feature: %1").arg(params.value("feature").toString());
     }
-    if (!params.value("gmsh_volume_tag").toString().isEmpty()) {
+    const QVariantList volume_tags = params.value("gmsh_volume_tags").toList();
+    if (!volume_tags.isEmpty()) {
+      QStringList labels;
+      for (const QVariant& tag : volume_tags) {
+        labels << tag.toString();
+      }
+      parts << QString("gmsh volumes %1").arg(labels.join(", "));
+    } else if (!params.value("gmsh_volume_tag").toString().isEmpty()) {
       parts << QString("gmsh volume %1")
                    .arg(params.value("gmsh_volume_tag").toString());
     }

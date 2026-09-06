@@ -288,9 +288,9 @@ Datums/             # 基准面/轴/点/局部坐标系
 ### 增量迭代 5（2026-08-12）：崩溃防护 + Feature/Part 语义理顺
 
 - **崩溃修复**：用户操作中 SIGABRT，堆栈为"未捕获 C++ 异常穿过 Qt/AppKit 事件循环后 terminate"（`__cxa_rethrow → objc_exception_rethrow → NSApplication run`）。最可疑路径是草图交互里 planegcs 求解完全无异常防护。修复：`SketchSolver::solve` 全函数 try/catch 兜底（含 `catch(...)`），`VtkViewer::solve_sketch_and_refresh` 再加一层——求解路径异常绝不再逃逸进事件循环。若再现请记录具体操作步骤。
-- **Feature/Part 语义**：此前拉伸只记 Features 节点、不产出 Part，两者断裂。现在：Feature = 建模历史（操作+参数+brep 路径），Part = 最终 3D 部件产物；特征成功自动创建关联 Part 条目（`feature` 参数回指历史记录），部件清单立即可见。模型树点 Features 节点改为跳"属性"页签看参数（原来跳部件页，易混淆）。
+- **Feature/Part 语义**：Feature = 建模历史（操作、参数、BREP 路径及目标 Part），Part = 用户显式创建并持续编辑的 3D 部件。新建部件先产生唯一 Part 目标；后续拉伸/旋转/放样/扫掠只新增 Feature 历史并把几何结果写回当前 Part，不再为每次操作重复创建 Part。模型树点 Features 节点进入“属性”查看参数。
 
-**自测**：harness3 特征链路 + 新增"自动产出 Part"断言 ALL PASS；harness5 树联动 ALL PASS。
+**自测**：特征链路断言覆盖“Feature 数量增加、Part 数量不变、Part/Feature 双向关联、活动 Part 保持”；harness5 树联动 ALL PASS。
 
 ## 11. 需求对照与剩余开发项（2026-08-12，对照《草图和零部件部分文档》）
 

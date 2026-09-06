@@ -35,6 +35,9 @@ enum class SketchPointRole { None, Start, End, Center };
 
 struct SketchEntity {
   int id = 0;
+  // 同一次高层绘制产生的逻辑图形 id。矩形的 4 条边共享同一 shape_id；
+  // 独立直线、圆、圆弧各自拥有一个 shape_id。
+  int shape_id = 0;
   SketchEntityType type = SketchEntityType::Line;
   SketchPoint2d p1;        // Line: 起点
   SketchPoint2d p2;        // Line: 终点
@@ -73,6 +76,7 @@ class SketchDocument {
  public:
   // ---- 图元 CRUD ----
   int add_entity(const SketchEntity& e);   // 忽略 e.id, 分配新 id 并返回
+  int create_shape_id();                   // 为复合图形预分配共享 shape id
   bool remove_entity(int id);              // 同时删除引用该图元的约束
   const SketchEntity* entity(int id) const;
   SketchEntity* entity(int id);            // 直接改几何; 约束求解由调用方触发
@@ -98,6 +102,10 @@ class SketchDocument {
   static double distance_to_entity(const SketchEntity& e, const SketchPoint2d& pt);
   // 命中测试: 返回距离 <= tol 的最近图元 id, 无命中返回 -1
   int hit_test(const SketchPoint2d& pt, double tol) const;
+  // 返回命中图元所属逻辑图形的全部底层图元 id。
+  std::vector<int> shape_entity_ids(int entity_id) const;
+  // 将指定图元整体平移；线移动两端点，圆/圆弧移动圆心，尺寸与角度不变。
+  bool translate_entities(const std::vector<int>& ids, double dx, double dy);
 
   // 闭环检测: 返回所有简单闭环, 每个闭环为按邻接顺序排列的图元 id 列表。
   // 单独的 Circle 自身构成一个闭环; Line/Arc 通过端点吸附 (tol) 连成环。
@@ -112,6 +120,7 @@ class SketchDocument {
   std::vector<SketchEntity> entities_;
   std::vector<SketchConstraint> constraints_;
   int next_entity_id_ = 1;
+  int next_shape_id_ = 1;
   int next_constraint_id_ = 1;
 };
 

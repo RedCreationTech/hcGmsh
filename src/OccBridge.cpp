@@ -285,21 +285,31 @@ bool finalize_feature(const TopoDS_Shape& shape, const QString& brep_out_path,
   fs::remove(tmp);
   gmsh::model::occ::synchronize();
 
-  // 取首个 volume; 无 volume 则取最高维实体 (如壳/面)
+  // 收集全部 volume。gmsh_volume_tag 保留首个值以兼容旧项目和单实体
+  // 选择逻辑；多轮廓特征必须通过 gmsh_volume_tags 保留完整归属。
   int best_dim = -1;
   int best_tag = 0;
   for (const auto& dt : dimTags) {
     if (dt.first == 3) {
-      res->gmsh_volume_tag = dt.second;
-      break;
+      res->gmsh_volume_tags.push_back(dt.second);
     }
     if (dt.first > best_dim) {
       best_dim = dt.first;
       best_tag = dt.second;
     }
   }
-  if (res->gmsh_volume_tag == 0)
+  std::sort(res->gmsh_volume_tags.begin(), res->gmsh_volume_tags.end());
+  res->gmsh_volume_tags.erase(
+      std::unique(res->gmsh_volume_tags.begin(), res->gmsh_volume_tags.end()),
+      res->gmsh_volume_tags.end());
+  if (!res->gmsh_volume_tags.empty()) {
+    res->gmsh_volume_tag = res->gmsh_volume_tags.front();
+  } else {
     res->gmsh_volume_tag = best_tag;
+    if (best_tag > 0) {
+      res->gmsh_volume_tags.push_back(best_tag);
+    }
+  }
   res->ok = true;
   return true;
 }
@@ -629,19 +639,92 @@ namespace gmp {
 
 bool mesh_current_model(const QString& msh_out_path, QString* error) {
   ensure_gmsh();
-  // 优先 3D 体网格, 失败回退 2D 面网格 (壳/面模型或 3D 算法失败时)
-  bool meshed = false;
+  if (error) {
+    error->clear();
+  }
+
+  // 每次自动剖分都从干净的网格状态开始。generate() 抛出异常时 Gmsh
+  // 可能已经留下部分 1D/2D 单元；直接重试会把残留继续参与剖分，最终表现为
+  // 大量自相交边和无休止的 "Splitting those edges and trying again"。
+  auto clear_mesh = []() {
+    gmsh::model::mesh::clear();
+  };
+
   try {
-    gmsh::model::mesh::generate(3);
+    clear_mesh();
+  } catch (const std::exception& e) {
+    if (error) {
+      *error = QString("Failed to reset the existing mesh: %1")
+                   .arg(QString::fromUtf8(e.what()));
+    }
+    return false;
+  }
+
+  // 壳/面几何直接生成 2D；只有存在体时才先生成 3D。
+  std::vector<std::pair<int, int>> volumes;
+  try {
+    gmsh::model::getEntities(volumes, 3);
+  } catch (const std::exception& e) {
+    if (error) {
+      *error = QString("Failed to inspect the current geometry: %1")
+                   .arg(QString::fromUtf8(e.what()));
+    }
+    return false;
+  }
+  const int target_dimension = volumes.empty() ? 2 : 3;
+
+  bool meshed = false;
+  QString primary_error;
+  try {
+    gmsh::model::mesh::generate(target_dimension);
     meshed = true;
-  } catch (const std::exception&) {
+  } catch (const std::exception& e) {
+    primary_error = QString::fromUtf8(e.what());
+
+    // 无论是否回退，都必须丢弃本次失败留下的部分网格。
     try {
-      gmsh::model::mesh::generate(2);
-      meshed = true;
-    } catch (const std::exception& e) {
+      clear_mesh();
+    } catch (const std::exception& clear_error) {
       if (error) {
-        *error = QString::fromUtf8(e.what());
+        *error = QString("%1; failed to clear the partial mesh: %2")
+                     .arg(primary_error, QString::fromUtf8(clear_error.what()));
       }
+      return false;
+    }
+
+    // generate(3) 本身包含 1D/2D 剖分。若错误已经明确发生在周期面或
+    // 低维网格，再调用 generate(2) 只会重复同一失败路径；此时快速失败，
+    // 让用户修正几何/周期约束。其他纯 3D 算法错误仍允许降级显示表面网格。
+    const QString lower_error = primary_error.toLower();
+    const bool low_dimension_failure =
+        lower_error.contains("periodic surface") ||
+        lower_error.contains("intersections in the 1d mesh") ||
+        lower_error.contains("1d mesh") || lower_error.contains("2d mesh");
+    const bool may_fallback_to_surface =
+        target_dimension == 3 && !low_dimension_failure;
+
+    if (may_fallback_to_surface) {
+      try {
+        gmsh::model::mesh::generate(2);
+        meshed = true;
+      } catch (const std::exception& fallback_error) {
+        try {
+          clear_mesh();
+        } catch (...) {
+          // 保留两个剖分错误；下一次调用还会在入口再次尝试清理。
+        }
+        if (error) {
+          *error = QString("3D mesh failed: %1; 2D fallback failed: %2")
+                       .arg(primary_error,
+                            QString::fromUtf8(fallback_error.what()));
+        }
+      }
+    } else if (error) {
+      *error = low_dimension_failure
+                   ? QString("%1; partial mesh cleared and repeated 2D "
+                             "fallback skipped")
+                         .arg(primary_error)
+                   : primary_error;
     }
   }
   if (!meshed) {

@@ -54,6 +54,7 @@ class MoosePanel : public QWidget {
   void run_job();
   void check_input();
   void stop_job();
+  void set_external_busy(bool busy);
   QString log_text() const;
   QString log_tail(int max_lines) const;
 
@@ -140,6 +141,8 @@ class MoosePanel : public QWidget {
   SimClient* sim_client_ = nullptr;
   QString last_snapshot_dir_;
   QString last_job_id_;
+  bool running_ = false;
+  bool external_busy_ = false;
 };
 
 }  // namespace gmp

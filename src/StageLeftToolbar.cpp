@@ -6,6 +6,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QPixmap>
+#include <QSignalBlocker>
 #include <QToolButton>
 #include <QVBoxLayout>
 
@@ -185,20 +186,35 @@ StageLeftToolbar::StageLeftToolbar(QWidget* parent) : QWidget(parent) {
 
   common_group_ = make_group(this);
   auto* common = qobject_cast<QVBoxLayout*>(common_group_->layout());
-  auto* interaction_group = new QButtonGroup(this);
-  interaction_group->setExclusive(true);
+  interaction_button_group_ = new QButtonGroup(this);
+  interaction_button_group_->setExclusive(true);
   rotate_button_ = add_button(common_group_, "rotate", "旋转：在视口中左键拖动", true);
-  auto* pan = add_button(common_group_, "pan", "平移：在视口中左键拖动", true);
-  auto* zoom = add_button(common_group_, "zoom", "缩放：在视口中左键上下拖动", true);
-  interaction_group->addButton(rotate_button_, 0);
-  interaction_group->addButton(pan, 1);
-  interaction_group->addButton(zoom, 2);
+  pan_button_ = add_button(common_group_, "pan", "平移视图：在视口中左键拖动", true);
+  zoom_button_ = add_button(common_group_, "zoom", "缩放：在视口中左键上下拖动", true);
+  interaction_button_group_->addButton(rotate_button_, 0);
+  interaction_button_group_->addButton(pan_button_, 1);
+  interaction_button_group_->addButton(zoom_button_, 2);
   rotate_button_->setChecked(true);
-  connect(interaction_group, &QButtonGroup::idClicked, this,
-          &StageLeftToolbar::interaction_mode_requested);
+  connect(interaction_button_group_, &QButtonGroup::idClicked, this,
+          [this](int mode) {
+            if (current_context_ == "Sketch") {
+              if (sketch_button_group_) {
+                sketch_button_group_->setExclusive(false);
+                for (auto* button : sketch_button_group_->buttons()) {
+                  button->setChecked(false);
+                }
+                sketch_button_group_->setExclusive(true);
+              }
+              if (mode == 1) {
+                emit sketch_tool_requested(SketchToolMove);
+                return;
+              }
+            }
+            emit interaction_mode_requested(mode);
+          });
   common->addWidget(rotate_button_);
-  common->addWidget(pan);
-  common->addWidget(zoom);
+  common->addWidget(pan_button_);
+  common->addWidget(zoom_button_);
   add_separator(common, common_group_);
 
   pick_button_ = add_button(common_group_, "pick", "选择/拾取", true);
@@ -258,7 +274,16 @@ StageLeftToolbar::StageLeftToolbar(QWidget* parent) : QWidget(parent) {
     }
   }
   connect(sketch_button_group_, &QButtonGroup::idClicked, this,
-          &StageLeftToolbar::sketch_tool_requested);
+          [this](int tool) {
+            if (current_context_ == "Sketch" && interaction_button_group_) {
+              interaction_button_group_->setExclusive(false);
+              for (auto* button : interaction_button_group_->buttons()) {
+                button->setChecked(false);
+              }
+              interaction_button_group_->setExclusive(true);
+            }
+            emit sketch_tool_requested(tool);
+          });
   root->addWidget(sketch_group_);
 
   mesh_group_ = make_group(this);
@@ -311,6 +336,37 @@ QToolButton* StageLeftToolbar::add_button(QWidget* host, const QString& icon_key
 
 void StageLeftToolbar::set_context(const QString& module) {
   current_context_ = module;
+  const bool sketch_context = module == "Sketch";
+  if (rotate_button_) {
+    rotate_button_->setVisible(!sketch_context);
+  }
+  if (pick_button_) {
+    const QSignalBlocker blocker(pick_button_);
+    pick_button_->setChecked(false);
+    pick_button_->setVisible(!sketch_context);
+  }
+  if (pan_button_) {
+    const QString tip = sketch_context
+                            ? "移动图形：左键拖动完整图形；Option/Alt 拖动子图元"
+                            : "平移视图：在视口中左键拖动";
+    pan_button_->setAccessibleName(tip);
+    pan_button_->setToolTip(tip + "（无快捷键）");
+  }
+  if (sketch_context) {
+    if (interaction_button_group_) {
+      interaction_button_group_->setExclusive(false);
+      for (auto* button : interaction_button_group_->buttons()) {
+        button->setChecked(false);
+      }
+      interaction_button_group_->setExclusive(true);
+    }
+    if (sketch_select_button_) {
+      sketch_select_button_->setChecked(true);
+    }
+  } else if (interaction_button_group_ &&
+             !interaction_button_group_->checkedButton() && rotate_button_) {
+    rotate_button_->setChecked(true);
+  }
   if (sketch_group_) {
     sketch_group_->setVisible(!collapsed_ && module == "Sketch");
   }
@@ -324,6 +380,16 @@ void StageLeftToolbar::set_context(const QString& module) {
 }
 
 void StageLeftToolbar::set_picking_checked(bool checked) {
+  if (current_context_ == "Sketch") {
+    if (checked) {
+      set_sketch_tool_checked(SketchToolSelect);
+    }
+    if (pick_button_) {
+      const QSignalBlocker blocker(pick_button_);
+      pick_button_->setChecked(false);
+    }
+    return;
+  }
   if (pick_button_ && pick_button_->isChecked() != checked) {
     pick_button_->setChecked(checked);
   }
@@ -336,14 +402,34 @@ void StageLeftToolbar::set_slice_checked(bool checked) {
 }
 
 void StageLeftToolbar::set_sketch_tool_checked(int tool) {
-  if (sketch_button_group_) {
-    if (auto* button = sketch_button_group_->button(tool)) {
-      button->setChecked(true);
+  if (!sketch_button_group_ || !interaction_button_group_) {
+    return;
+  }
+  interaction_button_group_->setExclusive(false);
+  for (auto* button : interaction_button_group_->buttons()) {
+    button->setChecked(false);
+  }
+  interaction_button_group_->setExclusive(true);
+  if (tool == SketchToolMove) {
+    sketch_button_group_->setExclusive(false);
+    for (auto* button : sketch_button_group_->buttons()) {
+      button->setChecked(false);
     }
+    sketch_button_group_->setExclusive(true);
+    if (pan_button_) {
+      pan_button_->setChecked(true);
+    }
+  } else if (auto* button = sketch_button_group_->button(tool)) {
+    button->setChecked(true);
   }
 }
 
 void StageLeftToolbar::reset_temporary_modes() {
+  if (current_context_ == "Sketch") {
+    set_sketch_tool_checked(SketchToolSelect);
+    emit sketch_tool_requested(SketchToolSelect);
+    return;
+  }
   if (rotate_button_) {
     rotate_button_->setChecked(true);
   }

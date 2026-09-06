@@ -296,6 +296,9 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   run_btn_ = new QPushButton("Run");
   check_btn_ = new QPushButton("Check Input");
   stop_btn_ = new QPushButton("Stop");
+  run_btn_->setObjectName("mooseRunButton");
+  check_btn_->setObjectName("mooseCheckButton");
+  stop_btn_->setObjectName("mooseStopButton");
   stop_btn_->setEnabled(false);
   connect(run_btn_, &QPushButton::clicked, this, &MoosePanel::on_run);
   connect(check_btn_, &QPushButton::clicked, this, &MoosePanel::on_check_input);
@@ -406,6 +409,11 @@ void MoosePanel::check_input() {
   on_check_input();
 }
 
+void MoosePanel::set_external_busy(bool busy) {
+  external_busy_ = busy;
+  set_running(running_);
+}
+
 void MoosePanel::append_log(const QString& text) {
   if (log_) {
     log_->appendPlainText(text);
@@ -442,11 +450,12 @@ void MoosePanel::flush_output() {
 }
 
 void MoosePanel::set_running(bool running) {
+  running_ = running;
   if (run_btn_) {
-    run_btn_->setEnabled(!running);
+    run_btn_->setEnabled(!running && !external_busy_);
   }
   if (check_btn_) {
-    check_btn_->setEnabled(!running);
+    check_btn_->setEnabled(!running && !external_busy_);
   }
   if (stop_btn_) {
     stop_btn_->setEnabled(running);
@@ -851,6 +860,10 @@ void MoosePanel::on_insert_bcs_block() {
 }
 
 void MoosePanel::run_task(bool check_only) {
+  if (external_busy_) {
+    append_log("Job commands are unavailable while mesh generation is running.");
+    return;
+  }
   if (runner_) {
     append_log("A run is already active.");
     return;
@@ -905,6 +918,8 @@ void MoosePanel::run_task(bool check_only) {
   start_info.insert("check_only", check_only);
   start_info.insert("launcher", spec.program);
   start_info.insert("args", spec.args.join(" "));
+  // 在启动进程前立即进入运行态，封住 Runner::started 到达前的重复点击窗口。
+  set_running(true);
   emit job_started(start_info);
 
   connect(runner_.get(), &Runner::std_out, this, &MoosePanel::handle_output);

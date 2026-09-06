@@ -45,9 +45,12 @@ class StageLeftToolbar : public QWidget {
   QWidget* visualization_group_ = nullptr;
   QToolButton* collapse_button_ = nullptr;
   QToolButton* rotate_button_ = nullptr;
+  QToolButton* pan_button_ = nullptr;
+  QToolButton* zoom_button_ = nullptr;
   QToolButton* pick_button_ = nullptr;
   QToolButton* slice_button_ = nullptr;
   QToolButton* sketch_select_button_ = nullptr;
+  QButtonGroup* interaction_button_group_ = nullptr;
   QButtonGroup* sketch_button_group_ = nullptr;
   QString current_context_;
   bool collapsed_ = false;

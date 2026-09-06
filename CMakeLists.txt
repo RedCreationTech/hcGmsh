@@ -173,6 +173,7 @@ add_executable(gmp_ise_phase0_test tests/test_phase0.cpp
   src/MooseTemplates.cpp include/gmp/MooseTemplates.h
   src/PhysicalGroupManifest.cpp include/gmp/PhysicalGroupManifest.h
   src/ProjectSchema.cpp include/gmp/ProjectSchema.h
+  src/SketchDocument.cpp include/gmp/SketchDocument.h
   src/Env.cpp include/gmp/Env.h
 )
 target_include_directories(gmp_ise_phase0_test PRIVATE include)

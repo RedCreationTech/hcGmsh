@@ -4,6 +4,7 @@
 #include <QWidget>
 
 class QDoubleSpinBox;
+class QButtonGroup;
 class QLabel;
 class QListWidget;
 class QPushButton;
@@ -36,6 +37,8 @@ class SketchPanel : public QWidget {
   void set_status_text(const QString& text);       // 选中/提示信息
   // 撤销/重做按钮可用状态 (由 MainWindow 按快照栈驱动)
   void set_undo_redo_state(bool can_undo, bool can_redo);
+  // 与舞台左侧工具同步；tool < 0 时清除当前工具高亮（例如视口缩放）。
+  void set_tool_checked(int tool);
 
  signals:
   void new_sketch_requested();
@@ -60,11 +63,13 @@ class SketchPanel : public QWidget {
   QWidget* management_box_ = nullptr;  // 草图列表/管理入口，编辑态隐藏
   QWidget* edit_box_ = nullptr;      // 编辑工具区容器 (默认隐藏)
   QLabel* edit_name_ = nullptr;      // 当前编辑草图名
+  QLabel* tool_status_label_ = nullptr;  // 当前持续生效的绘制/交互工具
   QLabel* cursor_label_ = nullptr;   // 光标世界坐标
   QLabel* status_label_ = nullptr;   // 状态/选中提示
   QDoubleSpinBox* dim_value_ = nullptr;  // 尺寸目标值输入
   QPushButton* undo_btn_ = nullptr;
   QPushButton* redo_btn_ = nullptr;
+  QButtonGroup* tool_group_ = nullptr;
 };
 
 }  // namespace gmp

@@ -157,8 +157,17 @@ bool operator!=(const SketchPoint2d& a, const SketchPoint2d& b) {
 int SketchDocument::add_entity(const SketchEntity& e) {
   SketchEntity copy = e;
   copy.id = next_entity_id_++;
+  if (copy.shape_id <= 0) {
+    copy.shape_id = next_shape_id_++;
+  } else {
+    next_shape_id_ = std::max(next_shape_id_, copy.shape_id + 1);
+  }
   entities_.push_back(copy);
   return copy.id;
+}
+
+int SketchDocument::create_shape_id() {
+  return next_shape_id_++;
 }
 
 bool SketchDocument::remove_entity(int id) {
@@ -235,6 +244,7 @@ void SketchDocument::clear() {
   entities_.clear();
   constraints_.clear();
   next_entity_id_ = 1;
+  next_shape_id_ = 1;
   next_constraint_id_ = 1;
 }
 
@@ -305,6 +315,42 @@ int SketchDocument::hit_test(const SketchPoint2d& pt, double tol) const {
     }
   }
   return best_id;
+}
+
+std::vector<int> SketchDocument::shape_entity_ids(int entity_id) const {
+  const SketchEntity* hit = entity(entity_id);
+  if (!hit) {
+    return {};
+  }
+  std::vector<int> ids;
+  for (const auto& e : entities_) {
+    if (hit->shape_id > 0 ? e.shape_id == hit->shape_id : e.id == entity_id) {
+      ids.push_back(e.id);
+    }
+  }
+  return ids;
+}
+
+bool SketchDocument::translate_entities(const std::vector<int>& ids,
+                                        double dx, double dy) {
+  bool moved = false;
+  for (const int id : ids) {
+    SketchEntity* e = entity(id);
+    if (!e) {
+      continue;
+    }
+    if (e->type == SketchEntityType::Line) {
+      e->p1.x += dx;
+      e->p1.y += dy;
+      e->p2.x += dx;
+      e->p2.y += dy;
+    } else {
+      e->center.x += dx;
+      e->center.y += dy;
+    }
+    moved = true;
+  }
+  return moved;
 }
 
 std::vector<std::vector<int>> SketchDocument::closed_loops(double tol) const {
@@ -420,6 +466,7 @@ QString SketchDocument::to_yaml_string() const {
   for (const auto& e : entities_) {
     YAML::Node n;
     n["id"] = e.id;
+    n["shape_id"] = e.shape_id;
     n["type"] = entity_type_str(e.type);
     if (e.type == SketchEntityType::Line) {
       write_point(n, "p1", e.p1);
@@ -459,6 +506,7 @@ QString SketchDocument::to_yaml_string() const {
   }
   root["constraints"] = constraints;
   root["next_entity_id"] = next_entity_id_;
+  root["next_shape_id"] = next_shape_id_;
   root["next_constraint_id"] = next_constraint_id_;
 
   return QString::fromStdString(YAML::Dump(root));
@@ -477,6 +525,7 @@ bool SketchDocument::from_yaml_string(const QString& yaml, QString* error) {
       for (const auto& n : entities) {
         SketchEntity e;
         e.id = n["id"].as<int>(0);
+        e.shape_id = n["shape_id"].as<int>(0);
         if (e.id <= 0 ||
             !entity_type_from_str(n["type"].as<std::string>(""), &e.type)) {
           continue;
@@ -497,6 +546,9 @@ bool SketchDocument::from_yaml_string(const QString& yaml, QString* error) {
         }
         tmp.entities_.push_back(e);
         tmp.next_entity_id_ = std::max(tmp.next_entity_id_, e.id + 1);
+        if (e.shape_id > 0) {
+          tmp.next_shape_id_ = std::max(tmp.next_shape_id_, e.shape_id + 1);
+        }
       }
     }
     const YAML::Node constraints = root["constraints"];
@@ -521,6 +573,51 @@ bool SketchDocument::from_yaml_string(const QString& yaml, QString* error) {
     if (root["next_entity_id"]) {
       tmp.next_entity_id_ =
           std::max(tmp.next_entity_id_, root["next_entity_id"].as<int>(1));
+    }
+    if (root["next_shape_id"]) {
+      tmp.next_shape_id_ =
+          std::max(tmp.next_shape_id_, root["next_shape_id"].as<int>(1));
+    }
+    // 旧草图没有 shape_id：通过 Coincident 约束恢复复合图形。这样旧版
+    // Rectangle 的四条边升级后仍会作为一个整体选择；其余独立图元各自成组。
+    std::map<int, int> parent;
+    for (const auto& e : tmp.entities_) {
+      if (e.shape_id <= 0) {
+        parent[e.id] = e.id;
+      }
+    }
+    std::function<int(int)> root_of = [&](int id) {
+      auto it = parent.find(id);
+      if (it == parent.end()) {
+        return -1;
+      }
+      if (it->second != id) {
+        it->second = root_of(it->second);
+      }
+      return it->second;
+    };
+    for (const auto& c : tmp.constraints_) {
+      if (c.type != SketchConstraintType::Coincident ||
+          !parent.count(c.entity1) || !parent.count(c.entity2)) {
+        continue;
+      }
+      const int a = root_of(c.entity1);
+      const int b = root_of(c.entity2);
+      if (a >= 0 && b >= 0 && a != b) {
+        parent[b] = a;
+      }
+    }
+    std::map<int, int> shape_for_root;
+    for (auto& e : tmp.entities_) {
+      if (e.shape_id > 0) {
+        continue;
+      }
+      const int root_id = root_of(e.id);
+      auto [it, inserted] = shape_for_root.emplace(root_id, 0);
+      if (inserted) {
+        it->second = tmp.create_shape_id();
+      }
+      e.shape_id = it->second;
     }
     if (root["next_constraint_id"]) {
       tmp.next_constraint_id_ = std::max(tmp.next_constraint_id_,

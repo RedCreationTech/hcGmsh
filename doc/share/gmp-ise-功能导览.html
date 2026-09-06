@@ -151,7 +151,7 @@
 <div class="shot"><img src="screenshots/module_00_Sketch.png" alt="Sketch"><div class="cap">图 1-1　Sketch 模块页：草图列表 + 工具 / 约束 / 尺寸命令条</div></div>
 
 <h3>1.2 部件 Part（草图特征造型，OCC 内核）</h3>
-<p>基于草图闭环，经 <code>OccBridge</code> 调用 OpenCASCADE 完成特征造型，结果回注 Gmsh 并自动剖分网格、载入视口；特征落盘为 <code>.brep</code>，模型树挂 Features 节点并关联 Part。</p>
+<p>基于草图闭环，经 <code>OccBridge</code> 调用 OpenCASCADE 完成特征造型，结果回注 Gmsh 并自动剖分网格、载入视口；特征落盘为 <code>.brep</code>，模型树新增 Features 历史并把结果写回当前 Part，不重复创建部件。</p>
 <ul>
   <li><b>拉伸 Extrude</b>：草图闭环沿 +Z 拉伸指定距离（负值反向）生成实体。</li>
   <li><b>旋转 Revolve</b>：绕 Y 轴旋转指定角度生成回转体。</li>
@@ -368,7 +368,7 @@
   <tr><td>9</td><td>参数管理器 / 修改已有尺寸</td><td><span class="tag warn">半成品</span></td><td>求解器支持改尺寸值重解；UI 仅有“添加尺寸”，集中参数管理待补</td></tr>
   <tr><td>10</td><td>约束标记可视化、图元拖拽</td><td><span class="tag bad">占位</span></td><td>画布只画图元</td></tr>
   <tr><td>11</td><td>拉伸 / 旋转 / 放样 / 扫掠特征</td><td><span class="tag ok">已实现</span></td><td>OCC 内核；轴向固定（+Z / Y 轴）、放样取首闭环、扫掠路径需单连通</td></tr>
-  <tr><td>12</td><td>特征自动成 Part + 自动网格 + 视口显示</td><td><span class="tag ok">已实现</span></td><td>.brep 落盘 features/ 目录</td></tr>
+  <tr><td>12</td><td>特征写回当前 Part + 自动网格 + 视口显示</td><td><span class="tag ok">已实现</span></td><td>每次操作新增 Feature 历史，Part 数量保持不变；.brep 落盘 features/ 目录</td></tr>
   <tr><td>13</td><td>切除 / 圆角 / 倒角</td><td><span class="tag bad">占位</span></td><td>按钮禁用，规划 WS3</td></tr>
   <tr><td>14</td><td>部件镜像、创建壳（抽壳）</td><td><span class="tag bad">占位</span></td><td>Part 工具栏提炼，待补充</td></tr>
   <tr><td>15</td><td>基准面/轴/点、局部坐标系、拆分边/面/体、特征编辑/禁用/删除</td><td><span class="tag bad">占位</span></td><td>Datums 根节点无任何创建入口；特征删除仅能删树节点，不重算模型</td></tr>

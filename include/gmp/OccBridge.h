@@ -29,6 +29,7 @@ struct FeatureResult {
   bool ok = false;
   QString error;             // 失败原因 (面向用户)
   int gmsh_volume_tag = 0;   // importShapes 后主体积 tag, 0 表示未知/未导入
+  std::vector<int> gmsh_volume_tags;  // 同一特征产生的全部体积 tag
   QString brep_path;         // brep_out_path 非空且写盘成功时回显
 };
 
@@ -48,7 +49,9 @@ FeatureResult sweep_sketch(const SketchDocument& profile,
                            const QString& brep_out_path = QString());
 
 // 对当前 gmsh 模型 (最近一次特征导入) 生成网格并写出 msh, 供视口即时显示。
-// 优先生成 3D 网格, 失败回退 2D 面网格。msh_out_path 非空。
+// 按几何最高维度生成网格；体网格仅在纯 3D 算法失败时回退 2D 面网格。
+// 每次生成及失败回退前都会清理残留网格，低维/周期面错误不会重复回退。
+// msh_out_path 非空。
 bool mesh_current_model(const QString& msh_out_path, QString* error = nullptr);
 
 } // namespace gmp

@@ -1,4 +1,5 @@
 #include "gmp/GmshPanel.h"
+#include "gmp/L10n.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -28,6 +29,8 @@
 #include <QTabWidget>
 #include <QHeaderView>
 #include <QAbstractItemView>
+#include <QApplication>
+#include <QEventLoop>
 #include <QModelIndex>
 #include <QObject>
 #include <QString>
@@ -761,10 +764,14 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
           &GmshPanel::on_export_geometry);
 
   auto* generate_btn = new QPushButton("Generate Mesh");
+  generate_btn->setObjectName("generateMeshButton");
   connect(generate_btn, &QPushButton::clicked, this, &GmshPanel::on_generate);
 
   auto* generate_2d_btn = new QPushButton("Generate 2D Mesh");
   auto* generate_3d_btn = new QPushButton("Generate 3D Mesh");
+  generate_2d_btn->setObjectName("generate2dMeshButton");
+  generate_3d_btn->setObjectName("generate3dMeshButton");
+  mesh_generate_buttons_ = {generate_btn, generate_2d_btn, generate_3d_btn};
   connect(generate_2d_btn, &QPushButton::clicked, this, [this]() {
     if (mesh_dim_) {
       const int idx = mesh_dim_->findData(2);
@@ -1104,6 +1111,22 @@ void GmshPanel::generate_mesh() {
   on_generate();
 }
 
+void GmshPanel::set_external_busy(bool busy) {
+  mesh_external_busy_ = busy;
+  for (auto* button : mesh_generate_buttons_) {
+    if (!button) {
+      continue;
+    }
+    button->setEnabled(!mesh_generation_running_ && !mesh_external_busy_);
+    if (mesh_external_busy_) {
+      button->setToolTip(
+          "Wait for the active Job to finish before generating a mesh.");
+    } else if (!mesh_generation_running_) {
+      button->setToolTip(QString());
+    }
+  }
+}
+
 void GmshPanel::set_mesh_generation_dim(int dim) {
 #ifndef GMP_ENABLE_GMSH_GUI
   Q_UNUSED(dim);
@@ -1261,10 +1284,25 @@ void GmshPanel::on_export_geometry() {
 }
 
 void GmshPanel::on_generate() {
+  if (mesh_generation_running_ || mesh_external_busy_) {
+    append_log(mesh_generation_running_
+                   ? "Mesh generation is already running."
+                   : "Mesh generation is unavailable while a Job is running.");
+    return;
+  }
+  set_mesh_generation_running(true);
+  emit mesh_generation_started();
+  // Gmsh 当前在 GUI 线程同步执行；排除用户输入地刷新一次界面，确保运行态
+  // 在耗时计算开始前可见，同时不开放重复点击的重入窗口。
+  QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 #ifndef GMP_ENABLE_GMSH_GUI
   append_log("Gmsh is not enabled in this build.");
+  set_mesh_generation_running(false);
+  emit mesh_generation_finished(false, "Gmsh is not enabled in this build.");
   return;
 #else
+  bool success = false;
+  QString completion_message;
   try {
     ensure_gmsh();
 
@@ -1471,10 +1509,39 @@ void GmshPanel::on_generate() {
     } catch (const std::exception& ex) {
       append_log(QString("Physical group count failed: %1").arg(ex.what()));
     }
+    success = true;
+    completion_message = "Mesh generated.";
   } catch (const std::exception& ex) {
-    append_log(QString("Gmsh error: %1").arg(ex.what()));
+    completion_message = QString("Gmsh error: %1").arg(ex.what());
+    append_log(completion_message);
   }
+  set_mesh_generation_running(false);
+  emit mesh_generation_finished(success, completion_message);
 #endif
+}
+
+void GmshPanel::set_mesh_generation_running(bool running) {
+  mesh_generation_running_ = running;
+  for (auto* button : mesh_generate_buttons_) {
+    if (!button) {
+      continue;
+    }
+    if (running) {
+      if (!button->property("idleText").isValid()) {
+        button->setProperty("idleText", button->text());
+      }
+      button->setText(
+          gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+              ? QString::fromUtf8("正在生成...")
+              : QString("Generating..."));
+      button->setToolTip(
+          "Mesh generation is running; duplicate submission is disabled.");
+    } else {
+      button->setText(button->property("idleText").toString());
+      button->setToolTip(QString());
+    }
+    button->setEnabled(!running && !mesh_external_busy_);
+  }
 }
 
 void GmshPanel::on_add_primitive() {

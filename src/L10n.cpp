@@ -192,6 +192,7 @@ const QHash<QString, QString>& zh_dict() {
       // ===== 草图编辑工具区 (WS1) =====
       {"Tools:", "工具:"},
       {"Select", "选择"},
+      {"Move", "移动"},
       {"Line", "直线"},
       {"Circle", "圆"},
       {"Arc", "圆弧"},
@@ -210,6 +211,8 @@ const QHash<QString, QString>& zh_dict() {
       {"Undo", "撤销"},
       {"Redo", "重做"},
       {"Cursor: --", "光标: --"},
+      {"Selection: shape by default; Option/Alt = sub-entity; Shift = multi-select.",
+       "选择粒度：默认完整图形；Option/Alt 选择子图元；Shift 多选。"},
       // ===== 部件特征面板 (WS3) =====
       {"Part Features", "部件特征"},
       {"Create 3D features from closed sketch profiles: extrude, revolve, loft and sweep. The result is imported into the mesh model and can be written to a BREP file.",

@@ -5,12 +5,14 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QTemporaryDir>
+#include <vector>
 
 #include "gmp/ApplicationProfile.h"
 #include "gmp/MooseMappingRegistry.h"
 #include "gmp/MooseSnapshot.h"
 #include "gmp/PhysicalGroupManifest.h"
 #include "gmp/ProjectSchema.h"
+#include "gmp/SketchDocument.h"
 
 namespace {
 
@@ -136,6 +138,92 @@ physical_groups: []
 )");
   test.expect(mesh_snapshot_from_yaml(legacy_flat).mesh_dim == 2,
               "early flat mesh summary remains readable");
+}
+
+void test_sketch_entity_translation(TestContext& test) {
+  gmp::SketchDocument doc;
+  gmp::SketchEntity line;
+  line.type = gmp::SketchEntityType::Line;
+  line.p1 = {1.0, 2.0};
+  line.p2 = {4.0, 6.0};
+  const int line_id = doc.add_entity(line);
+  gmp::SketchEntity circle;
+  circle.type = gmp::SketchEntityType::Circle;
+  circle.center = {10.0, 20.0};
+  circle.radius = 3.0;
+  const int circle_id = doc.add_entity(circle);
+  gmp::SketchEntity arc;
+  arc.type = gmp::SketchEntityType::Arc;
+  arc.center = {-2.0, 5.0};
+  arc.radius = 7.0;
+  arc.start_angle = 0.25;
+  arc.end_angle = 1.5;
+  const int arc_id = doc.add_entity(arc);
+
+  test.expect(doc.translate_entities({line_id, circle_id, arc_id}, 5.0, -3.0),
+              "sketch move accepts line, circle and arc selections");
+  const auto* moved_line = doc.entity(line_id);
+  const auto* moved_circle = doc.entity(circle_id);
+  const auto* moved_arc = doc.entity(arc_id);
+  test.expect(moved_line && moved_line->p1 == gmp::SketchPoint2d{6.0, -1.0} &&
+                  moved_line->p2 == gmp::SketchPoint2d{9.0, 3.0},
+              "sketch move translates both line endpoints");
+  test.expect(moved_circle &&
+                  moved_circle->center == gmp::SketchPoint2d{15.0, 17.0} &&
+                  moved_circle->radius == 3.0,
+              "sketch move translates a circle without changing radius");
+  test.expect(moved_arc &&
+                  moved_arc->center == gmp::SketchPoint2d{3.0, 2.0} &&
+                  moved_arc->radius == 7.0 && moved_arc->start_angle == 0.25 &&
+                  moved_arc->end_angle == 1.5,
+              "sketch move translates an arc without changing its shape");
+
+  gmp::SketchDocument grouped;
+  const int rectangle_shape = grouped.create_shape_id();
+  std::vector<int> rectangle_ids;
+  const gmp::SketchPoint2d corners[4] = {
+      {0.0, 0.0}, {10.0, 0.0}, {10.0, 5.0}, {0.0, 5.0}};
+  for (int i = 0; i < 4; ++i) {
+    gmp::SketchEntity edge;
+    edge.type = gmp::SketchEntityType::Line;
+    edge.shape_id = rectangle_shape;
+    edge.p1 = corners[i];
+    edge.p2 = corners[(i + 1) % 4];
+    rectangle_ids.push_back(grouped.add_entity(edge));
+  }
+  test.expect(grouped.shape_entity_ids(rectangle_ids.front()) == rectangle_ids,
+              "rectangle edges retain one logical shape identity");
+  grouped.translate_entities(grouped.shape_entity_ids(rectangle_ids.front()),
+                             2.0, 3.0);
+  test.expect(grouped.entity(rectangle_ids[0])->p1 ==
+                      gmp::SketchPoint2d{2.0, 3.0} &&
+                  grouped.entity(rectangle_ids[2])->p2 ==
+                      gmp::SketchPoint2d{2.0, 8.0},
+              "logical rectangle moves as one shape");
+
+  gmp::SketchDocument restored;
+  QString restore_error;
+  test.expect(restored.from_yaml_string(grouped.to_yaml_string(),
+                                        &restore_error) &&
+                  restored.shape_entity_ids(rectangle_ids.front()).size() == 4,
+              "rectangle shape identity survives YAML round-trip");
+
+  const QString legacy_rectangle = QStringLiteral(R"(
+entities:
+  - {id: 1, type: line, p1: [0, 0], p2: [1, 0]}
+  - {id: 2, type: line, p1: [1, 0], p2: [1, 1]}
+  - {id: 3, type: line, p1: [1, 1], p2: [0, 1]}
+  - {id: 4, type: line, p1: [0, 1], p2: [0, 0]}
+constraints:
+  - {id: 1, type: coincident, entity1: 1, role1: end, entity2: 2, role2: start}
+  - {id: 2, type: coincident, entity1: 2, role1: end, entity2: 3, role2: start}
+  - {id: 3, type: coincident, entity1: 3, role1: end, entity2: 4, role2: start}
+  - {id: 4, type: coincident, entity1: 4, role1: end, entity2: 1, role2: start}
+)");
+  gmp::SketchDocument legacy;
+  test.expect(legacy.from_yaml_string(legacy_rectangle, &restore_error) &&
+                  legacy.shape_entity_ids(1).size() == 4,
+              "legacy rectangle grouping is recovered from coincident edges");
 }
 
 void test_profiles_and_mapping(TestContext& test) {
@@ -305,6 +393,7 @@ int main(int argc, char* argv[]) {
   QCoreApplication app(argc, argv);
   TestContext test;
   test_project_schema(test);
+  test_sketch_entity_translation(test);
   test_profiles_and_mapping(test);
   test_physical_groups(test);
   test_snapshot_v2(test);
