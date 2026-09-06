@@ -82,6 +82,8 @@ add_executable(gmp_ise
   include/gmp/Env.h
   resources/icons.qrc
   src/MainWindow.cpp
+  src/OperationLog.cpp
+  include/gmp/OperationLog.h
   src/StageLeftToolbar.cpp
   include/gmp/StageLeftToolbar.h
   src/GmshPanel.cpp

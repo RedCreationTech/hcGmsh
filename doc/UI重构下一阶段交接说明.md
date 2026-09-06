@@ -1,14 +1,20 @@
 # GMP-ISE UI 重构下一阶段交接说明
 
-> 交接日期：2026-09-06
-> 代码基线：远端 `origin/main` 中包含“完成 Phase 2 交互状态重构”的提交
-> 当前阶段：Phase 2 进行中；I-01、I-01A、I-02、I-03 已关闭，下一任务为 I-04
+> 交接日期：2026-09-06（当日更新：I-04 人工验收通过，Phase 2 全部关闭）
+> 代码基线：`origin/main` 包含“完成 Phase 2 独立工作窗与作业监控重构”的提交
+> 当前阶段：Phase 2 已完成；下一阶段为 Phase 3（视觉、可访问性与兼容性）
 
 ## 1. 接续目标
 
-下一会话只处理 I-04“迁移 Mesh、Visualization、Job、Results 复合页面为独立工作窗”，完成自动回归和人工验收后再关闭 Phase 2。不要提前开始 Phase 3 的视觉精修，以免工作窗所有权尚未稳定时重复调整样式和布局。
+Phase 2 已全部验收关闭（TEST-P2-I04-01～09 于 2026-09-06 通过）。下一阶段按任务清单执行 Phase 3，顺序 V-01 → V-02 → V-03：
 
-I-04 的现状不是空白：Job、Visualization、Results 已有独立非模态单实例工作窗、基础尺寸记忆和越界校正；Mesh 以及 Part、Sketch 等页面仍通过 `property_stack_` 进入通用 Module Workspace。Results 默认工作窗已有页签，但尚未实现任务合同要求的“新建对比窗口”多实例。
+1. V-01 统一视觉层级与紧凑密度（`doc/ui-style-guide.md`、图标统一、对照 Abaqus 截图）。
+2. V-02 国际化与键盘可访问性（L10n 字典补全、键盘遍历、焦点样式）。
+3. V-03 布局恢复、兼容与回归保障（布局版本回退、“恢复默认布局”、跨平台冒烟、用户手册更新）。
+
+Phase 3 期间不得回退 Phase 2 已验收的工作窗所有权、交互状态和作业监控行为；回归基线为 76 步真实点击巡览 + CTest `1/1`。
+
+I-04 完成内容摘要：Mesh 迁入专用 `mesh_work_window_`（栈 9 为 launcher 页）；四个独立工作窗统一 `clamp_window_to_screen()` 越界恢复；Results 支持“新建对比窗口”多实例；新增操作日志基建（`src/OperationLog.cpp`）、`.geo` 导入失败反馈与退化几何拦截、空网格生成保护、远程（LIMS）作业登记与 LIMS 式作业监控页（SimClient 五个新端点 + MoosePanel 转发层）、Results 对比窗口/结果导入/结果导航右键菜单。
 
 ## 2. 在另一台电脑恢复代码
 
@@ -57,7 +63,7 @@ GMP_SCREENSHOT_DIR=/tmp/gmp-ui-tour \
 ./build/gmp_ise
 ```
 
-当前回归基线为 67 步全部通过、CTest `1/1` 通过。新增 I-04 用例时应在此基线上递增，不得删减既有断言来换取通过。
+当前回归基线为 74 步全部通过、CTest `1/1` 通过（I-04 新增 `workspace_Mesh`、`i04_work_window_contracts`、`i04_results_compare_windows`，缺陷修复新增 `i04_geo_import_feedback`，操作日志新增 `operation_log_smoke`，远程作业登记/监控新增 `remote_job_registration`、`remote_job_monitor`）。后续新增用例时应在此基线上递增，不得删减既有断言来换取通过。
 
 ## 4. 先读文档
 
@@ -69,7 +75,9 @@ GMP_SCREENSHOT_DIR=/tmp/gmp-ui-tour \
 4. `doc/UI重构Phase2人工验收清单.md`：I-01～I-03 已通过的不可回归行为。
 5. `doc/用户使用手册.md`、`doc/缺陷汇总.md`：当前用户语义和历史问题。
 
-## 5. I-04 首轮任务
+## 5. I-04 任务执行情况
+
+以下任务已于 2026-09-06 全部完成（实现 + 自动回归），保留说明供追溯：
 
 ### TASK-P2-I04-01 补齐迁移地图
 
@@ -112,12 +120,11 @@ GMP_SCREENSHOT_DIR=/tmp/gmp-ui-tour \
 - `src/MoosePanel.cpp`、`include/gmp/MoosePanel.h`：Job/MOOSE 页面和作业状态。
 - `src/VtkViewer.cpp`、`include/gmp/VtkViewer.h`：中央舞台、结果加载与显示状态。
 
-当前已知的结构性事实：
+当前已知的结构性事实（I-04 完成后）：
 
-- `module_work_window_` 仍拥有通用 `property_stack_`。
-- `job_work_window_`、`visualization_work_window_`、`results_work_window_` 已独立存在。
-- `property_stack_` 仍注册 Property、Part、Material、Section、Assembly、Step、Interaction、Load、Sketch、Mesh 和三个独立工作窗的 launcher 页面。
-- 工作窗几何使用 `QSettings` 版本化键；主窗已有屏幕变化和越界恢复逻辑，新增窗口应复用同一规则，避免另起一套实现。
+- `module_work_window_` 仍拥有通用 `property_stack_`，但仅承载 Property、Part、Material、Section、Assembly、Step、Interaction、Load、Sketch 及 Mesh/Job/Visualization/Results 四个 launcher 页。
+- `mesh_work_window_`、`job_work_window_`、`visualization_work_window_`、`results_work_window_` 均为独立非模态单实例工作窗；Results 另有 `results_compare_windows_` 多实例对比窗。
+- 所有独立工作窗共用 `clamp_window_to_screen()` 越界恢复；几何使用 `QSettings` 版本化键（清单见 `doc/ui-migration-map.md` 第 5 节）。
 
 ## 7. 不可回归行为
 
@@ -133,5 +140,5 @@ GMP_SCREENSHOT_DIR=/tmp/gmp-ui-tour \
 ## 8. 新 AI 会话可直接使用的提示词
 
 ```text
-请继续 GMP-ISE 的 UI 重构 Phase 2。先阅读 doc/UI重构需求记录.md、doc/UI重构开发任务清单.md、doc/UI重构Phase2开发记录.md、doc/UI重构Phase2人工验收清单.md 和 doc/UI重构下一阶段交接说明.md。当前 I-01、I-01A、I-02、I-03 已验收关闭，不要回退其行为；从 TASK-P2-I04-01 开始，先补齐 ui-migration-map，再审计并实现 Mesh 独立工作窗、Job/Visualization/Results 工作窗合同、Results 对比多实例，扩展自动巡览和 I-04 人工验收清单。每个切片完成后构建并运行 CTest，涉及 UI 入口时运行真实点击巡览；I-04 验收前不要进入 Phase 3。
+请继续 GMP-ISE 的 UI 重构 Phase 3。先阅读 doc/UI重构需求记录.md、doc/UI重构开发任务清单.md、doc/UI重构Phase2开发记录.md、doc/UI重构Phase2人工验收清单.md 和 doc/UI重构下一阶段交接说明.md。Phase 0～2 已全部验收关闭，不要回退其行为（工作窗所有权、交互状态、作业监控、远程作业登记、结果导入与导航右键菜单等）。按 V-01 → V-02 → V-03 顺序执行：V-01 先建立 doc/ui-style-guide.md 并对照 Abaqus 截图统一视觉层级与图标，V-02 补全 L10n 与键盘可访问性，V-03 做布局版本回退、恢复默认布局与跨平台冒烟并更新用户手册。每个切片完成后构建并运行 CTest，涉及 UI 入口时运行真实点击巡览（基线 76 步，只增不减）；人工验收通过前不要进入 Phase 4。
 ```

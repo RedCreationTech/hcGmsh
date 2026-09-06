@@ -37,6 +37,17 @@ class MoosePanel : public QWidget {
   void exodus_history(const QStringList& paths);
   void job_started(const QVariantMap& info);
   void job_finished(const QVariantMap& info);
+  // 远程（LIMS Facade）作业事件：event=submitted（提交成功）或
+  // event=status（状态刷新）；携带 job_id/state/server/project/snapshot/
+  // submit_time/progress 等字段，供主窗口登记到 Jobs 树与作业列表。
+  void remote_job_event(const QVariantMap& info);
+  // 作业监控转发信号（数据为 QVariantMap，便于主窗口与巡览复用）。
+  void remote_execution_status(const QVariantMap& status);
+  void remote_files(const QVariantMap& files);
+  void remote_log(const QString& job_id, const QString& text);
+  void remote_cancel_done(const QVariantMap& result);
+  void remote_file_downloaded(const QString& job_id, const QString& file_path,
+                              const QString& local_path);
 
  public slots:
   void set_mesh_path(const QString& path);
@@ -57,6 +68,17 @@ class MoosePanel : public QWidget {
   void set_external_busy(bool busy);
   QString log_text() const;
   QString log_tail(int max_lines) const;
+  // 刷新远程作业：本会话作业详情 + LIMS 任务摘要列表全量同步。
+  // 网络失败只记录日志，不弹窗；可在任何时机安全调用。
+  void on_refresh_job();
+  // 作业监控：按 job_id 拉取实时执行状态/文件清单/日志尾，请求取消，
+  // 下载作业工作区单文件。内部自动套用当前服务器字段。
+  void refresh_job_execution(const QString& job_id);
+  void refresh_job_files(const QString& job_id);
+  void request_job_log(const QString& job_id);
+  void request_cancel_job(const QString& job_id);
+  void download_remote_file(const QString& job_id, const QString& file_path,
+                            const QString& dest_path);
 
  private slots:
   void on_pick_exec();
@@ -69,7 +91,6 @@ class MoosePanel : public QWidget {
   void on_apply_template();
   void on_export_snapshot();
   void on_submit_job();
-  void on_refresh_job();
   void on_open_artifacts();
   void on_sim_submit_finished(bool ok, const QJsonObject& body,
                               const QString& error);
@@ -141,6 +162,9 @@ class MoosePanel : public QWidget {
   SimClient* sim_client_ = nullptr;
   QString last_snapshot_dir_;
   QString last_job_id_;
+  // 监控请求归属：日志/下载请求对应的 job_id（响应异步返回时回填）。
+  QString log_job_id_;
+  QString download_job_id_;
   bool running_ = false;
   bool external_busy_ = false;
 };

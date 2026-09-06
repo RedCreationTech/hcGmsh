@@ -30,6 +30,9 @@ class QCloseEvent;
 class QTabWidget;
 class QToolBar;
 class QEvent;
+class QProgressBar;
+class QCheckBox;
+class QTimer;
 
 namespace gmp {
 
@@ -91,6 +94,9 @@ class MainWindow : public QMainWindow {
                                           const QString& brep_path);
   void upsert_mesh_item(const QString& path);
   void upsert_result_item(const QString& path, const QString& job_name);
+  // 导入外部结果文件（.e/.exo/.msh/.csv/.txt/.log）为 Results 节点；
+  // Exodus/网格同时载入中央舞台。
+  void import_result_file(const QString& path);
   QVariantMap default_params_for_kind(const QString& kind) const;
   QVariantMap normalize_params_for_kind(const QString& kind,
                                         const QVariantMap& params) const;
@@ -108,8 +114,19 @@ class MainWindow : public QMainWindow {
   void update_recent_menu();
   void export_debug_bundle();
   void refresh_job_table();
+  // 作业监控：选中行后按本地/远程分流详情；远程拉取执行状态与制品清单。
+  void apply_job_selection(int row);
+  void update_remote_job_detail(const QVariantMap& status);
+  void update_remote_job_files(const QVariantMap& body);
   void refresh_results_panel();
+  // I-04 Results 对比窗口：多实例、可区分标题、按实例编号的独立几何记忆。
+  QDockWidget* create_results_compare_window();
+  void populate_results_compare_list(QListWidget* list) const;
   void refresh_results_navigation();
+  // 结果导航树条目 → 模型树条目（path 优先、名称为辅的匹配）。
+  QTreeWidgetItem* model_item_for_navigation(QTreeWidgetItem* nav_item) const;
+  // 构建结果导航树右键菜单（根/子节点、Jobs/Results 分流），供巡览断言。
+  void build_results_navigation_menu(QMenu* menu, QTreeWidgetItem* item);
   void sync_results_tree_selection(const QListWidgetItem* row);
   void apply_model_tree_filter(const QString& text);
   void apply_results_tree_filter(const QString& text);
@@ -141,6 +158,9 @@ class MainWindow : public QMainWindow {
   // Module Workspace 复用内容容器，但不同内容使用独立尺寸/位置配置。
   // Sketch Editor 使用紧凑 profile，不继承 Part/Material 等通用大窗尺寸。
   void apply_module_workspace_profile(bool sketch_editor);
+  // 工作窗公共越界恢复：按窗口中心定位屏幕，尺寸与位置夹取到可用区域。
+  // 所有独立工作窗（Mesh/Job/Visualization/Results/对比窗）复用同一规则。
+  void clamp_window_to_screen(QWidget* window);
   void remember_active_object_for_module(int module_index);
   void restore_active_object_for_module(int module_index);
   void sync_active_ui_context();
@@ -157,11 +177,14 @@ class MainWindow : public QMainWindow {
   QSplitter* main_split_ = nullptr;
   QSplitter* vertical_split_ = nullptr;
   QDockWidget* module_work_window_ = nullptr;
+  QDockWidget* mesh_work_window_ = nullptr;
   QDockWidget* job_work_window_ = nullptr;
   QDockWidget* visualization_work_window_ = nullptr;
   QDockWidget* results_work_window_ = nullptr;
   QToolBar* display_tool_group_ = nullptr;
   QTabWidget* results_work_tabs_ = nullptr;
+  QList<QDockWidget*> results_compare_windows_;
+  int results_compare_counter_ = 0;
   StageLeftToolbar* stage_left_toolbar_ = nullptr;
   bool layout_ready_ = false;
   bool module_workspace_sketch_profile_ = false;
@@ -177,6 +200,20 @@ class MainWindow : public QMainWindow {
   VtkViewer* viewer_ = nullptr;
   QTableWidget* job_table_ = nullptr;
   QPlainTextEdit* job_detail_ = nullptr;
+  // 作业监控（参照 LIMS 任务监控/制品库）
+  QComboBox* job_state_filter_ = nullptr;
+  QCheckBox* job_auto_refresh_ = nullptr;
+  QTimer* job_auto_refresh_timer_ = nullptr;
+  QStackedWidget* job_detail_stack_ = nullptr;
+  QLabel* job_detail_title_ = nullptr;
+  QProgressBar* job_progress_bar_ = nullptr;
+  QLabel* job_progress_text_ = nullptr;
+  QHash<QString, QLabel*> job_detail_fields_;
+  QTableWidget* job_files_table_ = nullptr;
+  QPushButton* job_cancel_button_ = nullptr;
+  QString selected_job_id_;
+  bool selected_job_remote_ = false;
+  bool selected_job_running_ = false;
   QListWidget* results_list_ = nullptr;
   QPlainTextEdit* results_preview_ = nullptr;
   QComboBox* results_type_filter_ = nullptr;

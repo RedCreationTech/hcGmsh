@@ -33,6 +33,9 @@ class GmshPanel : public QWidget {
   void apply_gmsh_settings(const QVariantMap& settings);
   void select_physical_group(int dim, int tag);
   void apply_entity_pick(int dim, int tag);
+  bool import_geometry(const QString& path, bool auto_mesh);
+  // 最近一次几何导入的失败原因；成功或尚未导入时为空。
+  QString last_import_error() const { return last_import_error_; }
 
  protected:
   bool eventFilter(QObject* obj, QEvent* event) override;
@@ -72,7 +75,6 @@ class GmshPanel : public QWidget {
 
  private:
   void ensure_gmsh();
-  bool import_geometry(const QString& path, bool auto_mesh);
   void update_entity_summary();
   void update_entity_list();
   void update_physical_group_list();
@@ -106,6 +108,7 @@ class GmshPanel : public QWidget {
       int dim_filter, const std::vector<DimTagToken>& tokens) const;
   void append_log(const QString& text);
   void set_mesh_generation_running(bool running);
+  QString last_import_error_;
 
   QLineEdit* geo_path_ = nullptr;
   QLabel* entity_summary_ = nullptr;

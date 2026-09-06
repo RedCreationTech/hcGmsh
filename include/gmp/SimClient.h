@@ -36,6 +36,21 @@ class SimClient : public QObject {
   // snapshot_dir 为导出任务快照目录（含 manifest.json 与全部输入文件）。
   void submit_snapshot(const QString& snapshot_dir, const QString& project_id);
   void fetch_job(const QString& job_id);
+  // 拉取任务摘要列表（GET /api/sim/jobs，可带 project_id/limit），
+  // 用于把历史会话提交的作业同步进作业列表。
+  void fetch_jobs(const QString& project_id, int limit = 50);
+  // ---- 作业监控（参照 LIMS 任务监控/制品库）----
+  // 实时执行状态：资源/进度/计时/收敛/health。
+  void fetch_execution_status(const QString& job_id);
+  // 作业工作区文件清单（任意状态可查；运行中为实时快照）。
+  void fetch_job_files(const QString& job_id);
+  // 求解日志尾（text/plain）。
+  void fetch_job_log(const QString& job_id, int tail = 200);
+  // 取消任务（202/404/409 透传）。
+  void cancel_job(const QString& job_id);
+  // 下载作业工作区单文件（运行中为实时快照，不做 sha256 校验）。
+  void download_job_file(const QString& job_id, const QString& file_path,
+                         const QString& dest_path);
 
   // ---- TASK-E2E-12：制品包 ----
   void fetch_bundles();
@@ -48,6 +63,16 @@ class SimClient : public QObject {
  signals:
   void submit_finished(bool ok, const QJsonObject& body, const QString& error);
   void job_fetched(bool ok, const QJsonObject& body, const QString& error);
+  void jobs_fetched(bool ok, const QJsonArray& jobs, const QString& error);
+  void execution_status_fetched(bool ok, const QJsonObject& body,
+                                const QString& error);
+  void job_files_fetched(bool ok, const QJsonObject& body,
+                         const QString& error);
+  void job_log_fetched(bool ok, const QString& text, const QString& error);
+  void job_cancel_finished(bool ok, const QJsonObject& body,
+                           const QString& error);
+  void job_file_downloaded(bool ok, const QString& dest_path,
+                           const QString& file_path, const QString& error);
   void bundles_fetched(bool ok, const QJsonArray& bundles,
                        const QString& error);
   void download_progress(qint64 received, qint64 total);

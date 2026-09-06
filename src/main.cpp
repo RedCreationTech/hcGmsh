@@ -14,6 +14,7 @@
 
 #include "gmp/MainWindow.h"
 #include "gmp/Env.h"
+#include "gmp/OperationLog.h"
 
 int main(int argc, char** argv) {
 #ifdef GMP_ENABLE_VTK_VIEWER
@@ -21,9 +22,16 @@ int main(int argc, char** argv) {
 #endif
   QApplication app(argc, argv);
 
+  // 操作日志必须先于一切业务初始化，保证启动期错误也留痕。
+  gmp::init_operation_log();
+  gmp::log_operation(
+      "app", QString("GMP-ISE starting (pid %1)").arg(app.applicationPid()));
+
   const QString env_path = gmp::load_dotenv();
   if (!env_path.isEmpty()) {
     qInfo() << "Loaded local environment configuration:" << env_path;
+    gmp::log_operation("app", "Loaded local environment configuration: " +
+                                  env_path);
   }
 
 #ifdef GMP_ENABLE_GMSH_GUI

@@ -1,5 +1,6 @@
 #include "gmp/GmshPanel.h"
 #include "gmp/L10n.h"
+#include "gmp/OperationLog.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -33,10 +34,12 @@
 #include <QEventLoop>
 #include <QModelIndex>
 #include <QObject>
+#include <QMessageBox>
 #include <QString>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <set>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -837,14 +840,35 @@ bool GmshPanel::import_geometry(const QString& path, bool auto_mesh) {
 #ifndef GMP_ENABLE_GMSH_GUI
   Q_UNUSED(path);
   Q_UNUSED(auto_mesh);
+  last_import_error_ = "Gmsh is not enabled in this build.";
   return false;
 #else
   if (path.isEmpty()) {
     return false;
   }
   ensure_gmsh();
+  last_import_error_.clear();
+  gmp::log_operation("geometry",
+                     "Geometry import started: " + path +
+                         (auto_mesh ? " (auto mesh on)" : ""));
+  // API 初始化默认 AbortOnError=2：.geo 脚本错误会抛异常，且异常路径
+  // 不释放 gmsh 的 busy 标志——之后所有 gmsh::open 都被 “I'm busy” 静默
+  // 吞掉，整个会话无法再导入任何几何。导入期间临时改为 0：错误只进
+  // logger，由本函数扫描后统一按失败处理，会话保持可用。
+  double abort_on_error = 2;
+  try {
+    gmsh::option::getNumber("General.AbortOnError", abort_on_error);
+  } catch (...) {
+  }
+  auto restore_abort_on_error = [abort_on_error]() {
+    try {
+      gmsh::option::setNumber("General.AbortOnError", abort_on_error);
+    } catch (...) {
+    }
+  };
   try {
     gmsh::option::setNumber("General.Terminal", 0);
+    gmsh::option::setNumber("General.AbortOnError", 0);
     gmsh::logger::start();
     gmsh::clear();
     gmsh::model::add("imported");
@@ -875,6 +899,54 @@ bool GmshPanel::import_geometry(const QString& path, bool auto_mesh) {
       }
     }
 
+    std::vector<std::string> log;
+    gmsh::logger::get(log);
+    gmsh::logger::stop();
+    QStringList error_lines;
+    for (const auto& line : log) {
+      append_log(QString::fromStdString(line));
+      if (line.rfind("Error", 0) == 0) {
+        error_lines << QString::fromStdString(line);
+      }
+    }
+
+    // 脚本错误（AbortOnError=0 下 gmsh 会继续执行并留下残缺模型）与
+    // “成功”但不产生实体的坏文件，统一按失败处理，不得进入已加载状态。
+    if (!error_lines.isEmpty()) {
+      throw std::runtime_error(error_lines.join("\n").toStdString());
+    }
+    std::vector<std::pair<int, int>> entities;
+    gmsh::model::getEntities(entities);
+    if (entities.empty()) {
+      throw std::runtime_error(
+          "Geometry file produced no entities (check the Gmsh script for "
+          "errors).");
+    }
+    // 退化实体检查：错误的旋转/布尔可能产生零体积的“体”（例如把 xy 平面
+    // 的矩形直接绕轴旋转）。它能通过实体计数，但永远无法体网格化，
+    // 会在生成阶段才以难懂的 overlapping facets 报错。这里提前拦截。
+    std::vector<std::pair<int, int>> volumes;
+    gmsh::model::getEntities(volumes, 3);
+    for (const auto& v : volumes) {
+      double mass = 0;
+      try {
+        gmsh::model::occ::getMass(3, v.second, mass);
+      } catch (...) {
+        continue;  // 无法计算时交给后续网格阶段判断
+      }
+      if (mass <= 1e-12) {
+        throw std::runtime_error(
+            "Degenerate solid with zero volume detected (check the geometry "
+            "script, e.g. a rectangle revolved while lying in the wrong "
+            "plane).");
+      }
+    }
+    gmp::log_operation(
+        "geometry",
+        QString("Geometry import succeeded: %1 (%2 entities)")
+            .arg(path)
+            .arg(entities.size()));
+
     geo_path_->setText(path);
     model_loaded_ = true;
     use_sample_box_->setChecked(false);
@@ -883,21 +955,35 @@ bool GmshPanel::import_geometry(const QString& path, bool auto_mesh) {
     update_physical_group_list();
     update_field_list();
     refresh_occ_entity_template_lists();
+    restore_abort_on_error();
 
-    std::vector<std::string> log;
-    gmsh::logger::get(log);
-    gmsh::logger::stop();
-    for (const auto& line : log) {
-      append_log(QString::fromStdString(line));
-    }
     append_log("Geometry loaded: " + path);
     if (auto_mesh) {
       on_generate();
     }
     return true;
   } catch (const std::exception& ex) {
-    append_log(QString("Gmsh error: %1").arg(ex.what()));
+    last_import_error_ = QString::fromUtf8(ex.what());
+    append_log("Gmsh error: " + last_import_error_);
+    gmp::log_operation("geometry", QString("Geometry import FAILED: %1 | %2")
+                                       .arg(path, last_import_error_));
   }
+  restore_abort_on_error();
+  // 导入失败：丢弃残缺模型并让面板如实反映空状态，
+  // 不得保留旧路径或旧实体摘要造成“加载成功”的假象。
+  try {
+    gmsh::clear();
+  } catch (...) {
+  }
+  model_loaded_ = false;
+  if (geo_path_) {
+    geo_path_->clear();
+  }
+  update_entity_summary();
+  update_entity_list();
+  update_physical_group_list();
+  update_field_list();
+  refresh_occ_entity_template_lists();
   return false;
 #endif
 }
@@ -1170,7 +1256,15 @@ void GmshPanel::on_open_geometry() {
   if (path.isEmpty()) {
     return;
   }
-  import_geometry(path, auto_mesh_on_import_ && auto_mesh_on_import_->isChecked());
+  if (!import_geometry(path, auto_mesh_on_import_ &&
+                                auto_mesh_on_import_->isChecked())) {
+    // 导入失败必须显性反馈：错误不能只留在“运行日志”页签里。
+    QMessageBox::warning(
+        this, "Open Geometry",
+        QString("Failed to load geometry:\n%1\n\nThe file was not loaded; "
+                "check the script for errors (details are in the log tab).")
+            .arg(last_import_error_.isEmpty() ? path : last_import_error_));
+  }
 #endif
 }
 
@@ -1388,6 +1482,18 @@ void GmshPanel::on_generate() {
     gmsh::model::mesh::generate(dim);
     const int boundary_dim = std::max(0, dim - 1);
 
+    // 空结果保护：生成不出任何节点时不得写文件或报告成功——空网格既无
+    // 意义，又会覆盖上一个有效输出并造成“已生成但舞台为空”的假象。
+    std::vector<std::size_t> node_tags;
+    std::vector<double> node_coords;
+    std::vector<double> node_params;
+    gmsh::model::mesh::getNodes(node_tags, node_coords, node_params);
+    if (node_tags.empty()) {
+      throw std::runtime_error(
+          "Mesh generation produced no nodes; refusing to write an empty "
+          "mesh file.");
+    }
+
     const QString out_path = output_path_->text();
     QDir().mkpath(QFileInfo(out_path).absolutePath());
     gmsh::write(out_path.toStdString());
@@ -1430,11 +1536,6 @@ void GmshPanel::on_generate() {
 
     append_log("Mesh written: " + out_path);
     emit mesh_written(out_path);
-
-    std::vector<std::size_t> node_tags;
-    std::vector<double> node_coords;
-    std::vector<double> node_params;
-    gmsh::model::mesh::getNodes(node_tags, node_coords, node_params);
 
     std::vector<int> element_types;
     std::vector<std::vector<std::size_t>> element_tags;

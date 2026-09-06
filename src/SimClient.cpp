@@ -10,6 +10,7 @@
 #include <QNetworkRequest>
 #include <QRegularExpression>
 #include <QUrl>
+#include <QUrlQuery>
 
 #include "gmp/MooseSnapshot.h"
 
@@ -219,6 +220,180 @@ void SimClient::fetch_job(const QString& job_id) {
     }
     reply->deleteLater();
   });
+}
+
+void SimClient::fetch_jobs(const QString& project_id, int limit) {
+  QUrlQuery query;
+  if (!project_id.trimmed().isEmpty()) {
+    query.addQueryItem("project_id", project_id.trimmed());
+  }
+  if (limit > 0) {
+    query.addQueryItem("limit", QString::number(limit));
+  }
+  QUrl url = make_url(base_url_, QStringLiteral("/api/sim/jobs"));
+  url.setQuery(query);
+  QNetworkRequest request(url);
+  QNetworkReply* reply = nam_.get(request);
+  connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    const QByteArray raw = reply->readAll();
+    const int status =
+        reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QJsonObject body = QJsonDocument::fromJson(raw).object();
+    if (reply->error() != QNetworkReply::NoError && status == 0) {
+      emit jobs_fetched(false, QJsonArray(),
+                        "网络错误（LIMS Facade 不可达？）: " +
+                            reply->errorString());
+    } else if (status >= 200 && status < 300) {
+      emit jobs_fetched(true, body.value("jobs").toArray(), QString());
+    } else {
+      emit jobs_fetched(false, QJsonArray(),
+                        describe_http_error(status, body));
+    }
+    reply->deleteLater();
+  });
+}
+
+void SimClient::fetch_execution_status(const QString& job_id) {
+  QNetworkRequest request(make_url(
+      base_url_, QStringLiteral("/api/sim/jobs/") + job_id +
+                     QStringLiteral("/execution-status")));
+  QNetworkReply* reply = nam_.get(request);
+  connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    const QByteArray raw = reply->readAll();
+    const int status =
+        reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QJsonObject body = QJsonDocument::fromJson(raw).object();
+    if (reply->error() != QNetworkReply::NoError && status == 0) {
+      emit execution_status_fetched(false, body,
+                                    "网络错误（LIMS Facade 不可达？）: " +
+                                        reply->errorString());
+    } else if (status >= 200 && status < 300) {
+      emit execution_status_fetched(true, body, QString());
+    } else {
+      emit execution_status_fetched(false, body,
+                                    describe_http_error(status, body));
+    }
+    reply->deleteLater();
+  });
+}
+
+void SimClient::fetch_job_files(const QString& job_id) {
+  QNetworkRequest request(make_url(base_url_, QStringLiteral("/api/sim/jobs/") +
+                                                  job_id +
+                                                  QStringLiteral("/files")));
+  QNetworkReply* reply = nam_.get(request);
+  connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    const QByteArray raw = reply->readAll();
+    const int status =
+        reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QJsonObject body = QJsonDocument::fromJson(raw).object();
+    if (reply->error() != QNetworkReply::NoError && status == 0) {
+      emit job_files_fetched(false, body,
+                             "网络错误（LIMS Facade 不可达？）: " +
+                                 reply->errorString());
+    } else if (status >= 200 && status < 300) {
+      emit job_files_fetched(true, body, QString());
+    } else {
+      emit job_files_fetched(false, body, describe_http_error(status, body));
+    }
+    reply->deleteLater();
+  });
+}
+
+void SimClient::fetch_job_log(const QString& job_id, int tail) {
+  QUrl url = make_url(base_url_,
+                      QStringLiteral("/api/sim/jobs/") + job_id +
+                          QStringLiteral("/log"));
+  if (tail > 0) {
+    QUrlQuery query;
+    query.addQueryItem("tail", QString::number(tail));
+    url.setQuery(query);
+  }
+  QNetworkRequest request(url);
+  QNetworkReply* reply = nam_.get(request);
+  connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    const QByteArray raw = reply->readAll();
+    const int status =
+        reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    if (reply->error() != QNetworkReply::NoError && status == 0) {
+      emit job_log_fetched(false, QString(),
+                           "网络错误（LIMS Facade 不可达？）: " +
+                               reply->errorString());
+    } else if (status >= 200 && status < 300) {
+      emit job_log_fetched(true, QString::fromUtf8(raw), QString());
+    } else {
+      const QJsonObject body = QJsonDocument::fromJson(raw).object();
+      emit job_log_fetched(false, QString(),
+                           describe_http_error(status, body));
+    }
+    reply->deleteLater();
+  });
+}
+
+void SimClient::cancel_job(const QString& job_id) {
+  QNetworkRequest request(make_url(base_url_, QStringLiteral("/api/sim/jobs/") +
+                                                  job_id +
+                                                  QStringLiteral("/cancel")));
+  QNetworkReply* reply = nam_.post(request, QByteArray());
+  connect(reply, &QNetworkReply::finished, this, [this, reply]() {
+    const QByteArray raw = reply->readAll();
+    const int status =
+        reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QJsonObject body = QJsonDocument::fromJson(raw).object();
+    if (reply->error() != QNetworkReply::NoError && status == 0) {
+      emit job_cancel_finished(false, body,
+                               "网络错误（LIMS Facade 不可达？）: " +
+                                   reply->errorString());
+    } else if (status >= 200 && status < 300) {
+      emit job_cancel_finished(true, body, QString());
+    } else {
+      emit job_cancel_finished(false, body,
+                               describe_http_error(status, body));
+    }
+    reply->deleteLater();
+  });
+}
+
+void SimClient::download_job_file(const QString& job_id,
+                                  const QString& file_path,
+                                  const QString& dest_path) {
+  QDir().mkpath(QFileInfo(dest_path).absolutePath());
+  auto* out = new QFile(dest_path);
+  if (!out->open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+    delete out;
+    emit job_file_downloaded(false, dest_path, file_path,
+                             "无法写入本地缓存: " + dest_path);
+    return;
+  }
+  QNetworkRequest request(make_url(base_url_, QStringLiteral("/api/sim/jobs/") +
+                                                  job_id +
+                                                  QStringLiteral("/files/") +
+                                                  file_path));
+  QNetworkReply* reply = nam_.get(request);
+  connect(reply, &QNetworkReply::readyRead, this,
+          [reply, out]() { out->write(reply->readAll()); });
+  connect(reply, &QNetworkReply::finished, this,
+          [this, reply, out, dest_path, file_path]() {
+            out->flush();
+            out->close();
+            delete out;
+            const int status =
+                reply->attribute(QNetworkRequest::HttpStatusCodeAttribute)
+                    .toInt();
+            if (reply->error() != QNetworkReply::NoError || status < 200 ||
+                status >= 300) {
+              QFile::remove(dest_path);
+              emit job_file_downloaded(
+                  false, dest_path, file_path,
+                  status == 0
+                      ? "网络错误（LIMS Facade 不可达？）: " +
+                            reply->errorString()
+                      : QString("下载失败 (HTTP %1)").arg(status));
+            } else {
+              emit job_file_downloaded(true, dest_path, file_path, QString());
+            }
+            reply->deleteLater();
+          });
 }
 
 void SimClient::fetch_bundles() {

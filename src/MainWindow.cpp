@@ -4,6 +4,8 @@
 #include <QFileDialog>
 #include <QFile>
 #include <QDir>
+#include <QDesktopServices>
+#include <QUrl>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
@@ -29,6 +31,9 @@
 #include <QMouseEvent>
 #include <QStackedWidget>
 #include <QFrame>
+#include <QFormLayout>
+#include <QCheckBox>
+#include <QProgressBar>
 #include <QGroupBox>
 #include <QTabBar>
 #include <QTabWidget>
@@ -43,6 +48,7 @@
 #include <QShortcut>
 #include <QApplication>
 #include <QGuiApplication>
+#include <QClipboard>
 #include <QFont>
 #include <QPainter>
 #include <QPainterPath>
@@ -51,6 +57,7 @@
 #include <QMetaType>
 #include <QSet>
 #include <QSettings>
+#include <QStandardPaths>
 #include <QSignalBlocker>
 #include <QLabel>
 #include <QTextStream>
@@ -69,6 +76,7 @@
 #include "gmp/FloatingPropertyForm.h"
 #include "gmp/MoosePanel.h"
 #include "gmp/OccBridge.h"
+#include "gmp/OperationLog.h"
 #include "gmp/PartFeaturePanel.h"
 #include "gmp/PropertyEditor.h"
 #include "gmp/ProjectSchema.h"
@@ -859,6 +867,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             select_model_item_from_results_navigation(
                 results_navigation_tree_->currentItem());
           });
+  // 结果导航树右键菜单：根节点工作窗入口/根级操作，子节点按类型分流。
+  results_navigation_tree_->setContextMenuPolicy(Qt::CustomContextMenu);
+  connect(results_navigation_tree_, &QWidget::customContextMenuRequested, this,
+          [this](const QPoint& pos) {
+            auto* item = results_navigation_tree_->itemAt(pos);
+            if (!item) {
+              return;
+            }
+            results_navigation_tree_->setCurrentItem(item);
+            QMenu menu(this);
+            build_results_navigation_menu(&menu, item);
+            if (!menu.isEmpty()) {
+              menu.exec(results_navigation_tree_->viewport()->mapToGlobal(pos));
+            }
+          });
   connect(results_navigation_tree_, &QTreeWidget::itemDoubleClicked, this,
           [this](QTreeWidgetItem* item, int) {
             if (!item || !item->parent()) {
@@ -1044,6 +1067,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       QSize(720, 740));
   results_work_window_ = make_floating_workspace(
       "Results Workspace", "resultsWorkspaceWindow", QSize(900, 720));
+  mesh_work_window_ = make_floating_workspace(
+      "Mesh Workspace", "meshWorkspaceWindow", QSize(960, 720));
 
   main_split->addWidget(tree_panel);
   main_split->addWidget(center_panel);
@@ -1082,29 +1107,158 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   job_actions->addWidget(job_retry_btn);
   job_actions->addWidget(job_log_btn);
   job_actions->addWidget(job_result_btn);
+  // 作业监控筛选与刷新（参照 LIMS 任务监控）。
+  auto* filter_label = new QLabel("  State:", job_manager_page);
+  job_state_filter_ = new QComboBox(job_manager_page);
+  job_state_filter_->setObjectName("jobStateFilter");
+  job_state_filter_->addItem("All", "all");
+  job_state_filter_->addItem("Queued", "Queued");
+  job_state_filter_->addItem("Running", "Running");
+  job_state_filter_->addItem("Completed", "Completed");
+  job_state_filter_->addItem("Failed", "Failed");
+  job_state_filter_->addItem("Canceled", "Canceled");
+  auto* job_refresh_btn = new QPushButton("Refresh", job_manager_page);
+  job_refresh_btn->setObjectName("jobMonitorRefresh");
+  job_auto_refresh_ = new QCheckBox("Auto (5s)", job_manager_page);
+  job_auto_refresh_->setObjectName("jobAutoRefresh");
+  job_auto_refresh_->setChecked(true);
+  job_actions->addWidget(filter_label);
+  job_actions->addWidget(job_state_filter_);
+  job_actions->addWidget(job_refresh_btn);
+  job_actions->addWidget(job_auto_refresh_);
   job_actions->addStretch(1);
   auto* job_actions_container = new QWidget(job_manager_page);
   job_actions_container->setLayout(job_actions);
   job_manager_layout->addWidget(job_actions_container);
 
-  auto* job_info_split = new QSplitter(Qt::Vertical, job_manager_page);
+  auto* job_info_split = new QSplitter(Qt::Horizontal, job_manager_page);
   job_info_split->setChildrenCollapsible(false);
   job_table_ = new QTableWidget(job_info_split);
-  job_table_->setColumnCount(7);
-  job_table_->setHorizontalHeaderLabels(
-      {"Name", "Status", "Start", "Duration", "Mesh", "Exec", "Result"});
+  job_table_->setColumnCount(9);
+  job_table_->setHorizontalHeaderLabels({"Name", "Status", "Case", "Progress",
+                                         "Start", "Duration", "Type", "Exec",
+                                         "Result"});
   job_table_->horizontalHeader()->setStretchLastSection(true);
   job_table_->verticalHeader()->setVisible(false);
   job_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
   job_table_->setSelectionMode(QAbstractItemView::SingleSelection);
   job_table_->setMinimumHeight(58);
-  job_detail_ = new QPlainTextEdit(job_info_split);
+  job_table_->setMinimumWidth(420);
+
+  // 右侧详情面板：占位页 / 内容页。
+  job_detail_stack_ = new QStackedWidget(job_info_split);
+  auto* detail_placeholder = new QLabel("Select a job to view details.",
+                                        job_detail_stack_);
+  detail_placeholder->setAlignment(Qt::AlignCenter);
+  job_detail_stack_->addWidget(detail_placeholder);
+
+  auto* detail_scroll = new QScrollArea(job_detail_stack_);
+  detail_scroll->setWidgetResizable(true);
+  detail_scroll->setFrameShape(QFrame::NoFrame);
+  auto* detail_content = new QWidget(detail_scroll);
+  auto* detail_layout = new QVBoxLayout(detail_content);
+  detail_layout->setContentsMargins(10, 10, 10, 10);
+  detail_layout->setSpacing(8);
+
+  job_detail_title_ = new QLabel("-", detail_content);
+  job_detail_title_->setObjectName("jobDetailTitle");
+  job_detail_title_->setTextInteractionFlags(Qt::TextSelectableByMouse);
+  QFont detail_title_font = job_detail_title_->font();
+  detail_title_font.setBold(true);
+  detail_title_font.setPointSize(detail_title_font.pointSize() + 1);
+  job_detail_title_->setFont(detail_title_font);
+  job_detail_title_->setWordWrap(true);
+  detail_layout->addWidget(job_detail_title_);
+
+  auto* detail_btns = new QHBoxLayout();
+  auto* detail_refresh_btn = new QPushButton("Refresh", detail_content);
+  job_cancel_button_ = new QPushButton("Cancel", detail_content);
+  job_cancel_button_->setObjectName("jobRemoteCancel");
+  auto* detail_taskmd_btn = new QPushButton("task.md", detail_content);
+  auto* detail_log_btn = new QPushButton("Log", detail_content);
+  auto* detail_result_btn = new QPushButton("Result", detail_content);
+  detail_btns->addWidget(detail_refresh_btn);
+  detail_btns->addWidget(job_cancel_button_);
+  detail_btns->addWidget(detail_taskmd_btn);
+  detail_btns->addWidget(detail_log_btn);
+  detail_btns->addWidget(detail_result_btn);
+  detail_btns->addStretch(1);
+  auto* detail_btns_row = new QWidget(detail_content);
+  detail_btns_row->setLayout(detail_btns);
+  detail_layout->addWidget(detail_btns_row);
+
+  job_progress_bar_ = new QProgressBar(detail_content);
+  job_progress_bar_->setObjectName("jobProgressBar");
+  job_progress_bar_->setRange(0, 100);
+  job_progress_bar_->setValue(0);
+  job_progress_text_ = new QLabel("-", detail_content);
+  job_progress_text_->setObjectName("jobProgressText");
+  job_progress_text_->setWordWrap(true);
+  detail_layout->addWidget(job_progress_bar_);
+  detail_layout->addWidget(job_progress_text_);
+
+  auto* detail_grid_box = new QGroupBox("Execution Details", detail_content);
+  auto* detail_grid = new QFormLayout(detail_grid_box);
+  detail_grid->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  const QStringList field_keys = {"input_file", "pid",      "parallel",
+                                  "cpu",        "memory",   "step",
+                                  "dt",         "physical", "converged",
+                                  "avg_step",   "elapsed",  "eta",
+                                  "heartbeat",  "health"};
+  const QStringList field_names = {"Input",      "PID",       "Parallel",
+                                   "CPU",        "Memory",    "Step",
+                                   "dt",         "Phy. Time", "Converged",
+                                   "Avg Step",   "Elapsed",   "ETA",
+                                   "Heartbeat",  "Health"};
+  for (int i = 0; i < field_keys.size(); ++i) {
+    auto* value = new QLabel("-", detail_grid_box);
+    value->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    value->setObjectName("jobDetail_" + field_keys.at(i));
+    detail_grid->addRow(field_names.at(i) + ":", value);
+    job_detail_fields_.insert(field_keys.at(i), value);
+  }
+  detail_layout->addWidget(detail_grid_box);
+
+  auto* files_box = new QGroupBox("Artifacts", detail_content);
+  auto* files_layout = new QVBoxLayout(files_box);
+  auto* files_btn_row = new QHBoxLayout();
+  auto* files_refresh_btn = new QPushButton("Refresh Files", files_box);
+  auto* files_download_btn = new QPushButton("Download Selected", files_box);
+  files_download_btn->setObjectName("jobFileDownload");
+  files_btn_row->addWidget(files_refresh_btn);
+  files_btn_row->addWidget(files_download_btn);
+  files_btn_row->addStretch(1);
+  files_layout->addLayout(files_btn_row);
+  job_files_table_ = new QTableWidget(files_box);
+  job_files_table_->setObjectName("jobFilesTable");
+  job_files_table_->setColumnCount(5);
+  job_files_table_->setHorizontalHeaderLabels(
+      {"Kind", "Name", "Size", "Modified", "Snapshot"});
+  job_files_table_->horizontalHeader()->setStretchLastSection(true);
+  job_files_table_->verticalHeader()->setVisible(false);
+  job_files_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+  job_files_table_->setSelectionMode(QAbstractItemView::SingleSelection);
+  job_files_table_->setMinimumHeight(120);
+  files_layout->addWidget(job_files_table_);
+  detail_layout->addWidget(files_box);
+
+  auto* local_box = new QGroupBox("Local Job", detail_content);
+  auto* local_layout = new QVBoxLayout(local_box);
+  job_detail_ = new QPlainTextEdit(local_box);
   job_detail_->setReadOnly(true);
-  job_detail_->setPlaceholderText("Select a job to view details.");
+  job_detail_->setPlaceholderText("Local job details.");
+  job_detail_->setMaximumHeight(160);
+  local_layout->addWidget(job_detail_);
+  detail_layout->addWidget(local_box);
+  detail_layout->addStretch(1);
+  detail_scroll->setWidget(detail_content);
+  job_detail_stack_->addWidget(detail_scroll);
+  job_detail_stack_->setCurrentIndex(0);
+
   job_info_split->addWidget(job_table_);
-  job_info_split->addWidget(job_detail_);
-  job_info_split->setStretchFactor(0, 1);
-  job_info_split->setStretchFactor(1, 1);
+  job_info_split->addWidget(job_detail_stack_);
+  job_info_split->setStretchFactor(0, 3);
+  job_info_split->setStretchFactor(1, 2);
   job_manager_layout->addWidget(job_info_split, 1);
 
   job_tabs->addTab(job_manager_page, "Jobs");
@@ -1380,7 +1534,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                      "module to visualize.")
                  .arg(mesh_err);
     }
-    console_->appendPlainText(msg);
+    gmp::log_operation("part", msg);
     statusBar()->showMessage(msg, 5000);
   };
 
@@ -2054,8 +2208,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* results_actions = new QHBoxLayout();
   auto* results_open_root = new QPushButton("Open Results Root", results_page);
   auto* results_refresh = new QPushButton("Refresh List", results_page);
+  auto* results_import = new QPushButton("Import Result File...", results_page);
+  results_import->setObjectName("resultsImportFile");
+  results_import->setToolTip(
+      "Import an external result file (.e/.exo/.msh/.csv/.txt/.log) into "
+      "the results list.");
   auto* results_open_view = new QPushButton("Open in Viewer", results_page);
   auto* results_open_text = new QPushButton("Open as Text", results_page);
+  auto* results_new_compare = new QPushButton("New Comparison Window", results_page);
+  results_new_compare->setObjectName("resultsNewCompareButton");
+  results_new_compare->setToolTip(
+      "Open an additional results window for side-by-side comparison.");
   auto* results_filter_label = new QLabel("Type", results_page);
   results_type_filter_ = new QComboBox(results_page);
   results_type_filter_->addItem("All", "all");
@@ -2064,8 +2227,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   results_type_filter_->addItem("Text (.txt/.csv/.log/.yaml/.yml)", "txt");
   results_actions->addWidget(results_open_root);
   results_actions->addWidget(results_refresh);
+  results_actions->addWidget(results_import);
+  connect(results_import, &QPushButton::clicked, this, [this]() {
+    const QString path = QFileDialog::getOpenFileName(
+        this, "Import Result File", QDir::homePath(),
+        "Result Files (*.e *.exo *.exodus *.msh *.csv *.txt *.log *.yaml "
+        "*.yml);;All Files (*)");
+    if (!path.isEmpty()) {
+      import_result_file(path);
+    }
+  });
   results_actions->addWidget(results_open_view);
   results_actions->addWidget(results_open_text);
+  results_actions->addWidget(results_new_compare);
+  connect(results_new_compare, &QPushButton::clicked, this,
+          [this]() { create_results_compare_window(); });
   results_actions->addStretch(1);
   results_actions->addWidget(results_filter_label);
   results_actions->addWidget(results_type_filter_);
@@ -2267,16 +2443,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   results_work_window_->setWidget(results_work_tabs_);
   job_work_window_->setWidget(job_container);
   visualization_work_window_->setWidget(visualization_page);
+  mesh_work_window_->setWidget(mesh_page);
   job_work_window_->resize(900, 720);
   visualization_work_window_->resize(720, 740);
   results_work_window_->resize(900, 720);
+  mesh_work_window_->resize(960, 720);
   plot_open_btn->setText("Focus Viewport");
   table_open_btn->setText("Focus Viewport");
 
-  auto show_workspace = [](QDockWidget* workspace) {
+  auto show_workspace = [this](QDockWidget* workspace) {
     if (!workspace) {
       return;
     }
+    // 每次激活前复用公共越界恢复，第二屏移除后窗口回到可视区。
+    clamp_window_to_screen(workspace);
     workspace->show();
     workspace->raise();
     workspace->activateWindow();
@@ -2372,7 +2552,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             if (target >= 0) {
               module_tabs_->setCurrentIndex(target);
             }
-            show_workspace(module_work_window_);
+            show_workspace(mesh_work_window_);
           });
   connect(stage_left_toolbar_, &StageLeftToolbar::mesh_generate_requested,
           this, [this]() {
@@ -2729,10 +2909,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   apply_toolbar_actions = [this,
                           command_layout,
                           command_host,
+                          mesh_tab,
+                          job_tab,
+                          viz_tab,
+                          results_tab,
                           toolbar_actions = std::move(module_toolbar_actions)](int index) {
     const QString title =
         (index >= 0) ? module_tabs_->tabText(index) : QString("Modules");
-    if (module_work_window_) {
+    // Mesh/Job/Visualization/Results 已有独立工作窗，不再回写通用窗口标题。
+    if (module_work_window_ && index != mesh_tab && index != job_tab &&
+        index != viz_tab && index != results_tab) {
       module_work_window_->setWindowTitle(title + " Workspace");
     }
 
@@ -2810,6 +2996,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "Results, Plot and Table use an independent window; the central "
       "viewport remains visible.",
       results_work_window_);
+  auto* mesh_launcher = make_workspace_launcher(
+      "Mesh Workspace",
+      "Mesh generation runs in an independent non-modal window. Closing the "
+      "window does not interrupt an active generation task.",
+      mesh_work_window_);
   property_stack_->addWidget(property_editor_);
   property_stack_->addWidget(part_page);
   property_stack_->addWidget(material_page);
@@ -2819,7 +3010,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   property_stack_->addWidget(interaction_page);
   property_stack_->addWidget(load_page);
   property_stack_->addWidget(sketch_panel_);
-  property_stack_->addWidget(mesh_page);
+  property_stack_->addWidget(mesh_launcher);
   property_stack_->addWidget(job_launcher);
   property_stack_->addWidget(visualization_launcher);
   property_stack_->addWidget(results_launcher);
@@ -2837,6 +3028,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   console_->setMinimumHeight(46);
   console_->setPlaceholderText("Job/Message Console");
   vertical_split->addWidget(console_);
+  // 操作日志同步进控制台：文件持久化 + UI 可见，一处埋点两处留痕。
+  gmp::set_operation_log_console_hook([this](const QString& line) {
+    if (console_) {
+      console_->appendPlainText(line);
+    }
+  });
 
   vertical_split->setStretchFactor(0, 4);
   vertical_split->setStretchFactor(1, 1);
@@ -2976,12 +3173,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             model_tree_->scrollToItem(item);
           });
   connect(module_tabs_, &QTabBar::tabBarClicked, this,
-          [this, job_tab, viz_tab, results_tab, show_workspace](int index) {
+          [this, mesh_tab, job_tab, viz_tab, results_tab, show_workspace](int index) {
             if (!layout_ready_) {
               return;
             }
-            if (index == job_tab) {
+            if (index == mesh_tab) {
+              show_workspace(mesh_work_window_);
+            } else if (index == job_tab) {
               show_workspace(job_work_window_);
+              // 打开 Job 工作窗时自动同步 LIMS 任务列表；网络失败只记日志。
+              // 巡览模式下跳过，避免依赖外部服务或污染树节点断言。
+              if (moose_panel_ &&
+                  !qEnvironmentVariableIsSet("GMP_SCREENSHOT_DIR")) {
+                moose_panel_->on_refresh_job();
+              }
             } else if (index == viz_tab) {
               show_workspace(visualization_work_window_);
             } else if (index == results_tab) {
@@ -3097,6 +3302,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       moose_panel_->set_external_busy(true);
     }
     update_command_availability();
+    const QVariantMap mesh_settings =
+        gmsh_panel_ ? gmsh_panel_->gmsh_settings() : QVariantMap();
+    gmp::log_operation(
+        "mesh",
+        QString("Mesh generation started (output=%1, dim=%2, size=%3, "
+                "geometry=%4)")
+            .arg(mesh_settings.value("output_path").toString())
+            .arg(mesh_settings.value("mesh_dim").toInt())
+            .arg(mesh_settings.value("mesh_size").toDouble())
+            .arg(mesh_settings.value("geometry_path").toString()));
     statusBar()->showMessage("Generating mesh...", 0);
   });
   connect(mesh_page, &GmshPanel::mesh_generation_finished, this,
@@ -3106,6 +3321,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
               moose_panel_->set_external_busy(false);
             }
             update_command_availability();
+            gmp::log_operation(
+                "mesh",
+                QString("Mesh generation %1%2")
+                    .arg(success ? "succeeded" : "FAILED")
+                    .arg(message.isEmpty() ? QString() : ": " + message));
             statusBar()->showMessage(
                 message.isEmpty()
                     ? (success ? QString("Mesh generated.")
@@ -3115,6 +3335,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
           });
   connect(mesh_page, &GmshPanel::mesh_written, this,
           [this](const QString& path) {
+            gmp::log_operation("mesh", "Mesh written and sent to stage: " +
+                                           path);
             upsert_mesh_item(path);
             statusBar()->showMessage("Mesh generated.", 2000);
           });
@@ -3122,6 +3344,138 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
           &VtkViewer::set_exodus_file);
   connect(job_page, &MoosePanel::exodus_history, viewer_,
           &VtkViewer::set_exodus_history);
+  // 远程（LIMS）作业登记：提交成功与状态刷新统一落到 Jobs 树和作业列表，
+  // 与本地作业同一视图；远程作业不参与本地运行态/停止命令。
+  connect(job_page, &MoosePanel::remote_job_event, this,
+          [this](const QVariantMap& info) {
+            auto* root = find_root_item("Jobs");
+            const QString job_id = info.value("job_id").toString();
+            if (!root || job_id.isEmpty()) {
+              return;
+            }
+            QTreeWidgetItem* item = nullptr;
+            for (int i = 0; i < root->childCount(); ++i) {
+              if (root->child(i) && root->child(i)->text(0) == job_id) {
+                item = root->child(i);
+                break;
+              }
+            }
+            QVariantMap params =
+                item ? item->data(0, PropertyEditor::kParamsRole).toMap()
+                     : QVariantMap();
+            const QString raw_state = info.value("state").toString();
+            // LIMS/C06 状态词汇映射到列表状态列；树状态图标按关键词匹配。
+            static const QHash<QString, QString> kStateMap = {
+                {"queued", "Queued"},   {"preparing", "Running"},
+                {"running", "Running"}, {"succeeded", "Completed"},
+                {"success", "Completed"}, {"failed", "Failed"},
+                {"canceled", "Canceled"}};
+            const QString mapped =
+                kStateMap.value(raw_state.toLower(), QString());
+            params.insert("status", mapped.isEmpty()
+                                        ? (raw_state.isEmpty() ? QString("Queued")
+                                                               : raw_state)
+                                        : mapped);
+            params.insert("state", raw_state);
+            params.insert("job_id", job_id);
+            params.insert("remote", true);
+            const QString server = info.value("server").toString();
+            if (!server.isEmpty()) {
+              params.insert("exec", "remote: " + server);
+            }
+            const QString case_name = info.value("case_name").toString();
+            if (!case_name.isEmpty()) {
+              params.insert("case", case_name);
+            }
+            const QString snapshot = info.value("snapshot").toString();
+            if (!snapshot.isEmpty()) {
+              params.insert("mesh", snapshot);
+            }
+            const QString created = info.value("created_at").toString();
+            if (params.value("start_time").toString().isEmpty()) {
+              params.insert("start_time", created.isEmpty()
+                                              ? info.value("submit_time").toString()
+                                              : created);
+            }
+            QString progress = info.value("progress").toString();
+            if (progress.isEmpty() && info.contains("percent")) {
+              progress = QString("percent=%1")
+                             .arg(info.value("percent").toDouble(), 0, 'f', 1);
+            }
+            if (!progress.isEmpty()) {
+              params.insert("progress", progress);
+            }
+            // 耗时：优先起止时间差；运行中的作业用开始时间到当前。
+            const QDateTime started =
+                QDateTime::fromString(info.value("started_at").toString(),
+                                      Qt::ISODate);
+            const QDateTime finished =
+                QDateTime::fromString(info.value("finished_at").toString(),
+                                      Qt::ISODate);
+            if (started.isValid()) {
+              const QDateTime end =
+                  finished.isValid() ? finished : QDateTime::currentDateTime();
+              params.insert("duration",
+                            QString::number(started.secsTo(end)) + "s");
+            }
+            if (item) {
+              item->setData(0, PropertyEditor::kParamsRole, params);
+            } else {
+              add_child_item(root, job_id, "Jobs", params);
+            }
+            refresh_job_table();
+            refresh_tree_statuses();
+            refresh_results_navigation();
+          });
+  // ---- 作业监控信号 ----
+  connect(job_page, &MoosePanel::remote_execution_status, this,
+          [this](const QVariantMap& status) {
+            if (status.value("job_id").toString() == selected_job_id_) {
+              update_remote_job_detail(status);
+            }
+          });
+  connect(job_page, &MoosePanel::remote_files, this,
+          [this](const QVariantMap& body) {
+            if (body.value("job_id").toString() == selected_job_id_) {
+              update_remote_job_files(body);
+            }
+          });
+  connect(job_page, &MoosePanel::remote_log, this,
+          [this](const QString& job_id, const QString& text) {
+            QDialog dialog(this);
+            dialog.setWindowTitle("Remote Job Log — " + job_id);
+            dialog.resize(820, 520);
+            auto* layout = new QVBoxLayout(&dialog);
+            auto* log_view = new QPlainTextEdit(&dialog);
+            log_view->setReadOnly(true);
+            log_view->setPlainText(text);
+            layout->addWidget(log_view);
+            dialog.exec();
+          });
+  connect(job_page, &MoosePanel::remote_cancel_done, this,
+          [this](const QVariantMap& result) {
+            statusBar()->showMessage(
+                "Remote cancel accepted: " +
+                    result.value("job_id").toString(),
+                3000);
+          });
+  connect(job_page, &MoosePanel::remote_file_downloaded, this,
+          [this](const QString& job_id, const QString& file_path,
+                 const QString& local_path) {
+            statusBar()->showMessage("Downloaded: " + local_path, 4000);
+            const QString ext = QFileInfo(local_path).suffix().toLower();
+            if (ext == "e" || ext == "exo" || ext == "exodus") {
+              // Exodus 制品：注册 Results 节点（追溯 job_id）并询问是否载入。
+              upsert_result_item(local_path, job_id);
+              const auto answer = QMessageBox::question(
+                  this, "Load Result",
+                  QString("Load downloaded result into the viewport?\n%1")
+                      .arg(local_path));
+              if (answer == QMessageBox::Yes && viewer_) {
+                viewer_->set_exodus_file(local_path);
+              }
+            }
+          });
   connect(job_page, &MoosePanel::job_started, this,
           [this](const QVariantMap& info) {
             active_ui_context_.job_running = true;
@@ -3140,6 +3494,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                     ? QString("job_%1").arg(root->childCount() + 1)
                     : base;
             active_job_item_ = add_child_item(root, name, "Jobs", info);
+            gmp::log_operation("job", QString("Job started: %1 (input=%2)")
+                                          .arg(name, input_path));
             statusBar()->showMessage("Job running...", 2000);
             QVariantMap params = info;
             params.insert("status", "Running");
@@ -3179,16 +3535,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
               }
             }
             active_job_item_->setData(0, PropertyEditor::kParamsRole, params);
+            const QString job_name = active_job_item_->text(0);
             const QString exodus = info.value("exodus").toString();
             if (!exodus.isEmpty()) {
-              upsert_result_item(exodus, active_job_item_->text(0));
+              upsert_result_item(exodus, job_name);
             }
             if (active_job_row_ >= 0) {
-              update_job_row(active_job_row_, active_job_item_->text(0), params);
+              update_job_row(active_job_row_, job_name, params);
               update_job_detail(active_job_row_);
             }
             active_job_item_ = nullptr;
             active_job_row_ = -1;
+            gmp::log_operation(
+                "job",
+                QString("Job finished: %1 (status=%2, duration=%3, exodus=%4)")
+                    .arg(job_name, status,
+                         params.value("duration").toString(),
+                         exodus.isEmpty() ? QString("(none)") : exodus));
             statusBar()->showMessage("Job finished.", 2000);
           });
   connect(job_page, &MoosePanel::exodus_ready, this,
@@ -3243,7 +3606,124 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     dialog.exec();
   });
   connect(job_table_, &QTableWidget::currentCellChanged, this,
-          [this](int row, int, int, int) { update_job_detail(row); });
+          [this](int row, int, int, int) { apply_job_selection(row); });
+  // ---- 作业监控按钮与筛选 ----
+  connect(job_refresh_btn, &QPushButton::clicked, this, [this]() {
+    if (moose_panel_) {
+      moose_panel_->on_refresh_job();
+    }
+  });
+  connect(job_state_filter_,
+          QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          [this](int) { refresh_job_table(); });
+  connect(detail_refresh_btn, &QPushButton::clicked, this, [this]() {
+    if (!selected_job_remote_ || selected_job_id_.isEmpty() ||
+        !moose_panel_) {
+      return;
+    }
+    moose_panel_->refresh_job_execution(selected_job_id_);
+    moose_panel_->refresh_job_files(selected_job_id_);
+  });
+  connect(job_cancel_button_, &QPushButton::clicked, this, [this]() {
+    if (!selected_job_remote_ || selected_job_id_.isEmpty() ||
+        !moose_panel_) {
+      return;
+    }
+    // 危险操作二次确认。
+    const auto answer = QMessageBox::question(
+        this, "Cancel Remote Job",
+        QString("Cancel remote job %1 on the LIMS server?")
+            .arg(selected_job_id_));
+    if (answer == QMessageBox::Yes) {
+      moose_panel_->request_cancel_job(selected_job_id_);
+    }
+  });
+  connect(detail_taskmd_btn, &QPushButton::clicked, this, [this]() {
+    if (!selected_job_remote_ || selected_job_id_.isEmpty() ||
+        !moose_panel_) {
+      return;
+    }
+    const QString dest =
+        QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) +
+        "/gmp_remote/" + selected_job_id_ + "/task.md";
+    moose_panel_->download_remote_file(selected_job_id_, "task.md", dest);
+    statusBar()->showMessage("Downloading task.md ...", 2000);
+  });
+  connect(detail_log_btn, &QPushButton::clicked, this, [this]() {
+    if (!moose_panel_) {
+      return;
+    }
+    if (selected_job_remote_ && !selected_job_id_.isEmpty()) {
+      moose_panel_->request_job_log(selected_job_id_);
+      return;
+    }
+    QDialog dialog(this);
+    dialog.setWindowTitle("Job Log");
+    dialog.resize(800, 500);
+    auto* layout = new QVBoxLayout(&dialog);
+    auto* log_view = new QPlainTextEdit(&dialog);
+    log_view->setReadOnly(true);
+    log_view->setPlainText(moose_panel_->log_text());
+    layout->addWidget(log_view);
+    dialog.exec();
+  });
+  connect(detail_result_btn, &QPushButton::clicked, this, [this]() {
+    if (!job_table_ || !viewer_ || job_table_->currentRow() < 0) {
+      return;
+    }
+    auto* item = job_table_->item(job_table_->currentRow(), 0);
+    if (!item) {
+      return;
+    }
+    const QString result =
+        item->data(Qt::UserRole).toMap().value("exodus").toString();
+    if (!result.isEmpty()) {
+      viewer_->set_exodus_file(result);
+      statusBar()->showMessage("Result loaded.", 2000);
+    }
+  });
+  connect(files_refresh_btn, &QPushButton::clicked, this, [this]() {
+    if (selected_job_remote_ && !selected_job_id_.isEmpty() &&
+        moose_panel_) {
+      moose_panel_->refresh_job_files(selected_job_id_);
+    }
+  });
+  connect(files_download_btn, &QPushButton::clicked, this, [this]() {
+    if (!selected_job_remote_ || selected_job_id_.isEmpty() ||
+        !moose_panel_ || !job_files_table_ ||
+        job_files_table_->currentRow() < 0) {
+      return;
+    }
+    auto* item = job_files_table_->item(job_files_table_->currentRow(), 1);
+    if (!item) {
+      return;
+    }
+    const QString file_path = item->data(Qt::UserRole).toString();
+    if (file_path.isEmpty()) {
+      return;
+    }
+    const QString dest =
+        QStandardPaths::writableLocation(QStandardPaths::DownloadLocation) +
+        "/gmp_remote/" + selected_job_id_ + "/" + file_path;
+    moose_panel_->download_remote_file(selected_job_id_, file_path, dest);
+    statusBar()->showMessage("Downloading " + file_path + " ...", 2000);
+  });
+  // 自动刷新：仅当 Job 工作窗可见且选中远程运行中作业时触发；
+  // 巡览模式不启用，避免依赖外部服务。
+  job_auto_refresh_timer_ = new QTimer(this);
+  job_auto_refresh_timer_->setInterval(5000);
+  connect(job_auto_refresh_timer_, &QTimer::timeout, this, [this]() {
+    if (!job_auto_refresh_ || !job_auto_refresh_->isChecked() ||
+        !selected_job_remote_ || !selected_job_running_ ||
+        selected_job_id_.isEmpty() || !moose_panel_ ||
+        !job_work_window_ || !job_work_window_->isVisible() ||
+        qEnvironmentVariableIsSet("GMP_SCREENSHOT_DIR")) {
+      return;
+    }
+    moose_panel_->refresh_job_execution(selected_job_id_);
+    moose_panel_->on_refresh_job();
+  });
+  job_auto_refresh_timer_->start();
 
   connect(model_tree_, &QTreeWidget::itemSelectionChanged, this,
           [this, sketch_tab, part_tab, property_tab, material_tab, section_tab,
@@ -3486,6 +3966,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                              "ui/layout/v2/visualization_workspace_geometry");
   restore_workspace_geometry(results_work_window_,
                              "ui/layout/v2/results_workspace_geometry");
+  restore_workspace_geometry(mesh_work_window_,
+                             "ui/layout/v1/mesh_workspace_geometry");
   const int tool_layout_version =
       layout_settings.value("ui/layout/v3/version", 0).toInt();
   const QByteArray tool_layout_state =
@@ -3518,6 +4000,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "ui/layout/v2/visualization_workspace_visible");
   restore_workspace_visibility(results_work_window_,
                                "ui/layout/v2/results_workspace_visible");
+  restore_workspace_visibility(mesh_work_window_,
+                               "ui/layout/v1/mesh_workspace_visible");
+  // 启动恢复后统一做一次越界夹取，覆盖第二屏移除或 DPI 变化场景。
+  for (QDockWidget* workspace : {mesh_work_window_, job_work_window_,
+                                 visualization_work_window_,
+                                 results_work_window_}) {
+    clamp_window_to_screen(workspace);
+  }
   project_status_label_ = new QLabel("Project: Untitled");
   dirty_status_label_ = new QLabel("Saved");
   active_context_status_label_ = new QLabel("Context: Part / Unselected");
@@ -3719,6 +4209,13 @@ void MainWindow::closeEvent(QCloseEvent* event) {
   save_workspace(visualization_work_window_,
                  "ui/layout/v2/visualization_workspace");
   save_workspace(results_work_window_, "ui/layout/v2/results_workspace");
+  save_workspace(mesh_work_window_, "ui/layout/v1/mesh_workspace");
+  for (QDockWidget* compare_window : results_compare_windows_) {
+    if (compare_window) {
+      settings.setValue(compare_window->property("gmpGeometryKey").toString(),
+                        compare_window->saveGeometry());
+    }
+  }
   settings.sync();
   QMainWindow::closeEvent(event);
 }
@@ -3733,6 +4230,7 @@ void MainWindow::build_menu() {
   recent_menu_ = file_menu->addMenu("Recent Projects");
   action_export_bundle_ = file_menu->addAction("Export Debug Bundle...");
   action_screenshot_ = file_menu->addAction("Save Screenshot...");
+  auto* action_open_logs = file_menu->addAction("Open Operation Log Folder");
   action_new_->setShortcut(QKeySequence::New);
   action_open_->setShortcut(QKeySequence::Open);
   action_save_->setShortcut(QKeySequence::Save);
@@ -3841,7 +4339,7 @@ void MainWindow::build_menu() {
     refresh_job_table();
     property_editor_->set_item(nullptr);
     refresh_module_pages();
-    console_->appendPlainText("New project created.");
+    gmp::log_operation("project", "New project created.");
     statusBar()->showMessage("New project created.", 2000);
     set_project_dirty(false);
     update_project_status();
@@ -3870,7 +4368,7 @@ void MainWindow::build_menu() {
       update_project_status();
     }
     if (save_project(project_path_)) {
-      console_->appendPlainText("Project saved: " + project_path_);
+      gmp::log_operation("project", "Project saved: " + project_path_);
       statusBar()->showMessage("Project saved.", 2000);
       add_recent_project(project_path_);
       set_project_dirty(false);
@@ -3885,7 +4383,7 @@ void MainWindow::build_menu() {
     }
     project_path_ = path;
     if (save_project(project_path_)) {
-      console_->appendPlainText("Project saved: " + project_path_);
+      gmp::log_operation("project", "Project saved: " + project_path_);
       statusBar()->showMessage("Project saved.", 2000);
       add_recent_project(project_path_);
       set_project_dirty(false);
@@ -3896,6 +4394,16 @@ void MainWindow::build_menu() {
     connect(action_export_bundle_, &QAction::triggered, this,
             &MainWindow::export_debug_bundle);
   }
+  connect(action_open_logs, &QAction::triggered, this, [this]() {
+    const QString log_path = gmp::operation_log_path();
+    const QString dir = log_path.isEmpty()
+                            ? QString()
+                            : QFileInfo(log_path).absolutePath();
+    if (dir.isEmpty() ||
+        !QDesktopServices::openUrl(QUrl::fromLocalFile(dir))) {
+      statusBar()->showMessage("Operation log is unavailable.", 3000);
+    }
+  });
   connect(action_screenshot_, &QAction::triggered, this, [this]() {
     const QString path = QFileDialog::getSaveFileName(
         this, "Save Screenshot", QDir::homePath(),
@@ -3904,7 +4412,7 @@ void MainWindow::build_menu() {
       return;
     }
     if (viewer_ && viewer_->save_screenshot(path)) {
-      console_->appendPlainText("Screenshot saved: " + path);
+      gmp::log_operation("ui", "Screenshot saved: " + path);
       statusBar()->showMessage("Screenshot saved.", 2000);
     } else {
       statusBar()->showMessage("Failed to save screenshot.", 2000);
@@ -4496,7 +5004,7 @@ void MainWindow::build_model_tree() {
                               kind == "Jobs"
                                   ? job_work_window_
                                   : (kind == "Results" ? results_work_window_
-                                                       : module_work_window_);
+                                                       : mesh_work_window_);
                           if (workspace) {
                             workspace->show();
                             workspace->raise();
@@ -4539,9 +5047,9 @@ void MainWindow::build_model_tree() {
                       [this, item, kind]() {
                 model_tree_->setCurrentItem(item);
                 if (kind == "Mesh") {
-                  if (module_work_window_) {
-                    module_work_window_->show();
-                    module_work_window_->raise();
+                  if (mesh_work_window_) {
+                    mesh_work_window_->show();
+                    mesh_work_window_->raise();
                   }
                 } else if (kind == "Jobs") {
                   if (job_work_window_) {
@@ -4816,8 +5324,14 @@ void MainWindow::apply_module_workspace_profile(bool sketch_editor) {
   }
 
   // 独立 profile 仍需适应当前屏幕，防止切换显示器后恢复到不可见区域。
-  QScreen* screen = QGuiApplication::screenAt(
-      module_work_window_->frameGeometry().center());
+  clamp_window_to_screen(module_work_window_);
+}
+
+void MainWindow::clamp_window_to_screen(QWidget* window) {
+  if (!window) {
+    return;
+  }
+  QScreen* screen = QGuiApplication::screenAt(window->frameGeometry().center());
   if (!screen) {
     screen = QGuiApplication::primaryScreen();
   }
@@ -4825,17 +5339,18 @@ void MainWindow::apply_module_workspace_profile(bool sketch_editor) {
     return;
   }
   const QRect available = screen->availableGeometry().adjusted(16, 16, -16, -16);
-  QSize fitted = module_work_window_->size();
+  const QSize minimum = window->minimumSize().expandedTo(QSize(320, 240));
+  QSize fitted = window->size();
   fitted.setWidth(qBound(minimum.width(), fitted.width(), available.width()));
   fitted.setHeight(qBound(minimum.height(), fitted.height(), available.height()));
-  module_work_window_->resize(fitted);
+  window->resize(fitted);
 
-  QPoint position = module_work_window_->frameGeometry().topLeft();
+  QPoint position = window->frameGeometry().topLeft();
   position.setX(qBound(available.left(), position.x(),
                        available.right() - fitted.width() + 1));
   position.setY(qBound(available.top(), position.y(),
                        available.bottom() - fitted.height() + 1));
-  module_work_window_->move(position);
+  window->move(position);
 }
 
 void MainWindow::remember_active_object_for_module(int module_index) {
@@ -4924,10 +5439,18 @@ void MainWindow::sync_active_ui_context() {
   if (active_sketch_doc_ && module_work_window_) {
     module_work_window_->setWindowTitle("Sketch Editor" + suffix);
   } else if (module_work_window_ && module_work_window_->isVisible() &&
+             active_ui_context_.module_index != 9 &&
              active_ui_context_.module_index != 10 &&
              active_ui_context_.module_index != 11 &&
              active_ui_context_.module_index != 12) {
     module_work_window_->setWindowTitle(module_name + " Workspace" + suffix);
+  }
+  if (mesh_work_window_ && active_ui_context_.module_index == 9) {
+    mesh_work_window_->setWindowTitle("Mesh Workspace" + suffix);
+  }
+  if (visualization_work_window_ && active_ui_context_.module_index == 11) {
+    visualization_work_window_->setWindowTitle("Visualization Workspace" +
+                                               suffix);
   }
   if (job_work_window_ && active_ui_context_.module_index == 10) {
     job_work_window_->setWindowTitle("Job Workspace" + suffix);
@@ -5399,15 +5922,28 @@ void MainWindow::refresh_results_navigation() {
 
 void MainWindow::select_model_item_from_results_navigation(
     QTreeWidgetItem* item) {
-  if (!item || !item->parent() || !model_tree_) {
+  auto* target = model_item_for_navigation(item);
+  if (!target || !model_tree_) {
     return;
   }
-  const QString kind = item->data(0, kNavigationKindRole).toString();
-  const QString name = item->data(0, kNavigationNameRole).toString();
-  const QString path = item->data(0, kNavigationPathRole).toString();
+  model_tree_->setCurrentItem(target);
+  model_tree_->scrollToItem(target);
+  if (target->parent()) {
+    target->parent()->setExpanded(true);
+  }
+}
+
+QTreeWidgetItem* MainWindow::model_item_for_navigation(
+    QTreeWidgetItem* nav_item) const {
+  if (!nav_item || !nav_item->parent()) {
+    return nullptr;
+  }
+  const QString kind = nav_item->data(0, kNavigationKindRole).toString();
+  const QString name = nav_item->data(0, kNavigationNameRole).toString();
+  const QString path = nav_item->data(0, kNavigationPathRole).toString();
   auto* root = find_root_item(kind);
   if (!root) {
-    return;
+    return nullptr;
   }
   for (int row = 0; row < root->childCount(); ++row) {
     auto* candidate = root->child(row);
@@ -5418,11 +5954,133 @@ void MainWindow::select_model_item_from_results_navigation(
         candidate->data(0, PropertyEditor::kParamsRole).toMap();
     if ((!path.isEmpty() && params.value("path").toString() == path) ||
         (path.isEmpty() && candidate->text(0) == name)) {
-      model_tree_->setCurrentItem(candidate);
-      model_tree_->scrollToItem(candidate);
-      root->setExpanded(true);
-      break;
+      return candidate;
     }
+  }
+  return nullptr;
+}
+
+void MainWindow::build_results_navigation_menu(QMenu* menu,
+                                               QTreeWidgetItem* item) {
+  if (!menu || !item) {
+    return;
+  }
+  const QString kind = item->data(0, kNavigationKindRole).toString();
+  auto show_workspace = [](QDockWidget* workspace) {
+    if (!workspace) {
+      return;
+    }
+    workspace->show();
+    workspace->raise();
+    workspace->activateWindow();
+  };
+  if (!item->parent()) {
+    // 根节点：工作窗入口 + 根级操作 + 展开/折叠。
+    if (kind == "Jobs") {
+      auto* open_ws = menu->addAction("Open Job Workspace");
+      connect(open_ws, &QAction::triggered, this,
+              [this, show_workspace]() { show_workspace(job_work_window_); });
+      auto* refresh = menu->addAction("Refresh Remote Jobs");
+      connect(refresh, &QAction::triggered, this, [this]() {
+        if (moose_panel_) {
+          moose_panel_->on_refresh_job();
+        }
+      });
+    } else if (kind == "Results") {
+      auto* open_ws = menu->addAction("Open Results Workspace");
+      connect(open_ws, &QAction::triggered, this, [this, show_workspace]() {
+        show_workspace(results_work_window_);
+      });
+      auto* import = menu->addAction("Import Result File...");
+      connect(import, &QAction::triggered, this, [this]() {
+        const QString path = QFileDialog::getOpenFileName(
+            this, "Import Result File", QDir::homePath(),
+            "Result Files (*.e *.exo *.exodus *.msh *.csv *.txt *.log *.yaml "
+            "*.yml);;All Files (*)");
+        if (!path.isEmpty()) {
+          import_result_file(path);
+        }
+      });
+    }
+    menu->addSeparator();
+    auto* expand = menu->addAction("Expand All");
+    auto* collapse = menu->addAction("Collapse All");
+    connect(expand, &QAction::triggered, results_navigation_tree_,
+            &QTreeWidget::expandAll);
+    connect(collapse, &QAction::triggered, results_navigation_tree_,
+            &QTreeWidget::collapseAll);
+    return;
+  }
+
+  // 子节点：按 Jobs/Results 分流 + 通用 重命名/删除（映射回模型树条目）。
+  auto* model_item = model_item_for_navigation(item);
+  const QVariantMap params =
+      model_item ? model_item->data(0, PropertyEditor::kParamsRole).toMap()
+                 : QVariantMap();
+  if (kind == "Jobs") {
+    auto* open_ws = menu->addAction("Open Job Workspace");
+    const QString job_name = item->text(0);
+    connect(open_ws, &QAction::triggered, this,
+            [this, show_workspace, job_name]() {
+              show_workspace(job_work_window_);
+              // 在作业列表中同步选中该作业。
+              for (int row = 0; job_table_ && row < job_table_->rowCount();
+                   ++row) {
+                auto* cell = job_table_->item(row, 0);
+                if (cell && cell->text() == job_name) {
+                  job_table_->setCurrentCell(row, 0);
+                  break;
+                }
+              }
+            });
+    if (params.value("remote").toBool()) {
+      auto* refresh = menu->addAction("Refresh Status");
+      const QString job_id = params.value("job_id").toString();
+      connect(refresh, &QAction::triggered, this, [this, job_id]() {
+        if (moose_panel_) {
+          moose_panel_->refresh_job_execution(job_id);
+          moose_panel_->on_refresh_job();
+        }
+      });
+    }
+    const QString exodus = params.value("exodus").toString();
+    if (!exodus.isEmpty()) {
+      auto* open_result = menu->addAction("Open Result");
+      connect(open_result, &QAction::triggered, this, [this, exodus]() {
+        if (viewer_) {
+          viewer_->set_exodus_file(exodus);
+        }
+      });
+    }
+  } else if (kind == "Results") {
+    const QString path = params.value("path").toString();
+    auto* open_view = menu->addAction("Open in Viewer");
+    open_view->setEnabled(!path.isEmpty());
+    connect(open_view, &QAction::triggered, this, [this, path]() {
+      if (!viewer_ || path.isEmpty()) {
+        return;
+      }
+      const QString ext = QFileInfo(path).suffix().toLower();
+      if (ext == "e" || ext == "exo" || ext == "exodus") {
+        viewer_->set_exodus_file(path);
+      } else {
+        viewer_->set_mesh_file(path);
+      }
+    });
+    auto* copy_path = menu->addAction("Copy Path");
+    copy_path->setEnabled(!path.isEmpty());
+    connect(copy_path, &QAction::triggered, this, [path]() {
+      QGuiApplication::clipboard()->setText(path);
+    });
+  }
+  if (model_item) {
+    menu->addSeparator();
+    auto* rename = menu->addAction("Rename");
+    auto* remove = menu->addAction("Remove");
+    connect(rename, &QAction::triggered, this,
+            [this, model_item]() { rename_item(model_item); });
+    connect(remove, &QAction::triggered, this,
+            [this, model_item]() { remove_item(model_item); });
   }
 }
 
@@ -6051,6 +6709,23 @@ void MainWindow::upsert_result_item(const QString& path,
   refresh_results_panel();
 }
 
+void MainWindow::import_result_file(const QString& path) {
+  if (path.isEmpty() || !QFileInfo::exists(path)) {
+    statusBar()->showMessage("Result file is unavailable: " + path, 3000);
+    return;
+  }
+  upsert_result_item(path, QString());
+  const QString ext = QFileInfo(path).suffix().toLower();
+  if (viewer_ && (ext == "e" || ext == "exo" || ext == "exodus")) {
+    viewer_->set_exodus_file(path);
+  } else if (viewer_ && ext == "msh") {
+    viewer_->set_mesh_file(path);
+  }
+  gmp::log_operation("results", "Result file imported: " + path);
+  statusBar()->showMessage("Result imported: " + QFileInfo(path).fileName(),
+                           3000);
+}
+
 void MainWindow::refresh_results_panel() {
   if (!results_list_ || !results_preview_) {
     return;
@@ -6134,6 +6809,198 @@ void MainWindow::refresh_results_panel() {
              results_list_->item(0)->text() != "No results yet.") {
     results_list_->setCurrentRow(0);
   }
+}
+
+void MainWindow::populate_results_compare_list(QListWidget* list) const {
+  if (!list) {
+    return;
+  }
+  list->clear();
+  auto* root = find_root_item("Results");
+  if (!root || root->childCount() == 0) {
+    list->addItem("No results yet.");
+    return;
+  }
+  for (int i = 0; i < root->childCount(); ++i) {
+    auto* item = root->child(i);
+    if (!item) {
+      continue;
+    }
+    const QString name = item->text(0);
+    const QVariantMap params =
+        item->data(0, PropertyEditor::kParamsRole).toMap();
+    const QString path = params.value("path").toString();
+    const QString status = params.value("status").toString();
+    const QString job = params.value("job").toString();
+    QString text = name;
+    if (!status.isEmpty()) {
+      text += QString(" (%1)").arg(status);
+    }
+    if (!job.isEmpty()) {
+      text += QString(" [job:%1]").arg(job);
+    }
+    auto* row = new QListWidgetItem(text, list);
+    row->setData(Qt::UserRole, path);
+    row->setData(Qt::UserRole + 1, job);
+    row->setData(Qt::UserRole + 2, name);
+    if (!path.isEmpty()) {
+      row->setToolTip(path);
+    }
+  }
+  if (list->count() == 0) {
+    list->addItem("No results yet.");
+  }
+}
+
+QDockWidget* MainWindow::create_results_compare_window() {
+  ++results_compare_counter_;
+  const int index = results_compare_counter_;
+  const QString base_title = QString("Results Compare #%1").arg(index);
+  const QString geometry_key =
+      QString("ui/layout/v1/results_compare_%1_geometry").arg(index);
+
+  auto* window = new QDockWidget(base_title, this);
+  window->setObjectName(QString("resultsCompareWindow%1").arg(index));
+  window->setProperty("gmpGeometryKey", geometry_key);
+  window->setFeatures(QDockWidget::DockWidgetClosable |
+                      QDockWidget::DockWidgetMovable |
+                      QDockWidget::DockWidgetFloatable);
+  window->setMinimumSize(480, 400);
+  window->resize(640, 520);
+  addDockWidget(Qt::RightDockWidgetArea, window);
+  window->setFloating(true);
+  window->setAllowedAreas(Qt::NoDockWidgetArea);
+
+  auto* content = new QWidget(window);
+  auto* layout = new QVBoxLayout(content);
+  layout->setContentsMargins(10, 10, 10, 10);
+  layout->setSpacing(6);
+  auto* head = new QLabel(
+      "Result comparison — select an item to preview it, or load it on "
+      "stage with Focus Viewport. Closing this window does not unload "
+      "stage results or affect other results windows.",
+      content);
+  head->setWordWrap(true);
+  layout->addWidget(head);
+
+  auto* list = new QListWidget(content);
+  list->setObjectName("resultsCompareList");
+  list->setSelectionMode(QAbstractItemView::SingleSelection);
+  list->setMinimumHeight(140);
+  layout->addWidget(list);
+
+  auto* preview = new QPlainTextEdit(content);
+  preview->setObjectName("resultsComparePreview");
+  preview->setReadOnly(true);
+  preview->setLineWrapMode(QPlainTextEdit::NoWrap);
+  preview->setPlaceholderText("Select a result item for quick preview.");
+  layout->addWidget(preview, 1);
+
+  auto* actions = new QHBoxLayout();
+  auto* refresh_btn = new QPushButton("Refresh List", content);
+  auto* focus_btn = new QPushButton("Focus Viewport", content);
+  actions->addWidget(refresh_btn);
+  actions->addWidget(focus_btn);
+  actions->addStretch(1);
+  auto* actions_row = new QWidget(content);
+  actions_row->setLayout(actions);
+  layout->addWidget(actions_row);
+  window->setWidget(content);
+
+  connect(list, &QListWidget::currentItemChanged, this,
+          [this, window, base_title, preview](QListWidgetItem* row,
+                                              QListWidgetItem*) {
+            if (!row) {
+              preview->clear();
+              return;
+            }
+            const QString name = row->data(Qt::UserRole + 2).toString();
+            if (!name.isEmpty()) {
+              window->setWindowTitle(base_title + " — " + name);
+            }
+            const QString path = row->data(Qt::UserRole).toString();
+            const QString job = row->data(Qt::UserRole + 1).toString();
+            QString details = "Name: " + name;
+            if (!job.isEmpty()) {
+              details += "\nJob: " + job;
+            }
+            if (path.isEmpty()) {
+              details += "\nPath: (none)";
+            } else {
+              const QFileInfo fi(path);
+              details += "\nPath: " + path;
+              details += QString("\nExists: %1").arg(fi.exists() ? "yes" : "no");
+              if (fi.exists()) {
+                details += QString("\nSize: %1 bytes").arg(fi.size());
+                details += "\nModified: " +
+                           fi.lastModified().toString(Qt::ISODate);
+              }
+              const QString ext = fi.suffix().toLower();
+              if (fi.size() > 0 &&
+                  (ext == "txt" || ext == "csv" || ext == "log" ||
+                   ext == "yaml" || ext == "yml")) {
+                QFile f(path);
+                if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                  QStringList lines;
+                  for (int i = 0; i < 6; ++i) {
+                    const QByteArray chunk = f.readLine();
+                    if (chunk.isEmpty()) {
+                      break;
+                    }
+                    lines << QString::fromUtf8(chunk).trimmed();
+                  }
+                  if (!lines.isEmpty()) {
+                    details += "\n\nPreview:\n" + lines.join("\n");
+                  }
+                }
+              }
+            }
+            preview->setPlainText(details);
+          });
+  connect(refresh_btn, &QPushButton::clicked, this,
+          [this, list]() { populate_results_compare_list(list); });
+  connect(focus_btn, &QPushButton::clicked, this, [this, list]() {
+    auto* row = list->currentItem();
+    if (!row || !viewer_) {
+      return;
+    }
+    const QString path = row->data(Qt::UserRole).toString();
+    if (path.isEmpty()) {
+      statusBar()->showMessage("Selected result has no path.", 2000);
+      return;
+    }
+    const QString ext = QFileInfo(path).suffix().toLower();
+    if (ext == "e" || ext == "exo" || ext == "exodus") {
+      viewer_->set_exodus_file(path);
+    } else {
+      viewer_->set_mesh_file(path);
+    }
+    viewer_->setFocus();
+    statusBar()->showMessage("Opened result in viewer.", 1500);
+  });
+  connect(window, &QDockWidget::visibilityChanged, this,
+          [window](bool visible) {
+            if (!visible) {
+              QSettings settings("gmp-ise", "gmp_ise");
+              settings.setValue(window->property("gmpGeometryKey").toString(),
+                                window->saveGeometry());
+            }
+          });
+
+  // 恢复同编号实例的几何记忆；越界时复用公共夹取规则。
+  QSettings settings("gmp-ise", "gmp_ise");
+  const QByteArray geometry = settings.value(geometry_key).toByteArray();
+  if (!geometry.isEmpty()) {
+    window->restoreGeometry(geometry);
+  }
+  clamp_window_to_screen(window);
+
+  populate_results_compare_list(list);
+  results_compare_windows_.append(window);
+  window->show();
+  window->raise();
+  window->activateWindow();
+  return window;
 }
 
 void MainWindow::sync_results_tree_selection(const QListWidgetItem* row) {
@@ -6403,7 +7270,7 @@ void MainWindow::sync_model_to_input() {
     }
   }
   refresh_workflow_status();
-  console_->appendPlainText("Model tree synced to MOOSE input.");
+  gmp::log_operation("model", "Model tree synced to MOOSE input.");
   statusBar()->showMessage("Model synced to MOOSE input.", 2000);
 }
 
@@ -6502,7 +7369,7 @@ void MainWindow::load_demo_diffusion(bool run) {
   sync_model_to_input();
 
   statusBar()->showMessage("Demo loaded: Transient Diffusion", 2000);
-  console_->appendPlainText("Demo loaded: Transient Diffusion");
+  gmp::log_operation("project", "Demo loaded: Transient Diffusion");
   if (run) {
     moose_panel_->run_job();
   }
@@ -6605,7 +7472,7 @@ void MainWindow::load_demo_thermo(bool run) {
   sync_model_to_input();
 
   statusBar()->showMessage("Demo loaded: Thermo-Mechanics", 2000);
-  console_->appendPlainText("Demo loaded: Thermo-Mechanics");
+  gmp::log_operation("project", "Demo loaded: Thermo-Mechanics");
   if (run) {
     moose_panel_->run_job();
   }
@@ -6664,7 +7531,7 @@ void MainWindow::load_demo_nonlinear_heat(bool run) {
   sync_model_to_input();
 
   statusBar()->showMessage("Demo loaded: Nonlinear Heat", 2000);
-  console_->appendPlainText("Demo loaded: Nonlinear Heat");
+  gmp::log_operation("project", "Demo loaded: Nonlinear Heat");
   if (run) {
     moose_panel_->run_job();
   }
@@ -6829,6 +7696,9 @@ void MainWindow::refresh_job_table() {
   if (!root) {
     return;
   }
+  const QString filter = job_state_filter_
+                             ? job_state_filter_->currentData().toString()
+                             : QString("all");
   for (int i = 0; i < root->childCount(); ++i) {
     auto* child = root->child(i);
     if (!child) {
@@ -6836,6 +7706,11 @@ void MainWindow::refresh_job_table() {
     }
     const QVariantMap params =
         child->data(0, PropertyEditor::kParamsRole).toMap();
+    // 作业监控状态筛选：按映射后的状态列匹配。
+    if (filter != "all" &&
+        params.value("status").toString() != filter) {
+      continue;
+    }
     append_job_row(child->text(0), params);
   }
 }
@@ -6865,11 +7740,14 @@ void MainWindow::update_job_row(int row, const QString& name,
   };
   set_item(0, name);
   set_item(1, params.value("status").toString());
-  set_item(2, params.value("start_time").toString());
-  set_item(3, params.value("duration").toString());
-  set_item(4, params.value("mesh").toString());
-  set_item(5, params.value("exec").toString());
-  set_item(6, params.value("exodus").toString());
+  set_item(2, params.value("case").toString());
+  set_item(3, params.value("progress").toString());
+  set_item(4, params.value("start_time").toString());
+  set_item(5, params.value("duration").toString());
+  set_item(6, params.value("remote").toBool() ? QString("Remote")
+                                              : QString("Local"));
+  set_item(7, params.value("exec").toString());
+  set_item(8, params.value("exodus").toString());
   if (auto* item = job_table_->item(row, 0)) {
     item->setData(Qt::UserRole, params);
   }
@@ -6907,6 +7785,188 @@ void MainWindow::update_job_detail(int row) {
     }
   }
   job_detail_->setPlainText(lines.join("\n"));
+}
+
+void MainWindow::apply_job_selection(int row) {
+  update_job_detail(row);
+  if (!job_table_ || row < 0 || row >= job_table_->rowCount()) {
+    selected_job_id_.clear();
+    selected_job_remote_ = false;
+    selected_job_running_ = false;
+    if (job_detail_stack_) {
+      job_detail_stack_->setCurrentIndex(0);
+    }
+    return;
+  }
+  auto* item = job_table_->item(row, 0);
+  const QVariantMap params = item ? item->data(Qt::UserRole).toMap()
+                                  : QVariantMap();
+  selected_job_id_ = params.value("job_id").toString();
+  selected_job_remote_ = params.value("remote").toBool() &&
+                         !selected_job_id_.isEmpty();
+  const QString status = params.value("status").toString();
+  selected_job_running_ =
+      selected_job_remote_ &&
+      (status == "Queued" || status == "Running");
+  if (job_detail_stack_) {
+    job_detail_stack_->setCurrentIndex(1);
+  }
+  if (job_cancel_button_) {
+    job_cancel_button_->setEnabled(selected_job_running_);
+  }
+  if (!selected_job_remote_) {
+    if (job_detail_title_) {
+      job_detail_title_->setText(
+          QString("%1 — %2").arg(item->text(), status));
+    }
+    return;
+  }
+  if (job_detail_title_) {
+    const QString case_name = params.value("case").toString();
+    job_detail_title_->setText(
+        case_name.isEmpty()
+            ? QString("%1 — %2").arg(selected_job_id_, status)
+            : QString("%1 · %2 — %3").arg(selected_job_id_, case_name, status));
+  }
+  // 选中远程作业即拉取实时执行状态与制品清单（LIMS 任务监控交互）。
+  // 巡览模式下跳过网络请求，由巡览注入合成数据。
+  if (moose_panel_ && !qEnvironmentVariableIsSet("GMP_SCREENSHOT_DIR")) {
+    moose_panel_->refresh_job_execution(selected_job_id_);
+    moose_panel_->refresh_job_files(selected_job_id_);
+  }
+}
+
+void MainWindow::update_remote_job_detail(const QVariantMap& status) {
+  if (!job_progress_bar_ || !job_progress_text_) {
+    return;
+  }
+  const QVariantMap progress = status.value("progress").toMap();
+  const QVariantMap resources = status.value("resources").toMap();
+  const QVariantMap timings = status.value("timings").toMap();
+  const QVariantMap convergence = status.value("convergence").toMap();
+
+  const double percent = progress.value("percent", -1.0).toDouble();
+  job_progress_bar_->setValue(percent >= 0 ? int(percent + 0.5) : 0);
+  QStringList progress_parts;
+  const int step_cur = progress.value("step_current", -1).toInt();
+  if (step_cur >= 0) {
+    QString step = QString("step %1").arg(step_cur);
+    if (progress.value("step_total", -1).toInt() >= 0) {
+      step += QString("/%1").arg(progress.value("step_total").toInt());
+    }
+    progress_parts << step;
+  }
+  if (percent >= 0) {
+    progress_parts << QString("%1%").arg(percent, 0, 'f', 1);
+  }
+  if (progress.contains("time_current")) {
+    QString time = QString("t=%1").arg(progress.value("time_current").toDouble());
+    if (progress.contains("time_total") &&
+        !progress.value("time_total").isNull()) {
+      time += QString("/%1").arg(progress.value("time_total").toDouble());
+    }
+    progress_parts << time;
+  }
+  job_progress_text_->setText(progress_parts.isEmpty()
+                                  ? QString("-")
+                                  : progress_parts.join("  ·  "));
+
+  auto set_field = [this](const QString& key, const QString& text) {
+    QLabel* label = job_detail_fields_.value(key, nullptr);
+    if (label) {
+      label->setText(text.isEmpty() ? QString("-") : text);
+    }
+  };
+  set_field("input_file", status.value("input_file").toString());
+  set_field("pid", status.value("pid").toString());
+  const int procs = resources.value("process_count").toInt(0);
+  const int cores = resources.value("logical_cores_used").toInt(0);
+  set_field("parallel",
+            procs > 0
+                ? QString("%1 MPI ranks (%2 cores)").arg(procs).arg(cores)
+                : QString());
+  set_field("cpu", resources.contains("cpu_percent")
+                       ? QString("%1%").arg(
+                             resources.value("cpu_percent").toDouble(), 0,
+                             'f', 1)
+                       : QString());
+  set_field("memory", resources.contains("memory_mb")
+                          ? QString("%1 MB").arg(
+                                resources.value("memory_mb").toDouble(), 0,
+                                'f', 1)
+                          : QString());
+  set_field("step", step_cur >= 0 ? QString::number(step_cur) : QString());
+  if (progress.contains("current_dt") &&
+      !progress.value("current_dt").isNull()) {
+    set_field("dt", QString("%1 s%2")
+                        .arg(progress.value("current_dt").toDouble())
+                        .arg(progress.value("adaptive_dt").toBool()
+                                 ? QString(" (adaptive)")
+                                 : QString()));
+  } else {
+    set_field("dt", QString());
+  }
+  if (progress.contains("time_current")) {
+    set_field("physical",
+              QString("%1 s").arg(progress.value("time_current").toDouble()));
+  } else {
+    set_field("physical", QString());
+  }
+  set_field("converged", convergence.contains("converged_count")
+                             ? QString::number(
+                                   convergence.value("converged_count").toInt())
+                             : QString());
+  set_field("avg_step", timings.contains("avg_step_seconds") &&
+                                !timings.value("avg_step_seconds").isNull()
+                            ? QString("%1 s").arg(
+                                  timings.value("avg_step_seconds").toDouble())
+                            : QString());
+  set_field("elapsed", timings.value("elapsed_human").toString());
+  QString eta = timings.value("estimated_remaining_human").toString();
+  if (eta.isEmpty() && !timings.value("eta_reason").toString().isEmpty()) {
+    eta = timings.value("eta_reason").toString();
+  }
+  set_field("eta", eta);
+  set_field("heartbeat", status.value("heartbeat_at").toString());
+  set_field("health", status.value("health").toString());
+}
+
+void MainWindow::update_remote_job_files(const QVariantMap& body) {
+  if (!job_files_table_) {
+    return;
+  }
+  job_files_table_->setRowCount(0);
+  const QVariantList files = body.value("files").toList();
+  auto human_size = [](qint64 bytes) {
+    if (bytes >= 1024 * 1024) {
+      return QString("%1 MB").arg(bytes / 1048576.0, 0, 'f', 1);
+    }
+    if (bytes >= 1024) {
+      return QString("%1 KB").arg(bytes / 1024.0, 0, 'f', 1);
+    }
+    return QString("%1 B").arg(bytes);
+  };
+  for (const QVariant& value : files) {
+    const QVariantMap file = value.toMap();
+    const int row = job_files_table_->rowCount();
+    job_files_table_->insertRow(row);
+    const QString path = file.value("path").toString();
+    auto make_cell = [](const QString& text) {
+      return new QTableWidgetItem(text);
+    };
+    job_files_table_->setItem(row, 0, make_cell(file.value("kind").toString()));
+    auto* name_item = make_cell(file.value("name").toString());
+    name_item->setData(Qt::UserRole, path);
+    name_item->setToolTip(path);
+    job_files_table_->setItem(row, 1, name_item);
+    job_files_table_->setItem(
+        row, 2, make_cell(human_size(file.value("size").toLongLong())));
+    job_files_table_->setItem(row, 3,
+                              make_cell(file.value("modified_at").toString()));
+    job_files_table_->setItem(
+        row, 4,
+        make_cell(file.value("snapshot").toBool() ? QString("yes") : QString()));
+  }
 }
 
 bool MainWindow::load_project(const QString& path) {
@@ -7025,7 +8085,7 @@ bool MainWindow::load_project(const QString& path) {
       }
     }
     project_path_ = path;
-    console_->appendPlainText("Project loaded: " + path);
+    gmp::log_operation("project", "Project loaded: " + path);
     YAML::Node gmsh_node = root["gmsh"];
     if (gmsh_node && gmsh_node.IsMap() && gmsh_panel_) {
       const QVariantMap gmsh_settings = parse_map(gmsh_node, {});
@@ -7315,6 +8375,12 @@ void MainWindow::export_debug_bundle() {
     }
   }
 
+  // 操作日志是定位问题的主要依据，调试包必须带上。
+  const QString op_log = gmp::operation_log_path();
+  if (!op_log.isEmpty() && QFileInfo::exists(op_log)) {
+    QFile::copy(op_log, dir.filePath(QFileInfo(op_log).fileName()));
+  }
+
   if (moose_panel_) {
     const QVariantMap settings = moose_panel_->moose_settings();
     const QString input_text = settings.value("input_text").toString();
@@ -7350,6 +8416,7 @@ void MainWindow::export_debug_bundle() {
     out << "Project path: " << project_path_ << "\n";
   }
 
+  gmp::log_operation("project", "Debug bundle exported: " + bundle_dir);
   statusBar()->showMessage("Debug bundle exported.", 3000);
   QMessageBox::information(this, "Export Debug Bundle",
                            "Bundle created at:\n" + bundle_dir);
@@ -7614,7 +8681,11 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     if (!feature_tabs || feature_tabs->count() != 4) {
                       throw std::runtime_error("Phase 2 part feature tabs contract failed");
                     }
-                    auto* mesh_page = property_stack_->widget(9);
+                    if (!gmsh_panel_ || !mesh_work_window_ ||
+                        property_stack_->indexOf(gmsh_panel_) >= 0) {
+                      throw std::runtime_error("I-04 mesh workspace ownership contract failed");
+                    }
+                    auto* mesh_page = gmsh_panel_;
                     auto* gmsh_tabs = mesh_page
                                           ? mesh_page->findChild<QTabWidget*>(
                                                 "gmshWorkspaceTabs")
@@ -7632,7 +8703,8 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         !groups_tabs || groups_tabs->count() != 2) {
                       throw std::runtime_error("Phase 2 mesh workspace tabs contract failed");
                     }
-                    property_stack_->setCurrentIndex(9);
+                    mesh_work_window_->show();
+                    mesh_work_window_->raise();
                     qApp->processEvents();
                     mesh_page->grab().save(dir +
                                            "/p2_mesh_workspace_layout.png");
@@ -8833,6 +9905,38 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
     workspace->raise();
     workspace->activateWindow();
   };
+  steps.append({"workspace_Mesh",
+                [this, reveal_workspace]() {
+                  reveal_workspace(mesh_work_window_);
+                  auto* gmsh_tabs = mesh_work_window_
+                                        ? mesh_work_window_->findChild<QTabWidget*>(
+                                              "gmshWorkspaceTabs")
+                                        : nullptr;
+                  auto* geometry_tabs =
+                      mesh_work_window_
+                          ? mesh_work_window_->findChild<QTabWidget*>(
+                                "gmshGeometryTabs")
+                          : nullptr;
+                  auto* groups_tabs = mesh_work_window_
+                                          ? mesh_work_window_->findChild<QTabWidget*>(
+                                                "gmshGroupsTabs")
+                                          : nullptr;
+                  const QRect available = mesh_work_window_ &&
+                                                   mesh_work_window_->screen()
+                                               ? mesh_work_window_->screen()
+                                                     ->availableGeometry()
+                                               : QRect();
+                  if (!mesh_work_window_ || !gmsh_tabs ||
+                      gmsh_tabs->count() != 5 || !geometry_tabs ||
+                      geometry_tabs->count() != 3 || !groups_tabs ||
+                      groups_tabs->count() != 2 ||
+                      (!available.isEmpty() &&
+                       (mesh_work_window_->height() > available.height() ||
+                        mesh_work_window_->width() > available.width()))) {
+                    throw std::runtime_error("I-04 mesh workspace layout contract failed");
+                  }
+                },
+                mesh_work_window_});
   steps.append({"workspace_Job",
                 [this, reveal_workspace]() {
                   reveal_workspace(job_work_window_);
@@ -8876,7 +9980,569 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   },
                 results_work_window_});
   }
-
+  steps.append({"i04_work_window_contracts",
+                [this]() {
+                  // 关闭语义：隐藏 Job 窗口不影响作业表与日志内容。
+                  if (!job_work_window_ || !job_table_ || !moose_panel_) {
+                    throw std::runtime_error("I-04 job workspace fixture is missing");
+                  }
+                  const int job_rows = job_table_->rowCount();
+                  const QString job_log = moose_panel_->log_text();
+                  job_work_window_->hide();
+                  qApp->processEvents();
+                  if (job_table_->rowCount() != job_rows ||
+                      moose_panel_->log_text() != job_log) {
+                    throw std::runtime_error("I-04 job close semantics contract failed");
+                  }
+                  // 关闭语义：隐藏 Results 窗口不卸载舞台已加载数据。
+                  if (!viewer_) {
+                    throw std::runtime_error("I-04 viewer fixture is missing");
+                  }
+                  const QString mesh_path =
+                      QDir::current().absoluteFilePath("out/box.msh");
+                  if (QFileInfo::exists(mesh_path)) {
+                    viewer_->set_mesh_file(mesh_path);
+                    qApp->processEvents();
+                  }
+                  const bool stage_before = viewer_->stage_data_visible();
+                  results_work_window_->hide();
+                  qApp->processEvents();
+                  if (viewer_->stage_data_visible() != stage_before) {
+                    throw std::runtime_error("I-04 results close semantics contract failed");
+                  }
+                  // 单实例 + 越界恢复：四个独立工作窗同名唯一，
+                  // 移出屏幕后通过真实模块入口激活必须回到可视区。
+                  const QList<QPair<QString, QDockWidget*>> workspaces = {
+                      {"meshWorkspaceWindow", mesh_work_window_},
+                      {"jobWorkspaceWindow", job_work_window_},
+                      {"visualizationWorkspaceWindow",
+                       visualization_work_window_},
+                      {"resultsWorkspaceWindow", results_work_window_}};
+                  const QList<int> module_indices = {9, 10, 11, 12};
+                  for (int i = 0; i < workspaces.size(); ++i) {
+                    QDockWidget* workspace = workspaces.at(i).second;
+                    if (!workspace) {
+                      throw std::runtime_error("I-04 workspace fixture is missing");
+                    }
+                    if (findChildren<QDockWidget*>(workspaces.at(i).first)
+                            .size() != 1) {
+                      throw std::runtime_error("I-04 workspace single-instance contract failed");
+                    }
+                    workspace->move(-10000, -10000);
+                    module_tabs_->setCurrentIndex(module_indices.at(i));
+                    QMetaObject::invokeMethod(module_tabs_, "tabBarClicked",
+                                              Qt::DirectConnection,
+                                              Q_ARG(int, module_indices.at(i)));
+                    qApp->processEvents();
+                    QScreen* screen = workspace->screen();
+                    if (!workspace->isVisible() || !screen ||
+                        !screen->availableGeometry()
+                             .adjusted(16, 16, -16, -16)
+                             .contains(workspace->frameGeometry().topLeft())) {
+                      throw std::runtime_error("I-04 workspace out-of-bounds recovery contract failed");
+                    }
+                  }
+                },
+                results_work_window_});
+  steps.append({"i04_results_compare_windows",
+                [this]() {
+                  if (!results_work_window_ || !viewer_) {
+                    throw std::runtime_error("I-04 compare fixture is missing");
+                  }
+                  results_work_window_->show();
+                  results_work_window_->raise();
+                  auto* new_compare =
+                      results_work_window_->findChild<QPushButton*>(
+                          "resultsNewCompareButton");
+                  if (!new_compare) {
+                    throw std::runtime_error("I-04 compare button fixture is missing");
+                  }
+                  const int base_count = results_compare_windows_.size();
+                  new_compare->click();
+                  new_compare->click();
+                  qApp->processEvents();
+                  if (results_compare_windows_.size() != base_count + 2) {
+                    throw std::runtime_error("I-04 compare multi-instance contract failed");
+                  }
+                  QDockWidget* first = results_compare_windows_.at(base_count);
+                  QDockWidget* second =
+                      results_compare_windows_.at(base_count + 1);
+                  if (!first || !second || !first->isVisible() ||
+                      !second->isVisible() ||
+                      first->windowTitle() == second->windowTitle() ||
+                      !first->windowTitle().contains("Compare") ||
+                      !second->windowTitle().contains("Compare")) {
+                    throw std::runtime_error("I-04 compare title contract failed");
+                  }
+                  // 默认 Results 工作窗仍为单实例。
+                  if (findChildren<QDockWidget*>("resultsWorkspaceWindow")
+                          .size() != 1) {
+                    throw std::runtime_error("I-04 results single-instance contract failed");
+                  }
+                  // 独立几何记忆：两个实例可拥有不同位置。
+                  first->move(120, 120);
+                  second->move(420, 220);
+                  qApp->processEvents();
+                  if (first->frameGeometry().topLeft() ==
+                      second->frameGeometry().topLeft()) {
+                    throw std::runtime_error("I-04 compare geometry memory contract failed");
+                  }
+                  // 关闭第一个对比窗：不影响主 Results 窗口、另一个对比窗和舞台。
+                  const bool stage_before = viewer_->stage_data_visible();
+                  first->hide();
+                  qApp->processEvents();
+                  if (!second->isVisible() ||
+                      !results_work_window_->isVisible() ||
+                      viewer_->stage_data_visible() != stage_before) {
+                    throw std::runtime_error("I-04 compare close semantics contract failed");
+                  }
+                  // 关闭后写入按实例编号的独立几何键。
+                  QSettings settings("gmp-ise", "gmp_ise");
+                  if (!settings.contains(
+                          first->property("gmpGeometryKey").toString())) {
+                    throw std::runtime_error("I-04 compare geometry persistence contract failed");
+                  }
+                  second->raise();
+                },
+                results_work_window_});
+#ifdef GMP_ENABLE_GMSH_GUI
+  steps.append({"i04_geo_import_feedback",
+                [this, dir]() {
+                  if (!gmsh_panel_) {
+                    throw std::runtime_error("I-04 geo import fixture is missing");
+                  }
+                  // 坏脚本：OCC 内核下混入内置几何命令，导入必须显性失败，
+                  // 且不得保留“已加载”的假象（路径/摘要如实清空）。
+                  const QString broken = dir + "/tour_broken.geo";
+                  {
+                    QFile f(broken);
+                    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                      throw std::runtime_error("I-04 geo fixture write failed");
+                    }
+                    f.write("SetFactory(\"OpenCASCADE\");\n"
+                            "Rectangle(1) = {0, 0, 0, 1, 1};\n"
+                            "Split Curve {1} Point {};\n");
+                    f.close();
+                  }
+                  if (gmsh_panel_->import_geometry(broken, false) ||
+                      gmsh_panel_->last_import_error().isEmpty()) {
+                    throw std::runtime_error("I-04 broken geo import feedback contract failed");
+                  }
+                  // 退化几何：xy 平面矩形直接绕 z 轴旋转产生零体积“体”，
+                  // 必须在导入阶段被拦截并给出可读原因。
+                  const QString degenerate = dir + "/tour_degenerate.geo";
+                  {
+                    QFile f(degenerate);
+                    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                      throw std::runtime_error("I-04 geo fixture write failed");
+                    }
+                    f.write("SetFactory(\"OpenCASCADE\");\n"
+                            "Rectangle(1) = {1.5, 0, -0.5, 1, 1};\n"
+                            "out[] = Extrude{{0, 0, 1}, {0, 0, 0}, 2*Pi} { Surface{1}; };\n");
+                    f.close();
+                  }
+                  if (gmsh_panel_->import_geometry(degenerate, false) ||
+                      !gmsh_panel_->last_import_error().contains(
+                          "Degenerate", Qt::CaseInsensitive)) {
+                    throw std::runtime_error("I-04 degenerate geo import contract failed");
+                  }
+                  // 合法脚本：导入成功并清除错误状态。
+                  const QString valid = dir + "/tour_valid.geo";
+                  {
+                    QFile f(valid);
+                    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                      throw std::runtime_error("I-04 geo fixture write failed");
+                    }
+                    f.write("SetFactory(\"OpenCASCADE\");\n"
+                            "Box(1) = {0, 0, 0, 1, 1, 1};\n"
+                            "Physical Volume(\"solid\") = {1};\n");
+                    f.close();
+                  }
+                  if (!gmsh_panel_->import_geometry(valid, true) ||
+                      !gmsh_panel_->last_import_error().isEmpty()) {
+                    throw std::runtime_error("I-04 valid geo import contract failed");
+                  }
+                  // 自动剖分联动：导入成功后生成的网格必须真实载入舞台，
+                  // 不得出现“已生成但舞台为空”。
+                  if (!viewer_ || !viewer_->has_stage_data() ||
+                      !viewer_->stage_data_visible()) {
+                    throw std::runtime_error("I-04 geo import stage linkage contract failed");
+                  }
+                  if (mesh_work_window_) {
+                    mesh_work_window_->show();
+                    mesh_work_window_->raise();
+                  }
+                },
+                mesh_work_window_});
+#endif
+  steps.append({"operation_log_smoke",
+                [this]() {
+                  // 操作日志链路：埋点写入后文件必须存在且包含对应条目。
+                  const QString marker =
+                      QString("tour smoke marker %1").arg(QDateTime::currentMSecsSinceEpoch());
+                  gmp::log_operation("tour", marker);
+                  const QString path = gmp::operation_log_path();
+                  QFile f(path);
+                  if (path.isEmpty() ||
+                      !f.open(QIODevice::ReadOnly | QIODevice::Text) ||
+                      !QString::fromUtf8(f.readAll()).contains(marker)) {
+                    throw std::runtime_error("Operation log contract failed");
+                  }
+                },
+                this});
+  steps.append({"remote_job_registration",
+                [this]() {
+                  // 远程（LIMS）作业事件必须登记到 Jobs 树与作业列表，
+                  // 状态刷新必须更新同一行而不是新建节点。
+                  if (!moose_panel_ || !job_table_) {
+                    throw std::runtime_error("Remote job fixture is missing");
+                  }
+                  auto* root = find_root_item("Jobs");
+                  if (!root) {
+                    throw std::runtime_error("Jobs root fixture is missing");
+                  }
+                  const int base_children = root->childCount();
+                  const QString job_id = "tour_remote_job_1";
+                  QVariantMap submit;
+                  submit.insert("event", "submitted");
+                  submit.insert("job_id", job_id);
+                  submit.insert("state", "queued");
+                  submit.insert("server", "http://127.0.0.1:8200");
+                  submit.insert("snapshot", "/tmp/tour_snapshot");
+                  submit.insert("submit_time", "2026-09-06T18:02:41");
+                  emit moose_panel_->remote_job_event(submit);
+                  auto count_named = [&root](const QString& name) {
+                    int count = 0;
+                    for (int i = 0; i < root->childCount(); ++i) {
+                      if (root->child(i)->text(0) == name) {
+                        ++count;
+                      }
+                    }
+                    return count;
+                  };
+                  bool table_has = false;
+                  for (int row = 0; row < job_table_->rowCount(); ++row) {
+                    auto* cell = job_table_->item(row, 0);
+                    if (cell && cell->text() == job_id) {
+                      table_has = true;
+                      break;
+                    }
+                  }
+                  if (root->childCount() != base_children + 1 ||
+                      count_named(job_id) != 1 || !table_has) {
+                    throw std::runtime_error("Remote job registration contract failed");
+                  }
+                  QVariantMap status;
+                  status.insert("event", "status");
+                  status.insert("job_id", job_id);
+                  status.insert("state", "running");
+                  status.insert("progress", "percent=4.9, step=31");
+                  emit moose_panel_->remote_job_event(status);
+                  if (root->childCount() != base_children + 1 ||
+                      count_named(job_id) != 1) {
+                    throw std::runtime_error("Remote job status update duplicated the entry");
+                  }
+                  QTreeWidgetItem* item = nullptr;
+                  for (int i = 0; i < root->childCount(); ++i) {
+                    if (root->child(i)->text(0) == job_id) {
+                      item = root->child(i);
+                      break;
+                    }
+                  }
+                  const QVariantMap params =
+                      item ? item->data(0, PropertyEditor::kParamsRole).toMap()
+                           : QVariantMap();
+                  if (!item ||
+                      params.value("status").toString() != "Running" ||
+                      params.value("progress").toString() !=
+                          "percent=4.9, step=31" ||
+                      params.value("exec").toString() !=
+                          "remote: http://127.0.0.1:8200") {
+                    throw std::runtime_error("Remote job status merge contract failed");
+                  }
+                  // LIMS 列表状态词汇映射：succeeded 必须映射为 Completed。
+                  QVariantMap listed;
+                  listed.insert("event", "status");
+                  listed.insert("job_id", job_id);
+                  listed.insert("state", "succeeded");
+                  listed.insert("case_name", "tpl-demo");
+                  listed.insert("started_at", "2026-09-06T18:02:41");
+                  listed.insert("finished_at", "2026-09-06T18:03:21");
+                  emit moose_panel_->remote_job_event(listed);
+                  const QVariantMap merged =
+                      item->data(0, PropertyEditor::kParamsRole).toMap();
+                  if (merged.value("status").toString() != "Completed" ||
+                      merged.value("duration").toString() != "40s" ||
+                      merged.value("case").toString() != "tpl-demo") {
+                    throw std::runtime_error("Remote job list state mapping contract failed");
+                  }
+                },
+                job_work_window_});
+  steps.append({"remote_job_monitor",
+                [this]() {
+                  // 作业监控页：注册运行中远程作业并选中，注入合成的
+                  // 执行状态与制品清单，断言进度/详情/制品/筛选。
+                  if (!moose_panel_ || !job_table_ || !job_state_filter_ ||
+                      !job_progress_bar_ || !job_progress_text_ ||
+                      !job_files_table_ || !job_detail_stack_) {
+                    throw std::runtime_error("Job monitor fixture is missing");
+                  }
+                  auto* job_tabs = job_work_window_
+                                       ? job_work_window_->findChild<QTabWidget*>(
+                                             "jobWorkspaceTabs")
+                                       : nullptr;
+                  if (job_tabs) {
+                    job_tabs->setCurrentIndex(0);
+                  }
+                  auto* root = find_root_item("Jobs");
+                  if (!root) {
+                    throw std::runtime_error("Jobs root fixture is missing");
+                  }
+                  const QString job_id = "tour_remote_job_2";
+                  QVariantMap submit;
+                  submit.insert("event", "submitted");
+                  submit.insert("job_id", job_id);
+                  submit.insert("state", "running");
+                  submit.insert("server", "http://127.0.0.1:8200");
+                  submit.insert("case_name", "tour-case");
+                  emit moose_panel_->remote_job_event(submit);
+                  int target_row = -1;
+                  for (int row = 0; row < job_table_->rowCount(); ++row) {
+                    auto* cell = job_table_->item(row, 0);
+                    if (cell && cell->text() == job_id) {
+                      target_row = row;
+                      break;
+                    }
+                  }
+                  if (target_row < 0) {
+                    throw std::runtime_error("Job monitor selection fixture failed");
+                  }
+                  job_table_->setCurrentCell(target_row, 0);
+                  if (selected_job_id_ != job_id || !selected_job_remote_ ||
+                      !selected_job_running_ ||
+                      job_detail_stack_->currentIndex() != 1 ||
+                      (job_cancel_button_ &&
+                       !job_cancel_button_->isEnabled())) {
+                    throw std::runtime_error("Job monitor selection contract failed");
+                  }
+                  QVariantMap status;
+                  status.insert("job_id", job_id);
+                  status.insert("input_file", "tpl-demo.i");
+                  status.insert("pid", 90406);
+                  QVariantMap resources;
+                  resources.insert("cpu_percent", 398.3);
+                  resources.insert("memory_mb", 1060.0);
+                  resources.insert("process_count", 4);
+                  resources.insert("logical_cores_used", 4);
+                  status.insert("resources", resources);
+                  QVariantMap progress;
+                  progress.insert("step_current", 398);
+                  progress.insert("percent", 55.3);
+                  progress.insert("time_current", 0.553326);
+                  progress.insert("time_total", 1.0);
+                  progress.insert("current_dt", 0.00177897);
+                  progress.insert("adaptive_dt", true);
+                  status.insert("progress", progress);
+                  QVariantMap timings;
+                  timings.insert("elapsed_human", "31m 0s");
+                  timings.insert("avg_step_seconds", 4.7);
+                  status.insert("timings", timings);
+                  QVariantMap convergence;
+                  convergence.insert("converged_count", 397);
+                  status.insert("convergence", convergence);
+                  status.insert("health", "healthy");
+                  emit moose_panel_->remote_execution_status(status);
+                  auto field_text = [this](const QString& key) {
+                    QLabel* label = job_detail_fields_.value(key, nullptr);
+                    return label ? label->text() : QString();
+                  };
+                  if (job_progress_bar_->value() != 55 ||
+                      !job_progress_text_->text().contains("398") ||
+                      !job_progress_text_->text().contains("55.3%") ||
+                      field_text("cpu") != "398.3%" ||
+                      field_text("parallel") != "4 MPI ranks (4 cores)" ||
+                      field_text("step") != "398" ||
+                      field_text("converged") != "397" ||
+                      field_text("elapsed") != "31m 0s" ||
+                      field_text("health") != "healthy") {
+                    throw std::runtime_error("Job monitor detail contract failed");
+                  }
+                  QVariantMap body;
+                  body.insert("job_id", job_id);
+                  QVariantMap f1;
+                  f1.insert("path", "task.md");
+                  f1.insert("name", "task.md");
+                  f1.insert("size", 60928);
+                  f1.insert("kind", "task");
+                  f1.insert("snapshot", true);
+                  f1.insert("modified_at", "2026-09-06 18:34:11");
+                  QVariantMap f2;
+                  f2.insert("path", "output/result.e");
+                  f2.insert("name", "result.e");
+                  f2.insert("size", 115000);
+                  f2.insert("kind", "exodus");
+                  f2.insert("snapshot", false);
+                  body.insert("files", QVariantList{f1, f2});
+                  emit moose_panel_->remote_files(body);
+                  auto* kind_cell = job_files_table_->item(1, 0);
+                  auto* name_cell = job_files_table_->item(1, 1);
+                  if (job_files_table_->rowCount() != 2 || !kind_cell ||
+                      kind_cell->text() != "exodus" || !name_cell ||
+                      name_cell->data(Qt::UserRole).toString() !=
+                          "output/result.e" ||
+                      job_files_table_->item(0, 4)->text() != "yes") {
+                    throw std::runtime_error("Job monitor artifacts contract failed");
+                  }
+                  // 状态筛选：Running 含该作业，Failed 不含。
+                  auto has_job = [this, job_id]() {
+                    for (int row = 0; row < job_table_->rowCount(); ++row) {
+                      auto* cell = job_table_->item(row, 0);
+                      if (cell && cell->text() == job_id) {
+                        return true;
+                      }
+                    }
+                    return false;
+                  };
+                  job_state_filter_->setCurrentIndex(2);  // Running
+                  if (!has_job()) {
+                    throw std::runtime_error("Job monitor filter (Running) failed");
+                  }
+                  job_state_filter_->setCurrentIndex(4);  // Failed
+                  if (has_job()) {
+                    throw std::runtime_error("Job monitor filter (Failed) failed");
+                  }
+                  job_state_filter_->setCurrentIndex(0);  // All
+                  if (!has_job()) {
+                    throw std::runtime_error("Job monitor filter (All) failed");
+                  }
+                  // 重新选中，让截图呈现完整详情面板。
+                  for (int row = 0; row < job_table_->rowCount(); ++row) {
+                    auto* cell = job_table_->item(row, 0);
+                    if (cell && cell->text() == job_id) {
+                      job_table_->setCurrentCell(row, 0);
+                      break;
+                    }
+                  }
+                },
+                job_work_window_});
+  steps.append({"results_import_file",
+                [this]() {
+                  // 导入外部结果文件：注册 Results 节点、出现在结果列表、
+                  // 网格/Exodus 同步载入舞台。
+                  auto* root = find_root_item("Results");
+                  if (!root || !results_list_ || !viewer_) {
+                    throw std::runtime_error("Results import fixture is missing");
+                  }
+                  const QString mesh_path =
+                      QDir::current().absoluteFilePath("out/box.msh");
+                  if (!QFileInfo::exists(mesh_path)) {
+                    throw std::runtime_error("Results import mesh fixture is missing");
+                  }
+                  import_result_file(mesh_path);
+                  bool in_tree = false;
+                  for (int i = 0; i < root->childCount(); ++i) {
+                    const QVariantMap params =
+                        root->child(i)
+                            ->data(0, PropertyEditor::kParamsRole)
+                            .toMap();
+                    if (params.value("path").toString() == mesh_path) {
+                      in_tree = true;
+                      break;
+                    }
+                  }
+                  bool in_list = false;
+                  for (int i = 0; i < results_list_->count(); ++i) {
+                    auto* row = results_list_->item(i);
+                    if (row && row->data(Qt::UserRole).toString() ==
+                                   mesh_path) {
+                      in_list = true;
+                      break;
+                    }
+                  }
+                  if (!in_tree || !in_list ||
+                      !viewer_->stage_data_visible()) {
+                    throw std::runtime_error("Results import contract failed");
+                  }
+                },
+                results_work_window_});
+  steps.append({"results_navigation_context_menu",
+                [this]() {
+                  // 结果导航树右键菜单：根节点工作窗入口/根级操作，
+                  // 子节点打开/复制路径/重命名/删除。
+                  if (!results_navigation_tree_) {
+                    throw std::runtime_error("Results navigation fixture is missing");
+                  }
+                  QTreeWidgetItem* jobs_root = nullptr;
+                  QTreeWidgetItem* results_root = nullptr;
+                  for (int i = 0;
+                       i < results_navigation_tree_->topLevelItemCount();
+                       ++i) {
+                    auto* top = results_navigation_tree_->topLevelItem(i);
+                    const QString kind =
+                        top->data(0, kNavigationKindRole).toString();
+                    if (kind == "Jobs") {
+                      jobs_root = top;
+                    } else if (kind == "Results") {
+                      results_root = top;
+                    }
+                  }
+                  if (!jobs_root || !results_root) {
+                    throw std::runtime_error("Navigation roots are missing");
+                  }
+                  auto action_texts = [](QMenu& menu) {
+                    QStringList texts;
+                    for (auto* action : menu.actions()) {
+                      texts << action->text();
+                    }
+                    return texts;
+                  };
+                  {
+                    QMenu menu;
+                    build_results_navigation_menu(&menu, jobs_root);
+                    const QStringList texts = action_texts(menu);
+                    if (!texts.contains("Open Job Workspace") ||
+                        !texts.contains("Refresh Remote Jobs") ||
+                        !texts.contains("Expand All")) {
+                      throw std::runtime_error("Jobs root menu contract failed");
+                    }
+                  }
+                  {
+                    QMenu menu;
+                    build_results_navigation_menu(&menu, results_root);
+                    const QStringList texts = action_texts(menu);
+                    if (!texts.contains("Open Results Workspace") ||
+                        !texts.contains("Import Result File...") ||
+                        !texts.contains("Collapse All")) {
+                      throw std::runtime_error("Results root menu contract failed");
+                    }
+                  }
+                  if (results_root->childCount() == 0) {
+                    throw std::runtime_error("Results child fixture is missing");
+                  }
+                  {
+                    QMenu menu;
+                    build_results_navigation_menu(&menu,
+                                                  results_root->child(0));
+                    const QStringList texts = action_texts(menu);
+                    if (!texts.contains("Open in Viewer") ||
+                        !texts.contains("Copy Path") ||
+                        !texts.contains("Rename") ||
+                        !texts.contains("Remove")) {
+                      throw std::runtime_error("Results child menu contract failed");
+                    }
+                  }
+                  if (jobs_root->childCount() > 0) {
+                    QMenu menu;
+                    build_results_navigation_menu(&menu, jobs_root->child(0));
+                    const QStringList texts = action_texts(menu);
+                    if (!texts.contains("Open Job Workspace") ||
+                        !texts.contains("Rename") ||
+                        !texts.contains("Remove")) {
+                      throw std::runtime_error("Jobs child menu contract failed");
+                    }
+                  }
+                },
+                this});
   const QString step_filter =
       qEnvironmentVariable("GMP_TOUR_STEP_FILTER").trimmed();
   if (!step_filter.isEmpty()) {
@@ -8896,6 +10562,9 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
               timer->stop();
               if (module_work_window_) {
                 module_work_window_->hide();
+              }
+              if (mesh_work_window_) {
+                mesh_work_window_->hide();
               }
               if (job_work_window_) {
                 job_work_window_->hide();

@@ -29,8 +29,11 @@
 
 #include "gmp/ArtifactDialog.h"
 #include "gmp/MooseSnapshot.h"
+#include "gmp/OperationLog.h"
 #include "gmp/RunSpec.h"
 #include "gmp/SimClient.h"
+
+#include <QDateTime>
 
 #ifdef GMP_ENABLE_GMSH_GUI
 #include <gmsh.h>
@@ -235,6 +238,96 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
           &MoosePanel::on_sim_submit_finished);
   connect(sim_client_, &SimClient::job_fetched, this,
           &MoosePanel::on_sim_job_fetched);
+  connect(sim_client_, &SimClient::jobs_fetched, this,
+          [this](bool ok, const QJsonArray& jobs, const QString& error) {
+            if (!ok) {
+              append_log("Remote job list refresh failed: " + error);
+              gmp::log_operation("job", "Remote job list refresh FAILED: " +
+                                            error);
+              return;
+            }
+            append_log(QString("Remote job list refreshed: %1 job(s).")
+                           .arg(jobs.size()));
+            gmp::log_operation(
+                "job", QString("Remote job list refreshed: %1 job(s).")
+                           .arg(jobs.size()));
+            for (const auto& value : jobs) {
+              const QJsonObject job = value.toObject();
+              const QString job_id = job.value("job_id").toString();
+              if (job_id.isEmpty()) {
+                continue;
+              }
+              QVariantMap info;
+              info.insert("event", "status");
+              info.insert("job_id", job_id);
+              info.insert("state", job.value("state").toString());
+              info.insert("case_name", job.value("case_name").toString());
+              info.insert("created_at", job.value("created_at").toString());
+              info.insert("started_at", job.value("started_at").toString());
+              info.insert("finished_at",
+                          job.value("finished_at").toString());
+              if (job.value("percent").isDouble()) {
+                info.insert("percent", job.value("percent").toDouble());
+              }
+              emit remote_job_event(info);
+            }
+          });
+  // ---- 作业监控转发 ----
+  connect(sim_client_, &SimClient::execution_status_fetched, this,
+          [this](bool ok, const QJsonObject& body, const QString& error) {
+            if (!ok) {
+              append_log("Execution status refresh failed: " + error);
+              return;
+            }
+            emit remote_execution_status(body.toVariantMap());
+          });
+  connect(sim_client_, &SimClient::job_files_fetched, this,
+          [this](bool ok, const QJsonObject& body, const QString& error) {
+            if (!ok) {
+              append_log("Job files refresh failed: " + error);
+              return;
+            }
+            emit remote_files(body.toVariantMap());
+          });
+  connect(sim_client_, &SimClient::job_log_fetched, this,
+          [this](bool ok, const QString& text, const QString& error) {
+            if (!ok) {
+              append_log("Remote log fetch failed: " + error);
+              return;
+            }
+            emit remote_log(log_job_id_, text);
+          });
+  connect(sim_client_, &SimClient::job_cancel_finished, this,
+          [this](bool ok, const QJsonObject& body, const QString& error) {
+            if (!ok) {
+              append_log("Remote job cancel failed: " + error);
+              gmp::log_operation("job", "Remote job cancel FAILED: " + error);
+              return;
+            }
+            append_log("Remote job cancel accepted.");
+            gmp::log_operation("job", "Remote job cancel accepted.");
+            QVariantMap result = body.toVariantMap();
+            result.insert("job_id", last_job_id_);
+            emit remote_cancel_done(result);
+            // 取消后同步一次列表与详情，尽快反映 canceled 状态。
+            on_refresh_job();
+          });
+  connect(sim_client_, &SimClient::job_file_downloaded, this,
+          [this](bool ok, const QString& dest_path, const QString& file_path,
+                 const QString& error) {
+            if (!ok) {
+              append_log("Remote file download failed: " + error);
+              gmp::log_operation("job", "Remote file download FAILED: " +
+                                            error);
+              return;
+            }
+            append_log("Remote file downloaded: " + dest_path);
+            gmp::log_operation(
+                "job", QString("Remote file downloaded: %1 -> %2")
+                           .arg(file_path, dest_path));
+            emit remote_file_downloaded(download_job_id_, file_path,
+                                        dest_path);
+          });
 
   auto* io_box = new QGroupBox("Input Editor");
   auto* io_layout = new QVBoxLayout(io_box);
@@ -758,11 +851,79 @@ void MoosePanel::on_submit_job() {
 }
 
 void MoosePanel::on_refresh_job() {
-  if (last_job_id_.isEmpty()) {
-    append_log("No submitted job in this session.");
+  const QString server = sim_server_->text().trimmed().isEmpty()
+                             ? sim_server_->placeholderText()
+                             : sim_server_->text().trimmed();
+  sim_client_->set_base_url(server);
+  if (!last_job_id_.isEmpty()) {
+    sim_client_->fetch_job(last_job_id_);
+  }
+  // 同时拉取任务摘要列表：历史会话提交的作业也能登记进作业列表，
+  // 而不是只跟踪本次会话的最后一个 job_id。
+  const QString project = sim_project_->text().trimmed().isEmpty()
+                              ? sim_project_->placeholderText()
+                              : sim_project_->text().trimmed();
+  append_log("Refreshing remote job list from " + server +
+             " (project: " + project + ")");
+  sim_client_->fetch_jobs(project, 50);
+}
+
+namespace {
+QString current_server_text(QLineEdit* field) {
+  if (!field) {
+    return QString();
+  }
+  return field->text().trimmed().isEmpty() ? field->placeholderText()
+                                           : field->text().trimmed();
+}
+}  // namespace
+
+void MoosePanel::refresh_job_execution(const QString& job_id) {
+  if (job_id.isEmpty()) {
     return;
   }
-  sim_client_->fetch_job(last_job_id_);
+  sim_client_->set_base_url(current_server_text(sim_server_));
+  sim_client_->fetch_execution_status(job_id);
+}
+
+void MoosePanel::refresh_job_files(const QString& job_id) {
+  if (job_id.isEmpty()) {
+    return;
+  }
+  sim_client_->set_base_url(current_server_text(sim_server_));
+  sim_client_->fetch_job_files(job_id);
+}
+
+void MoosePanel::request_job_log(const QString& job_id) {
+  if (job_id.isEmpty()) {
+    return;
+  }
+  sim_client_->set_base_url(current_server_text(sim_server_));
+  log_job_id_ = job_id;
+  append_log("Fetching remote job log: " + job_id);
+  sim_client_->fetch_job_log(job_id, 400);
+}
+
+void MoosePanel::request_cancel_job(const QString& job_id) {
+  if (job_id.isEmpty()) {
+    return;
+  }
+  sim_client_->set_base_url(current_server_text(sim_server_));
+  append_log("Requesting remote job cancel: " + job_id);
+  gmp::log_operation("job", "Remote job cancel requested: " + job_id);
+  sim_client_->cancel_job(job_id);
+}
+
+void MoosePanel::download_remote_file(const QString& job_id,
+                                      const QString& file_path,
+                                      const QString& dest_path) {
+  if (job_id.isEmpty() || file_path.isEmpty() || dest_path.isEmpty()) {
+    return;
+  }
+  sim_client_->set_base_url(current_server_text(sim_server_));
+  download_job_id_ = job_id;
+  append_log(QString("Downloading %1 from %2").arg(file_path, job_id));
+  sim_client_->download_job_file(job_id, file_path, dest_path);
 }
 
 void MoosePanel::on_sim_submit_finished(bool ok, const QJsonObject& body,
@@ -776,6 +937,25 @@ void MoosePanel::on_sim_submit_finished(bool ok, const QJsonObject& body,
   const QString state = body.value("state").toString();
   sim_status_label_->setText(last_job_id_ + " : " + state);
   append_log("Job submitted: " + last_job_id_ + " state=" + state);
+  gmp::log_operation("job", QString("Remote job submitted: %1 state=%2")
+                                .arg(last_job_id_, state));
+  // 登记到 Jobs 树/作业列表由主窗口统一处理。
+  QVariantMap info;
+  info.insert("event", "submitted");
+  info.insert("job_id", last_job_id_);
+  info.insert("state", state);
+  info.insert("server", sim_server_ ? (sim_server_->text().trimmed().isEmpty()
+                                           ? sim_server_->placeholderText()
+                                           : sim_server_->text().trimmed())
+                                    : QString());
+  info.insert("project", sim_project_ ? (sim_project_->text().trimmed().isEmpty()
+                                             ? sim_project_->placeholderText()
+                                             : sim_project_->text().trimmed())
+                                      : QString());
+  info.insert("snapshot", last_snapshot_dir_);
+  info.insert("submit_time",
+              QDateTime::currentDateTime().toString(Qt::ISODate));
+  emit remote_job_event(info);
 }
 
 void MoosePanel::on_sim_job_fetched(bool ok, const QJsonObject& body,
@@ -786,6 +966,7 @@ void MoosePanel::on_sim_job_fetched(bool ok, const QJsonObject& body,
   }
   const QString state = body.value("state").toString();
   QString text = last_job_id_ + " : " + state;
+  QString progress_text;
   const QJsonObject progress = body.value("progress").toObject();
   if (!progress.isEmpty()) {
     QStringList parts;
@@ -810,11 +991,19 @@ void MoosePanel::on_sim_job_fetched(bool ok, const QJsonObject& body,
       parts << time;
     }
     if (!parts.isEmpty()) {
-      text += "  (" + parts.join(", ") + ")";
+      progress_text = parts.join(", ");
+      text += "  (" + progress_text + ")";
     }
   }
   sim_status_label_->setText(text);
   append_log("Job status: " + text);
+  gmp::log_operation("job", "Remote job status: " + text);
+  QVariantMap info;
+  info.insert("event", "status");
+  info.insert("job_id", last_job_id_);
+  info.insert("state", state);
+  info.insert("progress", progress_text);
+  emit remote_job_event(info);
   if (state == "failed") {
     const QJsonObject failure = body.value("failure").toObject();
     append_log("  failure: " + failure.value("code").toString() + " - " +
