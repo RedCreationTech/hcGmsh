@@ -878,6 +878,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             results_navigation_tree_->setCurrentItem(item);
             QMenu menu(this);
             build_results_navigation_menu(&menu, item);
+            l10n::apply(&menu);
             if (!menu.isEmpty()) {
               menu.exec(results_navigation_tree_->viewport()->mapToGlobal(pos));
             }
@@ -1017,6 +1018,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   addDockWidget(Qt::RightDockWidgetArea, module_work_window_);
   module_work_window_->setFloating(true);
   module_work_window_->setAllowedAreas(Qt::NoDockWidgetArea);
+  // 双击标题栏会切换 floating；工作窗不允许停靠（NoDockWidgetArea），
+  // 直接进入非法吸附态（贴边小窗）。统一守卫：一律保持浮动。
+  connect(module_work_window_, &QDockWidget::topLevelChanged, this,
+          [this](bool floating) {
+            if (!floating && module_work_window_) {
+              module_work_window_->setFloating(true);
+            }
+          });
 
   auto* property_panel = new QFrame(module_work_window_);
   property_panel->setObjectName("propertyPanel");
@@ -1052,6 +1061,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     addDockWidget(Qt::RightDockWidgetArea, workspace);
     workspace->setFloating(true);
     workspace->setAllowedAreas(Qt::NoDockWidgetArea);
+    // 双击标题栏守卫：无停靠区工作窗一律保持浮动，避免非法吸附态。
+    connect(workspace, &QDockWidget::topLevelChanged, workspace,
+            [workspace](bool floating) {
+              if (!floating) {
+                workspace->setFloating(true);
+              }
+            });
     workspace->hide();
     if (view_menu_) {
       auto* toggle = workspace->toggleViewAction();
@@ -4143,6 +4159,11 @@ void MainWindow::reset_tool_group_layout(bool show_feedback) {
   // v2 的 Display Group 是 QDockWidget，不能恢复到当前 QToolBar 类型。
   settings.remove("ui/layout/v2");
   settings.remove("ui/layout/v3");
+  // V-03 全量复位：主窗口几何、分割条、各工作窗几何/可见性一并清除，
+  // 下次启动也回到预置布局（布局键均带版本号，损坏时 restore 失败即
+  // 落回默认，无需逐键校验）。
+  settings.remove("ui/layout/v1");
+  settings.remove("ui/layout/v6");
 
   const QStringList toolbar_names = {
       "projectToolGroup", "editToolGroup", "modelToolGroup",
@@ -4165,10 +4186,36 @@ void MainWindow::reset_tool_group_layout(bool show_feedback) {
     QTimer::singleShot(0, this,
                        &MainWindow::position_default_display_group);
   }
+  // 左栏与底部区回到预置比例（与启动默认值一致）。
+  if (main_split_) {
+    const int left_w = qBound(250, int(width() * 0.22), 340);
+    const int center_w = std::max(480, width() - left_w);
+    main_split_->setSizes({left_w, center_w});
+  }
+  if (vertical_split_) {
+    const int h = std::max(400, height());
+    vertical_split_->setSizes({h * 4 / 5, h / 5});
+  }
+  // 各独立工作窗回到默认尺寸并隐藏；位置经公共越界恢复夹取。
+  const QList<QPair<QDockWidget*, QSize>> workspaces = {
+      {module_work_window_, QSize(760, 700)},
+      {mesh_work_window_, QSize(960, 720)},
+      {job_work_window_, QSize(900, 720)},
+      {visualization_work_window_, QSize(720, 740)},
+      {results_work_window_, QSize(900, 720)}};
+  for (const auto& entry : workspaces) {
+    if (!entry.first) {
+      continue;
+    }
+    entry.first->resize(entry.second);
+    clamp_window_to_screen(entry.first);
+    entry.first->hide();
+  }
   QTimer::singleShot(0, this, &MainWindow::recover_floating_tool_groups);
   if (show_feedback) {
-    statusBar()->showMessage("Tool layout reset to default.", 2500);
+    statusBar()->showMessage("Layout reset to default.", 2500);
   }
+  gmp::log_operation("ui", "Layout reset to default.");
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -6870,6 +6917,12 @@ QDockWidget* MainWindow::create_results_compare_window() {
   addDockWidget(Qt::RightDockWidgetArea, window);
   window->setFloating(true);
   window->setAllowedAreas(Qt::NoDockWidgetArea);
+  connect(window, &QDockWidget::topLevelChanged, window,
+          [window](bool floating) {
+            if (!floating) {
+              window->setFloating(true);
+            }
+          });
 
   auto* content = new QWidget(window);
   auto* layout = new QVBoxLayout(content);
@@ -6997,6 +7050,8 @@ QDockWidget* MainWindow::create_results_compare_window() {
 
   populate_results_compare_list(list);
   results_compare_windows_.append(window);
+  // 对比窗口按需创建，启动期整窗翻译覆盖不到，单独应用一次。
+  l10n::apply(content);
   window->show();
   window->raise();
   window->activateWindow();
@@ -7688,6 +7743,11 @@ void MainWindow::refresh_job_table() {
   if (!job_table_) {
     return;
   }
+  // 重建前记录选中作业：刷新（手动/自动）不得丢失用户选中和右侧详情。
+  const QString selected_name =
+      job_table_->currentRow() >= 0 && job_table_->item(job_table_->currentRow(), 0)
+          ? job_table_->item(job_table_->currentRow(), 0)->text()
+          : (!selected_job_id_.isEmpty() ? selected_job_id_ : QString());
   job_table_->setRowCount(0);
   if (job_detail_) {
     job_detail_->clear();
@@ -7712,6 +7772,44 @@ void MainWindow::refresh_job_table() {
       continue;
     }
     append_job_row(child->text(0), params);
+  }
+  // 恢复选中行：阻塞信号避免重复触发网络拉取，仅同步选中状态与详情文本。
+  if (selected_name.isEmpty()) {
+    return;
+  }
+  for (int row = 0; row < job_table_->rowCount(); ++row) {
+    auto* cell = job_table_->item(row, 0);
+    if (!cell || cell->text() != selected_name) {
+      continue;
+    }
+    {
+      const QSignalBlocker blocker(job_table_);
+      job_table_->setCurrentCell(row, 0);
+    }
+    const QVariantMap params = cell->data(Qt::UserRole).toMap();
+    selected_job_id_ = params.value("job_id").toString();
+    selected_job_remote_ =
+        params.value("remote").toBool() && !selected_job_id_.isEmpty();
+    const QString status = params.value("status").toString();
+    selected_job_running_ = selected_job_remote_ &&
+                            (status == "Queued" || status == "Running");
+    if (job_cancel_button_) {
+      job_cancel_button_->setEnabled(selected_job_running_);
+    }
+    if (job_detail_stack_ && job_detail_stack_->currentIndex() == 0 &&
+        !selected_name.isEmpty()) {
+      // 此前因重建被打回占位页的，恢复详情页。
+      job_detail_stack_->setCurrentIndex(1);
+    }
+    if (job_detail_title_) {
+      const QString case_name = params.value("case").toString();
+      job_detail_title_->setText(
+          case_name.isEmpty()
+              ? QString("%1 — %2").arg(selected_name, status)
+              : QString("%1 · %2 — %3").arg(selected_name, case_name, status));
+    }
+    update_job_detail(row);
+    break;
   }
 }
 
@@ -7739,13 +7837,13 @@ void MainWindow::update_job_row(int row, const QString& name,
     item->setText(text);
   };
   set_item(0, name);
-  set_item(1, params.value("status").toString());
+  set_item(1, l10n::tr(params.value("status").toString()));
   set_item(2, params.value("case").toString());
   set_item(3, params.value("progress").toString());
   set_item(4, params.value("start_time").toString());
   set_item(5, params.value("duration").toString());
-  set_item(6, params.value("remote").toBool() ? QString("Remote")
-                                              : QString("Local"));
+  set_item(6, l10n::tr(params.value("remote").toBool() ? QString("Remote")
+                                                       : QString("Local")));
   set_item(7, params.value("exec").toString());
   set_item(8, params.value("exodus").toString());
   if (auto* item = job_table_->item(row, 0)) {
@@ -10042,6 +10140,14 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       throw std::runtime_error("I-04 workspace out-of-bounds recovery contract failed");
                     }
                   }
+                  // Module Workspace 同样适用浮动守卫。
+                  if (module_work_window_) {
+                    module_work_window_->setFloating(false);
+                    qApp->processEvents();
+                    if (!module_work_window_->isFloating()) {
+                      throw std::runtime_error("I-04 module workspace floating guard failed");
+                    }
+                  }
                 },
                 results_work_window_});
   steps.append({"i04_results_compare_windows",
@@ -10393,6 +10499,13 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       job_files_table_->item(0, 4)->text() != "yes") {
                     throw std::runtime_error("Job monitor artifacts contract failed");
                   }
+                  // 列表刷新（手动/自动）不得丢失选中与右侧详情。
+                  refresh_job_table();
+                  if (selected_job_id_ != job_id ||
+                      job_detail_stack_->currentIndex() != 1 ||
+                      job_table_->currentRow() < 0) {
+                    throw std::runtime_error("Job monitor refresh selection contract failed");
+                  }
                   // 状态筛选：Running 含该作业，Failed 不含。
                   auto has_job = [this, job_id]() {
                     for (int row = 0; row < job_table_->rowCount(); ++row) {
@@ -10539,6 +10652,142 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         !texts.contains("Rename") ||
                         !texts.contains("Remove")) {
                       throw std::runtime_error("Jobs child menu contract failed");
+                    }
+                  }
+                },
+                this});
+  steps.append({"v01_visual_contracts",
+                [this]() {
+                  // V-01 视觉合同：舞台左栏与顶部工具组图标按钮
+                  // 尺寸/热区/Tooltip；禁止字母占位。
+                  if (!stage_left_toolbar_) {
+                    throw std::runtime_error("V-01 stage toolbar fixture is missing");
+                  }
+                  const auto stage_buttons =
+                      stage_left_toolbar_->findChildren<QToolButton*>();
+                  if (stage_buttons.size() < 4) {
+                    throw std::runtime_error("V-01 stage toolbar buttons are missing");
+                  }
+                  for (auto* button : stage_buttons) {
+                    const QSize size = button->size();
+                    const QSize icon = button->iconSize();
+                    if (size.width() < 28 || size.height() < 28 ||
+                        icon.width() < 16 || icon.width() > 20 ||
+                        button->toolTip().trimmed().isEmpty()) {
+                      throw std::runtime_error("V-01 stage toolbar icon contract failed");
+                    }
+                  }
+                  const QStringList groups = {"projectToolGroup",
+                                              "editToolGroup",
+                                              "modelToolGroup",
+                                              "meshToolGroup",
+                                              "jobToolGroup"};
+                  int group_buttons = 0;
+                  for (const QString& name : groups) {
+                    auto* group = findChild<QToolBar*>(name);
+                    if (!group) {
+                      throw std::runtime_error("V-01 tool group is missing");
+                    }
+                    const QSize icon = group->iconSize();
+                    if (icon.width() < 16 || icon.width() > 20) {
+                      throw std::runtime_error("V-01 tool group icon size contract failed");
+                    }
+                    for (auto* button :
+                         group->findChildren<QToolButton*>()) {
+                      // 跳过工具栏溢出扩展按钮（Qt 内建，无业务 Tooltip）。
+                      if (button->objectName() == "qt_toolbar_ext_button") {
+                        continue;
+                      }
+                      ++group_buttons;
+                      // 图标按钮必须带 Tooltip（功能名/快捷键）；
+                      // 不得退化为单字母占位。
+                      const QString text = button->text().trimmed();
+                      if (button->toolTip().trimmed().isEmpty() ||
+                          (button->icon().isNull() && text.size() <= 2)) {
+                        throw std::runtime_error(
+                            QString("V-01 tool button contract failed: "
+                                    "group=%1 text='%2' tooltip='%3' "
+                                    "objectName=%4 hasIcon=%5")
+                                .arg(name, text, button->toolTip(),
+                                     button->objectName())
+                                .arg(!button->icon().isNull())
+                                .toStdString());
+                      }
+                    }
+                  }
+                  if (group_buttons < 5) {
+                    throw std::runtime_error("V-01 tool group buttons are missing");
+                  }
+                },
+                stage_left_toolbar_});
+  steps.append({"v02_l10n_round_trip",
+                [this]() {
+                  // V-02 国际化：中/英往返切换，既有菜单与本轮新增字符串
+                  // 都必须完整跟随，且不破坏数据内容。
+                  auto* file_menu = findChild<QMenu*>("fileMenu");
+                  auto* import_btn =
+                      findChild<QPushButton*>("resultsImportFile");
+                  if (!file_menu || !import_btn || !job_state_filter_) {
+                    throw std::runtime_error("V-02 l10n fixture is missing");
+                  }
+                  l10n::set_language(l10n::Language::Chinese);
+                  l10n::apply(this);
+                  if (!file_menu->title().contains("文件") ||
+                      import_btn->text() != "导入结果文件..." ||
+                      job_state_filter_->itemText(1) != "排队中" ||
+                      job_state_filter_->itemText(2) != "运行中") {
+                    throw std::runtime_error("V-02 zh translation contract failed");
+                  }
+                  l10n::set_language(l10n::Language::English);
+                  l10n::apply(this);
+                  if (!file_menu->title().contains("File") ||
+                      import_btn->text() != "Import Result File..." ||
+                      job_state_filter_->itemText(1) != "Queued" ||
+                      job_state_filter_->itemText(2) != "Running") {
+                    throw std::runtime_error("V-02 en translation contract failed");
+                  }
+                  l10n::set_language(l10n::Language::Chinese);
+                  l10n::apply(this);
+                  if (!file_menu->title().contains("文件") ||
+                      import_btn->text() != "导入结果文件...") {
+                    throw std::runtime_error("V-02 restore translation contract failed");
+                  }
+                },
+                this});
+  steps.append({"v03_layout_reset",
+                [this]() {
+                  // V-03 恢复默认布局：工具组、左栏、底部区与工作窗
+                  // 全部回到预置状态。
+                  if (!main_split_ || !vertical_split_ ||
+                      !action_reset_tool_layout_ || !job_work_window_) {
+                    throw std::runtime_error("V-03 layout fixture is missing");
+                  }
+                  main_split_->setSizes({600, 300});
+                  vertical_split_->setSizes({100, 900});
+                  job_work_window_->show();
+                  action_reset_tool_layout_->trigger();
+                  qApp->processEvents();
+                  const QList<int> main_sizes = main_split_->sizes();
+                  const QList<int> vert_sizes = vertical_split_->sizes();
+                  const int left_w = qBound(250, int(width() * 0.22), 340);
+                  if (main_sizes.size() != 2 ||
+                      qAbs(main_sizes.at(0) - left_w) > 8 ||
+                      vert_sizes.size() != 2 ||
+                      vert_sizes.at(0) <= vert_sizes.at(1) * 2 ||
+                      job_work_window_->isVisible()) {
+                    throw std::runtime_error("V-03 layout reset contract failed");
+                  }
+                  const QStringList groups = {"projectToolGroup",
+                                              "editToolGroup",
+                                              "modelToolGroup",
+                                              "meshToolGroup",
+                                              "jobToolGroup"};
+                  for (const QString& name : groups) {
+                    auto* toolbar = findChild<QToolBar*>(name);
+                    if (!toolbar || !toolbar->isVisible() ||
+                        toolbar->orientation() != Qt::Horizontal ||
+                        toolbar->isFloating()) {
+                      throw std::runtime_error("V-03 toolbar reset contract failed");
                     }
                   }
                 },

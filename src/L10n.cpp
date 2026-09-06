@@ -612,6 +612,53 @@ const QHash<QString, QString>& zh_dict() {
       {"Sketch Module", "草图模块"},
       {"Visualization Module", "可视化模块"},
       {"Results Module", "结果模块"},
+      // ===== I-04 工作窗 / 对比窗 =====
+      {"Mesh Workspace", "网格工作区"},
+      {"New Comparison Window", "新建对比窗口"},
+      {"Open an additional results window for side-by-side comparison.",
+       "打开一个额外的结果窗口用于并排对比。"},
+      {"Result comparison — select an item to preview it, or load it on "
+       "stage with Focus Viewport. Closing this window does not unload "
+       "stage results or affect other results windows.",
+       "结果对比——选择条目以预览，或用“聚焦视口”载入舞台。关闭本窗口不会"
+       "卸载舞台结果，也不影响其他结果窗口。"},
+      {"Mesh generation runs in an independent non-modal window. Closing "
+       "the window does not interrupt an active generation task.",
+       "网格生成在独立非模态窗口中运行。关闭窗口不会中断正在进行的生成任务。"},
+      // ===== 作业监控 =====
+      {"State:", "状态:"},
+      {"Queued", "排队中"},
+      {"Running", "运行中"},
+      {"Completed", "已完成"},
+      {"Failed", "失败"},
+      {"Canceled", "已取消"},
+      {"Auto (5s)", "自动 (5s)"},
+      {"Case", "算例"},
+      {"Progress", "进度"},
+      {"Execution Details", "运行状态详情"},
+      {"Artifacts", "制品"},
+      {"Local Job", "本地作业"},
+      {"Local job details.", "本地作业详情。"},
+      {"Refresh Files", "刷新文件"},
+      {"Download Selected", "下载选中"},
+      {"Snapshot", "快照"},
+      {"PID", "进程 PID"},
+      {"CPU", "CPU 占用"},
+      {"Memory", "内存占用"},
+      {"dt", "时间步长 dt"},
+      {"Phy. Time", "物理时间"},
+      {"Converged", "已收敛步数"},
+      {"Avg Step", "平均步耗时"},
+      {"Elapsed", "整体时间"},
+      {"ETA", "预计剩余"},
+      {"Heartbeat", "心跳时间"},
+      {"Health", "健康状态"},
+      {"Cancel", "取消"},
+      // ===== 结果导入 / 导航菜单 / 其他 =====
+      {"Import Result File...", "导入结果文件..."},
+      {"Open Operation Log Folder", "打开操作日志目录"},
+      {"Refresh Remote Jobs", "刷新远程作业"},
+      {"Copy Path", "复制路径"},
   };
   return dict;
 }
@@ -784,6 +831,10 @@ void apply(QWidget* root) {
       m->setTitle(translate_text(m->title(), lang));
     }
   }
+}
+
+QString tr(const QString& text) {
+  return translate_text(text, current_language());
 }
 
 }  // namespace l10n

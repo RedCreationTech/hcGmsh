@@ -16,6 +16,9 @@ void set_language(Language lang);
 // (按钮/标签/复选框/分组框/页签/菜单/动作/下拉项/列表项/表头/占位符等;
 //  未收录的文本保持原样; 动态拼接串按前缀表仅译前缀)
 void apply(QWidget* root);
+// 按当前语言翻译单条文本（用于表格单元格、动态标题等 apply 覆盖不到的
+// 动态内容；未收录的文本保持原样）。
+QString tr(const QString& text);
 
 }  // namespace l10n
 }  // namespace gmp
