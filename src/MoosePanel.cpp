@@ -90,15 +90,11 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   input_layout->setContentsMargins(8, 8, 8, 8);
   input_layout->setSpacing(8);
 
-  auto* log_page = new QWidget();
-  auto* log_layout = new QVBoxLayout(log_page);
-  log_layout->setContentsMargins(8, 8, 8, 8);
-  log_layout->setSpacing(8);
-
+  // 弹窗精简：MOOSE 运行日志统一外移到主窗口 Console（append_log 实时
+  // 镜像），面板不再内嵌日志页签；log_ 保留为隐藏存储供日志对话框使用。
   workspace_tabs->addTab(setup_page, "Case Setup");
   workspace_tabs->addTab(execution_page, "Execution");
   workspace_tabs->addTab(input_page, "Input");
-  workspace_tabs->addTab(log_page, "Log");
 
   auto* paths_box = new QGroupBox("Paths");
   auto* paths_form = new QFormLayout(paths_box);
@@ -379,9 +375,9 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
 
   input_layout->addWidget(io_box, 1);
 
-  log_ = new QPlainTextEdit();
+  log_ = new QPlainTextEdit(this);
   log_->setReadOnly(true);
-  log_layout->addWidget(log_, 1);
+  log_->hide();
 
   layout->addWidget(workspace_tabs, 1);
 
@@ -511,6 +507,8 @@ void MoosePanel::append_log(const QString& text) {
   if (log_) {
     log_->appendPlainText(text);
   }
+  // 日志统一出口：实时镜像到主窗口 Console 与操作日志文件。
+  gmp::log_operation("moose", text);
 }
 
 void MoosePanel::handle_output(const QString& text) {

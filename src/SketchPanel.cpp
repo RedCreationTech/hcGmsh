@@ -53,7 +53,7 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
       new QLabel("Current entries:", management_box_));
   list_ = new QListWidget(management_box_);
   list_->setSelectionMode(QAbstractItemView::SingleSelection);
-  list_->setMinimumHeight(120);
+  list_->setMinimumHeight(90);
   list_->setAlternatingRowColors(true);
   list_->setToolTip("Double click a sketch to open the 2D editor.");
   management_layout->addWidget(list_);

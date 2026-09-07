@@ -57,11 +57,19 @@ class MainWindow : public QMainWindow {
 
  protected:
   void closeEvent(QCloseEvent* event) override;
+  void resizeEvent(QResizeEvent* event) override;
   bool eventFilter(QObject* watched, QEvent* event) override;
 
  private:
   void build_menu();
   void build_toolbar();
+  // 创建并接线一个工具组（顶部停靠、紧凑尺寸、浮动恢复）；复位时
+  // 也用同一入口重建被拖出的工具组。
+  QToolBar* make_tool_group(const QString& title, const QString& object_name);
+  // 受控浮动/停靠（setParent(Qt::Tool) 路径，与 Qt 原生拖出浮动完全
+  // 隔离；Qt 原生浮动在 macOS 上不可靠已禁用）。View → Toolbars →
+  // Float Group 菜单触发；复位时浮动态组走重建兜底回顶部。
+  void toggle_group_float(const QString& object_name, bool floating);
   void build_model_tree();
   void apply_theme();
   void reset_tool_group_layout(bool show_feedback = true);
@@ -161,6 +169,9 @@ class MainWindow : public QMainWindow {
   // 工作窗公共越界恢复：按窗口中心定位屏幕，尺寸与位置夹取到可用区域。
   // 所有独立工作窗（Mesh/Job/Visualization/Results/对比窗）复用同一规则。
   void clamp_window_to_screen(QWidget* window);
+  // macOS 自愈：浮动窗口真实拖拽（OS 级拖拽会话）后，工具条区域可能
+  // 不再重排/重绘。用 1px 抖动触发整窗原生重排，恢复工具条渲染。
+  void force_native_relayout();
   void remember_active_object_for_module(int module_index);
   void restore_active_object_for_module(int module_index);
   void sync_active_ui_context();

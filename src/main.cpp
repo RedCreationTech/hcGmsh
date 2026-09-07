@@ -14,6 +14,7 @@
 
 #include "gmp/MainWindow.h"
 #include "gmp/Env.h"
+#include "gmp/ComboPopupFix.h"
 #include "gmp/OperationLog.h"
 
 int main(int argc, char** argv) {
@@ -21,6 +22,9 @@ int main(int argc, char** argv) {
   QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
 #endif
   QApplication app(argc, argv);
+
+  // 全局下拉框滚轮拦截：选项只能通过展开下拉点选切换。
+  gmp::install_combo_wheel_block(&app);
 
   // 操作日志必须先于一切业务初始化，保证启动期错误也留痕。
   gmp::init_operation_log();

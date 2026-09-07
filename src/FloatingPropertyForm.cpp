@@ -67,7 +67,7 @@ FloatingPropertyForm::FloatingPropertyForm(
   setModal(true);
   setAttribute(Qt::WA_DeleteOnClose);
   setWindowFlag(Qt::WindowContextHelpButtonHint, false);
-  setMinimumSize(620, 560);
+  setMinimumSize(560, 420);
 
   const QString kind = target
                            ? target->data(0, PropertyEditor::kKindRole).toString()

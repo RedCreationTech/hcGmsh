@@ -12,6 +12,8 @@
 
 #include <QGuiApplication>
 #include <QComboBox>
+#include <QAbstractSpinBox>
+#include <QApplication>
 #include <QPointer>
 #include <QSize>
 #include <QTimer>
@@ -209,6 +211,41 @@ void install_combo_popup_fix(QComboBox* combo) {
   combo->setView(view);
   auto* popup = new ComboPopupFixer(combo);
   popup->ensure_filter();
+}
+
+
+
+namespace {
+
+class ComboWheelBlocker : public QObject {
+ public:
+  explicit ComboWheelBlocker(QApplication* app) : QObject(app) {
+    if (app) {
+      app->installEventFilter(this);
+    }
+  }
+
+ protected:
+  bool eventFilter(QObject* obj, QEvent* event) override {
+    // 拦截投给 QComboBox / QAbstractSpinBox（QSpinBox、QDoubleSpinBox）
+    // 本体的滚轮；下拉弹窗视图是独立顶层窗口，其滚轮事件不经此处，
+    // 展开后的列表滚动不受影响。数值与选项只能通过键盘输入、
+    // 上下按键或下拉点选修改，避免滚动页面时误改。
+    if (event->type() == QEvent::Wheel &&
+        (qobject_cast<QComboBox*>(obj) ||
+         qobject_cast<QAbstractSpinBox*>(obj))) {
+      return true;
+    }
+    return QObject::eventFilter(obj, event);
+  }
+};
+
+}  // namespace
+
+void install_combo_wheel_block(QApplication* app) {
+  // 单例安装；生命周期跟随 QApplication。
+  static ComboWheelBlocker* blocker = new ComboWheelBlocker(app);
+  Q_UNUSED(blocker);
 }
 
 }  // namespace gmp

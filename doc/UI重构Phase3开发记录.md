@@ -59,3 +59,96 @@
 - 最终回归基线：构建通过；CTest `1/1` 通过；真实点击 GUI 巡览 79 步全部通过。
 - 人工预验收中修复并关闭的缺陷：作业监控刷新丢失选中、工作窗双击标题栏非法吸附态。
 - 下一阶段：Phase 4（Abaqus 式前处理工作流闭环 W-01～W-07）。
+
+## 8. 弹窗内容整理：操作/输入/输出分离（2026-09-06）
+
+- 用户要求：弹窗精简，状态/日志类输出统一利用主窗口日志与状态区域联动。经计划评审后按“只外移输出、不重排操作/输入”实施。
+- 日志统一出口：`GmshPanel::append_log` 与 `MoosePanel::append_log` 实时镜像到主 Console（`gmp::log_operation("gmsh"/"moose", ...)`，带时间戳与分类）并落操作日志文件；Gmsh “Log” 页签（5→4）与 MOOSE “Log” 子页（4→3）移除，`log_` 保留为隐藏存储供日志对话框使用。
+- Results 工作窗预览区改为可折叠（操作行 `Preview` 勾选按钮，默认折叠）；Mesh 工作窗默认尺寸 960×720 → 880×620。
+- 巡览合同同步更新（gmsh 4 页签 / moose 3 子页），新增第 80 步 `console_log_forwarding`：断言主 Console 含 `[op] gmsh` 镜像条目、Results 预览默认折叠且可切换。80 步全部通过，CTest `1/1` 通过。
+- 用户手册与 ui-style-guide 同步：新增“输出归属规则”（日志/状态统一进主 Console 与状态栏，弹窗不内嵌日志页）。
+
+## 9. 下拉框滚轮误改统一拦截（2026-09-06）
+
+- 用户反馈：所有下拉选项会响应鼠标滚轮上下调整选中值，滚动页面时极易误改。要求统一取消滚轮监听，只能展开下拉点选切换。
+- 实现：新增 `install_combo_wheel_block(QApplication*)`（`src/ComboPopupFix.cpp` 的 `ComboWheelBlocker` 应用级事件过滤器），在 `main()` 启动时安装一次；只拦截投给 QComboBox 本体的 `QEvent::Wheel`，弹窗列表是独立顶层窗口、滚轮滚动不受影响；生命周期跟随 QApplication。
+- 巡览新增第 81 步 `combo_wheel_block`：向作业状态筛选下拉投递滚轮事件，断言选中项不变。81 步全部通过，CTest `1/1` 通过。
+- 追加（同日）：用户确认后把拦截范围扩展到 QAbstractSpinBox（QSpinBox/QDoubleSpinBox），数值只能通过键盘输入或上下按键修改；巡览 `combo_wheel_block` 步骤同步覆盖下拉框与微调框两类断言。
+
+## 10. 弹窗密度二轮收紧（2026-09-06）
+
+- 用户反馈：弹窗整体仍不够紧凑，按钮偏大偏生硬，列表区块为空也占大面积。做一轮全局密度收紧：
+  - 主题度量：QPushButton 22 px 高/padding 3×9/圆角 3 px，QComboBox 22 px，页签 22 px（视口二级 18 px），GroupBox margin 8/padding 4，树条目 padding 3×6。
+  - 列表最小高：结果/对比列表 140→96，制品表 120→90，不再为空白预留大区块。
+  - 工作窗默认尺寸全面收紧：Job 880×640、Mesh 800×560、Visualization 700×620、Results 760×520、Module 720×620、对比窗 600×460；独立工作窗最小尺寸 560×500 → 520×420。
+- `doc/ui-style-guide.md` 度量 tokens 同步更新；81 步巡览全部通过，CTest `1/1` 通过。
+- 说明：窗口几何记忆优先于新默认尺寸；需“恢复默认布局”后才能看到全部收紧效果。
+
+## 11. 工作窗默认与最小尺寸二轮收紧（2026-09-06）
+
+- 用户复验后反馈默认仍偏大、拖动缩小受最小高度限制。继续收紧：
+  - 默认尺寸：Job 820×560、Mesh 760×520、Visualization 660×540、Results 640×400、Module 680×560、对比窗 560×400。
+  - 最小尺寸：独立工作窗 400×240、Module Workspace 620×400（宽保持 ≥620 合同）、浮动属性表单 560×420、对比窗 400×260；模块页列表 180→120、草图列表/物理组表 120→90。
+- `doc/ui-style-guide.md` 同步；81 步巡览全部通过，CTest `1/1` 通过。
+
+## 12. 主窗口最大化后右下角空白修复（2026-09-06）
+
+- 用户反馈：主窗口较小时双击标题栏最大化，右下角出现空白，中央区域未跟随展开。本地程序化复现（resize 小窗 → showMaximized）中央区域正常充满，无法直接重现用户现场；排查确认两类可能成因：
+  1. 历史 `saveState` blob 把工作窗恢复为 docked 状态后，QMainWindow 为其保留右/底部停靠区，窗口放大后形成右/下空白条带（用户配置中确实存在一段无法解析的旧 `main_window_state`）。
+  2. 小窗→最大化/跨屏缩放（含 VTK 原生 GL 子控件、多屏 DPI 切换）时布局未及时重算的几何滞留。
+- 防御修复：启动恢复布局后强制五个工作窗全部 `setFloating(true)`（浮动专用合同，杜绝停靠区保留）；新增 `MainWindow::resizeEvent`，窗口尺寸变化时显式触发中央区域 `updateGeometry()` 与舞台重绘。
+- 巡览新增第 82 步 `main_window_maximize_expands`：小窗 → 最大化后断言中央控件充满窗口（支持 `GMP_TOUR_MAXIMIZE_ONLY=1` 独立执行）。82 步全部通过，CTest `1/1` 通过。
+- 若用户现场仍复现，需进一步信息：是否多屏/DPI 混合、“恢复默认布局”后是否消失、复现时是否有工作窗处于打开状态。
+
+## 13. Display Group 默认改为顶部停靠（2026-09-06）
+
+- 用户反馈：Display Group（显示/隐藏/隔离组）默认以浮动小窗悬停舞台，要求默认吸附进工具栏。调整：启动默认路径不再调用舞台右上角浮动预置（`make_group` 创建即停靠顶部工具区）；“恢复默认布局”同步改为顶部停靠；用户手动拖出浮动的布局仍由 saveState 恢复、不强制拉回。
+- 巡览合同更新：`l05_tool_group_layout_contract` 与 `l05_display_group_default` 改为断言“默认停靠顶部工具组区域且非浮动”；82 步全部通过，CTest `1/1` 通过。
+
+## 14. 恢复布局与工作窗切换的工具栏异常排查（2026-09-07）
+
+- 用户反馈：①“恢复默认布局”后 Display Group 未与其他五个工具组一起显示；②切换各 Workspace 菜单项后工具栏整行消失。
+- 在巡览中注入诊断步骤精确复现（含“显示组先浮动再复位”变体），当前构建下：复位后六个工具组全部 `visible=1, floating=0, area=TopToolBarArea`；模块/作业工作窗 toggle 开关不影响工具栏——无法复现两项异常。排查期间同步把复位逻辑统一为六个工具组同一循环（显示组与五组共用 removeToolBar → setParent(Qt::Widget) → addToolBar(Top) → show 路径）。
+- 推断：用户现场状态来自改动前的旧布局记忆（其布局配置此后已被多次干净状态覆盖）。诊断代码已移除；82 步巡览全部通过，CTest `1/1` 通过。若用户用当前构建重启后仍复现，需现场操作日志与布局配置快照继续定位。
+
+## 15. 工具栏异常二轮修复：窗口标志彻底复位 + 强制重绘（2026-09-07）
+
+- 用户补充精确复现：①默认顶部停靠后把“工具箱”拖出再点“恢复默认”，工具箱消失未回工具栏；②拖动任意弹出的工作窗后，顶部工具栏区域空白（高度保留、内容不绘）。
+- 诊断结论：状态层（visible/floating/area）在复现中全部正确，指向两类平台级问题——浮动工具栏窗口标志未彻底复位导致重停靠失败；macOS + 原生 GL 子控件下浮动窗拖过后工具条区域不重绘（状态对、像素空）。
+- 修复：复位时对每个工具组先 `setWindowFlags(Qt::Widget)` 再 `setParent(this)` 彻底清掉顶层窗口属性，之后统一 removeToolBar → addToolBar(Top) → setVisible(true)，并把每次复位的 before/after 状态写入操作日志；复位末尾与工作窗 topLevelChanged 守卫处强制工具条/中央区域重排重绘（`toolbar->update()` + `centralWidget()->updateGeometry()` + `update()`）。
+- 82 步巡览全部通过，CTest `1/1` 通过。
+
+## 16. 工具栏问题定位与修复确认（2026-09-07）
+
+- 用户操作日志（07:42 现场会话）证实：复位时 `displayToolGroup (was_floating=1, now area=4, floating=0, visible=1)`——**Qt 状态早已正确**，问题为 macOS 原生窗口重绘滞留；而用户当时运行的构建尚未包含重绘修复（该修复在后续构建中），因此报告“没生效”属构建滞后。
+- 重绘修复加强：`update()` 全部改为同步 `repaint()`（update 的异步合并可能丢弃）：复位末尾对六个工具组 + 主窗同步重绘；工作窗 topLevelChanged 守卫处对所有 gmpToolGroup 工具条同步重绘。
+- 独立场景验证（真实鼠标事件模拟，不经全量巡览）：`GMP_TOUR_TOOLBAR_SCENARIOS=1`（可叠加 `GMP_TOUR_STEP_FILTER=s1`/`s2` 单跑）。
+  - S1 显示组拖出 → 恢复默认：`floating=1 → floating=0, TopToolBarArea, visible=1`（通过）。
+  - S2 工作窗拖过工具条区域：六个工具组逐像素空白检测全部 `blank=0`（通过）。
+- 场景诊断代码保留于巡览中（环境变量门控，不影响默认 82 步基线）。
+
+## 17. 工具栏拖出后复位失效的根因与重建方案（2026-09-07）
+
+- 多轮探针定位：鼠标拖出的 QToolBar 是原生浮动顶层窗口，macOS 上 `addToolBar`/`removeToolBar`/`restoreState` 均无法将其可靠重停靠——得到“状态已停靠（floating=0、area=Top）但渲染仍漂在原位”的僵尸窗；用户手工拖回则走 Qt 原生投放路径所以有效。曾误入的弯路：setWindowFlags 强制复位（导致整行不渲染）、repaint/update（对僵尸态无效）、restoreState 回放（同样无法重插）。
+- 最终方案：`reset_tool_group_layout` 对每个处于浮动态的工具组**用同一份动作重建**——抽取 `make_tool_group()` 成员函数（创建+接线一次到位），重建时复制 iconSize/toolButtonStyle/actions、替换 View 菜单显隐开关、更新 `display_tool_group_` 成员指针，旧僵尸窗 hide+deleteLater。
+- 关键崩溃修复：显示组四个动作由 `QToolBar::addAction(text)` 创建、**归旧工具条所有**，重建转移后必须 `setParent(this)`，否则 `deleteLater` 旧工具条时动作被连带销毁，`update_command_availability()` 访问悬空 `action_stage_clear_` 段错误（崩溃栈已留存确认）。
+- 场景验证（真实鼠标事件模拟拖出）：S1 拖出→复位后 `floating=0, TopToolBarArea, visible=1` 且截图确认整行含显示组渲染；S2 工作窗拖过工具条区域无空白；82 步全量巡览通过，CTest `1/1` 通过。
+
+## 18. 工具栏异常收尾：浮动工具组重建 + macOS 自愈重排（2026-09-07）
+
+- 问题 1（显示组拖出后复位不回）：根因为 macOS 原生浮动顶层窗口无法被任何代码路径可靠重停靠。最终方案：`reset_tool_group_layout` 对浮动态工具组用 `make_tool_group()` 同动作重建，替换 View 菜单开关与成员指针；转移的动作先 `setParent(this)` 再销毁旧工具条，修复 `action_stage_clear_` 悬空崩溃（QToolBar::addAction 创建的动作归旧工具条所有）。
+- 问题 2（拖动部件工作窗后工具条区域空白/塌陷）：真实 OS 级拖拽会话后的原生重排/重绘失效，合成事件无法复现。采用自愈策略：`force_native_relayout()`（80ms 后 1px 高度抖动触发整窗原生重排），在复位末尾与任意浮动 QDockWidget 拖拽释放（应用级事件过滤）时触发。
+- 验证：S1/S2/S3 场景（真实鼠标事件模拟）全部通过；82 步全量巡览通过，CTest `1/1` 通过。
+
+## 19. 工具栏问题终结方案：禁用 Qt 原生拖出浮动（2026-09-07）
+
+- 用户持续复现：多个工具组拖出后复位布局错乱、随后整行消失。多轮探针确认根因是 macOS 上 QToolBar 原生浮动顶层窗口与 QMainWindow 工具条布局的系统性不兼容（僵尸窗、保留高度塌陷、原生层不合成），任何代码级重停靠/重绘手段都不可靠。决策：对六个工具组统一 `setFloatable(false)`，从根上消除该类 bug，不再打补丁。
+- 保留能力：工具组仍可在停靠区间拖动换位（`movable`、全停靠区域）、View 菜单显隐、布局记忆与“恢复默认布局”；复位路径中保留“浮动态→同动作重建”作为旧布局记忆残留浮动态的兼容兜底；工作窗（QDockWidget）浮动完全不受影响。
+- 放弃能力：六个工具组的“拖出成独立小窗”特性（macOS 上不可靠；Display Group 默认本已改为顶部停靠）。L-05 合同同步更新为 `isFloatable()==false` 断言。
+- 验证：S1 拖出后 `floating=0`、复位后顶部停靠可见（符合新合同）；S2/S3 通过；82 步全量巡览通过，CTest `1/1` 通过。
+
+## 20. 工具组受控浮动（2026-09-07）
+
+- 用户确认“禁原生浮动后工具栏问题全部解决”，但仍需要六组工具的浮动小窗能力。实现受控浮动：View → 工具栏 → Float Group 子菜单，六组各有勾选开关，路径为 `removeToolBar + setParent(Qt::Tool)`（与出问题的 Qt 原生拖出浮动完全隔离；Display Group 历史上一直使用的稳定路径）。浮出时层叠摆放在主窗右上方（96 + 组序×28），重停靠经复位验证可靠。
+- 勾选状态与手动停靠/复位双向同步；复位时浮动态组仍走“同动作重建”兜底回顶部；`recover_floating_tool_groups` 的越界夹取对受控浮动窗继续生效。Qt 原生拖出浮动保持禁用（floatable=false）。
+- 新增 S5 场景：两组受控浮出 → 浮动可见、动作停回 → 顶部停靠、再浮出 → 复位 → 全部回顶部可见；82 步全量巡览通过，CTest `1/1` 通过。

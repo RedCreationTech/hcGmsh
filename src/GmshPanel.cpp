@@ -112,12 +112,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   workspace_tabs->addTab(groups_page, "Groups & Fields");
 
   auto* mesh_layout = make_scrolled_page("Mesh", "gmshMeshPage");
-
-  auto* log_page = new QWidget();
-  auto* log_layout = new QVBoxLayout(log_page);
-  log_layout->setContentsMargins(8, 8, 8, 8);
-  log_layout->setSpacing(8);
-  workspace_tabs->addTab(log_page, "Log");
+  // 弹窗精简：Gmsh 运行日志统一外移到主窗口 Console（append_log 实时
+  // 镜像），面板不再内嵌日志页签；log_ 保留为隐藏存储供调试使用。
 
   auto add_scrolled_tool_tab = [](QTabWidget* tabs, QWidget* content,
                                   const QString& title,
@@ -554,7 +550,7 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
                                    QSizePolicy::Preferred);
   phys_group_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
   phys_group_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-  phys_group_table_->setMinimumHeight(120);
+  phys_group_table_->setMinimumHeight(90);
   connect(phys_group_table_, &QTableWidget::itemSelectionChanged, this,
           [this]() {
             if (!phys_group_table_ || phys_group_table_->selectedItems().isEmpty()) {
@@ -803,9 +799,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   mesh_layout->addLayout(generate_actions);
   mesh_layout->addStretch(1);
 
-  log_ = new QPlainTextEdit();
+  log_ = new QPlainTextEdit(this);
   log_->setReadOnly(true);
-  log_layout->addWidget(log_, 1);
+  log_->hide();
 
   tune_gmsh_combo(primitive_kind_, 90, 180);
   tune_gmsh_combo(transform_dim_, 90, 120);
@@ -3022,6 +3018,8 @@ void GmshPanel::append_log(const QString& text) {
   if (log_) {
     log_->appendPlainText(text);
   }
+  // 日志统一出口：实时镜像到主窗口 Console 与操作日志文件。
+  gmp::log_operation("gmsh", text);
 }
 
 }  // namespace gmp

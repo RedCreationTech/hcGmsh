@@ -34,6 +34,7 @@
 #include <QFormLayout>
 #include <QCheckBox>
 #include <QProgressBar>
+#include <QDoubleSpinBox>
 #include <QGroupBox>
 #include <QTabBar>
 #include <QTabWidget>
@@ -48,6 +49,7 @@
 #include <QShortcut>
 #include <QApplication>
 #include <QGuiApplication>
+#include <QWindow>
 #include <QClipboard>
 #include <QFont>
 #include <QPainter>
@@ -624,7 +626,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* list = new QListWidget(panel);
     list->setSelectionMode(QAbstractItemView::SingleSelection);
-    list->setMinimumHeight(180);
+    list->setMinimumHeight(120);
     list->setAlternatingRowColors(true);
     list->setToolTip("Double click item to jump to model tree.");
     list_out = list;
@@ -1013,8 +1015,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   module_work_window_->setFeatures(QDockWidget::DockWidgetClosable |
                                    QDockWidget::DockWidgetMovable |
                                    QDockWidget::DockWidgetFloatable);
-  module_work_window_->setMinimumSize(620, 540);
-  module_work_window_->resize(760, 700);
+  module_work_window_->setMinimumSize(620, 400);
+  module_work_window_->resize(680, 560);
   addDockWidget(Qt::RightDockWidgetArea, module_work_window_);
   module_work_window_->setFloating(true);
   module_work_window_->setAllowedAreas(Qt::NoDockWidgetArea);
@@ -1056,16 +1058,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     workspace->setFeatures(QDockWidget::DockWidgetClosable |
                            QDockWidget::DockWidgetMovable |
                            QDockWidget::DockWidgetFloatable);
-    workspace->setMinimumSize(560, 500);
+    workspace->setMinimumSize(400, 240);
     workspace->resize(initial_size);
     addDockWidget(Qt::RightDockWidgetArea, workspace);
     workspace->setFloating(true);
     workspace->setAllowedAreas(Qt::NoDockWidgetArea);
     // 双击标题栏守卫：无停靠区工作窗一律保持浮动，避免非法吸附态。
     connect(workspace, &QDockWidget::topLevelChanged, workspace,
-            [workspace](bool floating) {
+            [this, workspace](bool floating) {
               if (!floating) {
                 workspace->setFloating(true);
+              }
+              // 拖出/拖回后向窗口系统显式请求重绘，避免工具条区域
+              // 原生合成层滞留空白。
+              if (windowHandle()) {
+                windowHandle()->requestUpdate();
               }
             });
     workspace->hide();
@@ -1077,14 +1084,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     return workspace;
   };
   job_work_window_ = make_floating_workspace(
-      "Job Workspace", "jobWorkspaceWindow", QSize(900, 720));
+      "Job Workspace", "jobWorkspaceWindow", QSize(820, 560));
   visualization_work_window_ = make_floating_workspace(
       "Visualization Workspace", "visualizationWorkspaceWindow",
-      QSize(720, 740));
+      QSize(660, 540));
   results_work_window_ = make_floating_workspace(
-      "Results Workspace", "resultsWorkspaceWindow", QSize(900, 720));
+      "Results Workspace", "resultsWorkspaceWindow", QSize(640, 400));
   mesh_work_window_ = make_floating_workspace(
-      "Mesh Workspace", "meshWorkspaceWindow", QSize(960, 720));
+      "Mesh Workspace", "meshWorkspaceWindow", QSize(760, 520));
 
   main_split->addWidget(tree_panel);
   main_split->addWidget(center_panel);
@@ -1254,7 +1261,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   job_files_table_->verticalHeader()->setVisible(false);
   job_files_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
   job_files_table_->setSelectionMode(QAbstractItemView::SingleSelection);
-  job_files_table_->setMinimumHeight(120);
+  job_files_table_->setMinimumHeight(90);
   files_layout->addWidget(job_files_table_);
   detail_layout->addWidget(files_box);
 
@@ -2231,6 +2238,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "the results list.");
   auto* results_open_view = new QPushButton("Open in Viewer", results_page);
   auto* results_open_text = new QPushButton("Open as Text", results_page);
+  auto* results_preview_toggle = new QPushButton("Preview", results_page);
+  results_preview_toggle->setObjectName("resultsPreviewToggle");
+  results_preview_toggle->setCheckable(true);
+  results_preview_toggle->setChecked(false);
+  results_preview_toggle->setToolTip(
+      "Show or hide the result preview pane.");
   auto* results_new_compare = new QPushButton("New Comparison Window", results_page);
   results_new_compare->setObjectName("resultsNewCompareButton");
   results_new_compare->setToolTip(
@@ -2255,6 +2268,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   });
   results_actions->addWidget(results_open_view);
   results_actions->addWidget(results_open_text);
+  results_actions->addWidget(results_preview_toggle);
   results_actions->addWidget(results_new_compare);
   connect(results_new_compare, &QPushButton::clicked, this,
           [this]() { create_results_compare_window(); });
@@ -2268,14 +2282,18 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   results_list_ = new QListWidget(results_page);
   results_list_->setSelectionMode(QAbstractItemView::SingleSelection);
-  results_list_->setMinimumHeight(140);
+  results_list_->setMinimumHeight(96);
   results_layout->addWidget(results_list_);
 
   results_preview_ = new QPlainTextEdit(results_page);
   results_preview_->setReadOnly(true);
   results_preview_->setPlaceholderText("Select a result item for quick preview.");
   results_preview_->setLineWrapMode(QPlainTextEdit::NoWrap);
+  // 弹窗精简：预览区默认折叠，按需展开；结果列表为默认唯一内容区。
+  results_preview_->setVisible(false);
   results_layout->addWidget(results_preview_, 1);
+  connect(results_preview_toggle, &QPushButton::toggled, results_preview_,
+          &QWidget::setVisible);
 
   auto open_result_in_viewer = [this](const QListWidgetItem* row) {
     if (!row || !viewer_) {
@@ -2460,10 +2478,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   job_work_window_->setWidget(job_container);
   visualization_work_window_->setWidget(visualization_page);
   mesh_work_window_->setWidget(mesh_page);
-  job_work_window_->resize(900, 720);
-  visualization_work_window_->resize(720, 740);
-  results_work_window_->resize(900, 720);
-  mesh_work_window_->resize(960, 720);
+  job_work_window_->resize(820, 560);
+  visualization_work_window_->resize(660, 540);
+  results_work_window_->resize(640, 400);
+  mesh_work_window_->resize(760, 520);
   plot_open_btn->setText("Focus Viewport");
   table_open_btn->setText("Focus Viewport");
 
@@ -3991,6 +4009,16 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   const bool tool_layout_restored =
       tool_layout_version == 3 && !tool_layout_state.isEmpty() &&
       restoreState(tool_layout_state, 3);
+  // 防御：恢复历史布局状态可能把工作窗放回 docked 位置（旧版本或损坏
+  // 的 saveState blob），QMainWindow 会据此保留右/底部停靠区并在窗口
+  // 放大时形成空白。工作窗合同为浮动专用，恢复后强制全部浮动。
+  for (QDockWidget* workspace : {module_work_window_, mesh_work_window_,
+                                 job_work_window_, visualization_work_window_,
+                                 results_work_window_}) {
+    if (workspace) {
+      workspace->setFloating(true);
+    }
+  }
   if (!tool_layout_restored) {
     reset_tool_group_layout(false);
   }
@@ -4037,9 +4065,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   statusBar()->showMessage("Ready");
 
   QTimer::singleShot(0, this, [this, tool_layout_restored]() {
-    if (!tool_layout_restored) {
-      position_default_display_group();
-    }
+    // Display Group 默认保持顶部停靠（make_group 创建即停靠）；
+    // 用户手动浮动/拖出后的布局由 saveState 恢复，不强制拉回。
     recover_floating_tool_groups();
   });
 
@@ -4080,6 +4107,13 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
       viewer_->set_stage_picking(true);
     }
     tool_drag_restore_picking_ = false;
+  }
+  // 浮动工作窗（任意 QDockWidget 顶层窗）拖拽释放后自愈一次工具条渲染。
+  if (event && event->type() == QEvent::MouseButtonRelease && watched &&
+      watched->isWidgetType() &&
+      static_cast<QWidget*>(watched)->isWindow() &&
+      qobject_cast<QDockWidget*>(watched)) {
+    force_native_relayout();
   }
   return QMainWindow::eventFilter(watched, event);
 }
@@ -4142,7 +4176,6 @@ void MainWindow::recover_floating_tool_groups() {
       widget->move(clamped);
     }
   };
-
   const QStringList toolbar_names = {
       "projectToolGroup", "editToolGroup", "modelToolGroup",
       "meshToolGroup", "jobToolGroup", "displayToolGroup"};
@@ -4152,6 +4185,51 @@ void MainWindow::recover_floating_tool_groups() {
       recover(toolbar);
     }
   }
+}
+
+void MainWindow::toggle_group_float(const QString& object_name,
+                                    bool floating) {
+  auto* toolbar = findChild<QToolBar*>(object_name);
+  if (!toolbar) {
+    return;
+  }
+  if (floating) {
+    // 受控浮动：从工具条布局拔出，切为 Tool 顶层窗并层叠摆放在主窗
+    // 右上方。此路径与 Qt 原生拖出浮动不同，重停靠经复位验证可靠。
+    removeToolBar(toolbar);
+    toolbar->setParent(this, Qt::Tool);
+    toolbar->setOrientation(Qt::Horizontal);
+    toolbar->adjustSize();
+    static const QStringList names = {"projectToolGroup", "editToolGroup",
+                                      "modelToolGroup",  "meshToolGroup",
+                                      "jobToolGroup",    "displayToolGroup"};
+    const int index = std::max(0, int(names.indexOf(object_name)));
+    const QSize size = toolbar->frameGeometry().size();
+    const QPoint target = mapToGlobal(
+        QPoint(std::max(12, width() - size.width() - 24), 96 + index * 28));
+    toolbar->move(target);
+    toolbar->show();
+    toolbar->raise();
+  } else {
+    removeToolBar(toolbar);
+    toolbar->setParent(this, Qt::Widget);
+    toolbar->setOrientation(Qt::Horizontal);
+    addToolBar(Qt::TopToolBarArea, toolbar);
+    toolbar->show();
+  }
+  // 同步 Float Group 菜单勾选（复位/其他入口可能改变状态）。
+  if (auto* menu = findChild<QMenu*>("floatToolGroupMenu")) {
+    for (auto* act : menu->actions()) {
+      if (act->data().toString() == object_name) {
+        const QSignalBlocker blocker(act);
+        act->setChecked(toolbar->isFloating());
+      }
+    }
+  }
+  gmp::log_operation(
+      "ui", QString("Tool group %1: %2 (floating=%3)")
+                .arg(object_name, floating ? "float" : "dock")
+                .arg(toolbar->isFloating()));
 }
 
 void MainWindow::reset_tool_group_layout(bool show_feedback) {
@@ -4165,26 +4243,57 @@ void MainWindow::reset_tool_group_layout(bool show_feedback) {
   settings.remove("ui/layout/v1");
   settings.remove("ui/layout/v6");
 
+  // 逐组复位到顶部区域。被鼠标拖出的工具组是原生浮动顶层窗口：
+  // 在 macOS 上没有任何代码路径（addToolBar/removeToolBar/restoreState）
+  // 能把它可靠重停靠——只会得到“状态已停靠但渲染仍漂着”的僵尸窗。
+  // 正确做法是用同一份动作重建工具组（启动期新工具组渲染已被验证），
+  // 并替换 View 菜单的显隐开关与成员指针。
   const QStringList toolbar_names = {
       "projectToolGroup", "editToolGroup", "modelToolGroup",
-      "meshToolGroup", "jobToolGroup"};
+      "meshToolGroup", "jobToolGroup", "displayToolGroup"};
   for (const QString& name : toolbar_names) {
     auto* toolbar = findChild<QToolBar*>(name);
     if (!toolbar) {
       continue;
     }
-    removeToolBar(toolbar);
-    toolbar->setParent(this, Qt::Widget);
-    toolbar->setOrientation(Qt::Horizontal);
+    const bool was_floating = toolbar->isFloating();
+    if (was_floating) {
+      auto* fresh = make_tool_group(toolbar->windowTitle(),
+                                    toolbar->objectName());
+      fresh->setIconSize(toolbar->iconSize());
+      fresh->setToolButtonStyle(toolbar->toolButtonStyle());
+      fresh->addActions(toolbar->actions());
+      for (QAction* action : fresh->actions()) {
+        // addAction 创建的动作归旧工具条所有（父子关系），先挂到主窗口
+        // 名下，否则 deleteLater 旧工具条时会被连带销毁成悬空指针。
+        action->setParent(this);
+      }
+      if (auto* menu = findChild<QMenu*>("toolbarVisibilityMenu")) {
+        auto* old_toggle = toolbar->toggleViewAction();
+        auto* new_toggle = fresh->toggleViewAction();
+        new_toggle->setText(old_toggle->text());
+        new_toggle->setChecked(old_toggle->isChecked());
+        menu->insertAction(old_toggle, new_toggle);
+        menu->removeAction(old_toggle);
+      }
+      if (toolbar == display_tool_group_) {
+        display_tool_group_ = fresh;
+      }
+      toolbar->hide();
+      toolbar->deleteLater();
+      toolbar = fresh;
+    }
     addToolBar(Qt::TopToolBarArea, toolbar);
+    toolbar->setOrientation(Qt::Horizontal);
     toolbar->show();
-  }
-  if (display_tool_group_) {
-    display_tool_group_->setParent(this, Qt::Tool);
-    display_tool_group_->setOrientation(Qt::Horizontal);
-    display_tool_group_->show();
-    QTimer::singleShot(0, this,
-                       &MainWindow::position_default_display_group);
+    gmp::log_operation(
+        "ui", QString("Layout reset: %1 (was_floating=%2, now area=%3, "
+                      "floating=%4, visible=%5)")
+                  .arg(name)
+                  .arg(was_floating)
+                  .arg(int(toolBarArea(toolbar)))
+                  .arg(toolbar->isFloating())
+                  .arg(toolbar->isVisible()));
   }
   // 左栏与底部区回到预置比例（与启动默认值一致）。
   if (main_split_) {
@@ -4198,11 +4307,11 @@ void MainWindow::reset_tool_group_layout(bool show_feedback) {
   }
   // 各独立工作窗回到默认尺寸并隐藏；位置经公共越界恢复夹取。
   const QList<QPair<QDockWidget*, QSize>> workspaces = {
-      {module_work_window_, QSize(760, 700)},
-      {mesh_work_window_, QSize(960, 720)},
-      {job_work_window_, QSize(900, 720)},
-      {visualization_work_window_, QSize(720, 740)},
-      {results_work_window_, QSize(900, 720)}};
+      {module_work_window_, QSize(680, 560)},
+      {mesh_work_window_, QSize(760, 520)},
+      {job_work_window_, QSize(820, 560)},
+      {visualization_work_window_, QSize(660, 540)},
+      {results_work_window_, QSize(640, 400)}};
   for (const auto& entry : workspaces) {
     if (!entry.first) {
       continue;
@@ -4211,11 +4320,44 @@ void MainWindow::reset_tool_group_layout(bool show_feedback) {
     clamp_window_to_screen(entry.first);
     entry.first->hide();
   }
+  if (centralWidget()) {
+    centralWidget()->updateGeometry();
+  }
   QTimer::singleShot(0, this, &MainWindow::recover_floating_tool_groups);
+  force_native_relayout();
+  // 复位后全部组均为停靠态，同步 Float Group 菜单勾选。
+  if (auto* menu = findChild<QMenu*>("floatToolGroupMenu")) {
+    for (auto* act : menu->actions()) {
+      auto* tb = findChild<QToolBar*>(act->data().toString());
+      const QSignalBlocker blocker(act);
+      act->setChecked(tb && tb->isFloating());
+    }
+  }
   if (show_feedback) {
     statusBar()->showMessage("Layout reset to default.", 2500);
   }
   gmp::log_operation("ui", "Layout reset to default.");
+}
+
+void MainWindow::force_native_relayout() {
+  QTimer::singleShot(80, this, [this]() {
+    const QSize current = size();
+    resize(current.width(), current.height() + 1);
+    resize(current);
+  });
+}
+
+void MainWindow::resizeEvent(QResizeEvent* event) {
+  QMainWindow::resizeEvent(event);
+  // 防御：小窗 → 最大化/跨屏缩放时，个别平台（含 VTK 原生 GL 子控件、
+  // 多屏 DPI 切换）可能出现中央区域未跟随窗口的几何滞留。
+  // 显式触发一次布局重算与重绘，保证舞台与控制台充满新尺寸。
+  if (centralWidget()) {
+    centralWidget()->updateGeometry();
+  }
+  if (viewer_) {
+    viewer_->update();
+  }
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -4522,55 +4664,59 @@ void MainWindow::build_menu() {
   update_recent_menu();
 }
 
-void MainWindow::build_toolbar() {
-  auto make_group = [this](const QString& title, const QString& object_name) {
-    auto* toolbar = new QToolBar(title, this);
-    addToolBar(Qt::TopToolBarArea, toolbar);
-    toolbar->setObjectName(object_name);
-    toolbar->setProperty("gmpToolGroup", true);
-    toolbar->setMovable(true);
-    toolbar->setFloatable(true);
-    toolbar->setAllowedAreas(Qt::AllToolBarAreas);
-    toolbar->setIconSize(QSize(18, 18));
-    toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
-    auto update_compact_extent = [toolbar](Qt::Orientation orientation) {
-      if (orientation == Qt::Horizontal) {
-        toolbar->setMinimumWidth(0);
-        toolbar->setMaximumWidth(QWIDGETSIZE_MAX);
-        toolbar->setFixedHeight(30);
-      } else {
-        toolbar->setMinimumHeight(0);
-        toolbar->setMaximumHeight(QWIDGETSIZE_MAX);
-        toolbar->setFixedWidth(30);
-      }
-    };
-    update_compact_extent(Qt::Horizontal);
-    connect(toolbar, &QToolBar::orientationChanged, toolbar,
-            update_compact_extent);
-    connect(toolbar, &QToolBar::topLevelChanged, this,
-            [this, toolbar, update_compact_extent](bool floating) {
-              if (floating) {
-                toolbar->setOrientation(Qt::Horizontal);
-                update_compact_extent(Qt::Horizontal);
-                QTimer::singleShot(0, this,
-                                   &MainWindow::recover_floating_tool_groups);
-              }
-            });
-    connect(toolbar, &QToolBar::visibilityChanged, this,
-            [this, toolbar](bool visible) {
-              if (visible && toolbar->isFloating()) {
-                QTimer::singleShot(0, this,
-                                   &MainWindow::recover_floating_tool_groups);
-              }
-            });
-    return toolbar;
+QToolBar* MainWindow::make_tool_group(const QString& title,
+                                      const QString& object_name) {
+  auto* toolbar = new QToolBar(title, this);
+  addToolBar(Qt::TopToolBarArea, toolbar);
+  toolbar->setObjectName(object_name);
+  toolbar->setProperty("gmpToolGroup", true);
+  toolbar->setMovable(true);
+  // 禁用 Qt 原生拖出浮动：macOS 上 QToolBar 原生浮动窗无法被任何代码
+  // 路径可靠重停靠/重绘（多轮僵尸窗/整行空白事故的根因）。工具组仍可
+  // 在停靠区间拖动、经 View 菜单显隐；工作窗浮动（QDockWidget）不受影响。
+  toolbar->setFloatable(false);
+  toolbar->setAllowedAreas(Qt::AllToolBarAreas);
+  toolbar->setIconSize(QSize(18, 18));
+  toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  auto update_compact_extent = [toolbar](Qt::Orientation orientation) {
+    if (orientation == Qt::Horizontal) {
+      toolbar->setMinimumWidth(0);
+      toolbar->setMaximumWidth(QWIDGETSIZE_MAX);
+      toolbar->setFixedHeight(30);
+    } else {
+      toolbar->setMinimumHeight(0);
+      toolbar->setMaximumHeight(QWIDGETSIZE_MAX);
+      toolbar->setFixedWidth(30);
+    }
   };
+  update_compact_extent(Qt::Horizontal);
+  connect(toolbar, &QToolBar::orientationChanged, toolbar,
+          update_compact_extent);
+  connect(toolbar, &QToolBar::topLevelChanged, this,
+          [this, toolbar, update_compact_extent](bool floating) {
+            if (floating) {
+              toolbar->setOrientation(Qt::Horizontal);
+              update_compact_extent(Qt::Horizontal);
+              QTimer::singleShot(0, this,
+                                 &MainWindow::recover_floating_tool_groups);
+            }
+          });
+  connect(toolbar, &QToolBar::visibilityChanged, this,
+          [this, toolbar](bool visible) {
+            if (visible && toolbar->isFloating()) {
+              QTimer::singleShot(0, this,
+                                 &MainWindow::recover_floating_tool_groups);
+            }
+          });
+  return toolbar;
+}
 
-  auto* project_toolbar = make_group("Project", "projectToolGroup");
-  auto* edit_toolbar = make_group("Edit", "editToolGroup");
-  auto* model_toolbar = make_group("Model", "modelToolGroup");
-  auto* mesh_toolbar = make_group("Mesh", "meshToolGroup");
-  auto* job_toolbar = make_group("Job", "jobToolGroup");
+void MainWindow::build_toolbar() {
+  auto* project_toolbar = make_tool_group("Project", "projectToolGroup");
+  auto* edit_toolbar = make_tool_group("Edit", "editToolGroup");
+  auto* model_toolbar = make_tool_group("Model", "modelToolGroup");
+  auto* mesh_toolbar = make_tool_group("Mesh", "meshToolGroup");
+  auto* job_toolbar = make_tool_group("Job", "jobToolGroup");
 
   if (action_new_) {
     action_new_->setIcon(MakeIcon(IconGlyph::NewFile));
@@ -4627,7 +4773,7 @@ void MainWindow::build_toolbar() {
 
   // Abaqus 风格的紧凑显示组：默认悬浮于舞台右上角，同时保留 Qt
   // 原生的四向停靠预览和整组拖拽行为。
-  display_tool_group_ = make_group("Display Group", "displayToolGroup");
+  display_tool_group_ = make_tool_group("Display Group", "displayToolGroup");
   action_display_mode_ = display_tool_group_->addAction(
       MakeIcon(IconGlyph::Display), "Cycle Display Mode");
   action_stage_pick_ = display_tool_group_->addAction(
@@ -4683,6 +4829,20 @@ void MainWindow::build_toolbar() {
     auto* display_toggle = display_tool_group_->toggleViewAction();
     display_toggle->setText("Display Group");
     toolbars_menu->addAction(display_toggle);
+    // 受控浮动开关：六个工具组可切换为独立浮动小窗（Qt::Tool 顶层窗，
+    // 非 Qt 原生拖出浮动）。checked 状态与复位/手动停靠同步。
+    auto* float_menu = toolbars_menu->addMenu("Float Group");
+    float_menu->setObjectName("floatToolGroupMenu");
+    for (auto* toolbar : {project_toolbar, edit_toolbar, model_toolbar,
+                          mesh_toolbar, job_toolbar, display_tool_group_}) {
+      auto* act = float_menu->addAction(toolbar->windowTitle());
+      act->setCheckable(true);
+      act->setChecked(toolbar->isFloating());
+      const QString name = toolbar->objectName();
+      act->setData(name);
+      connect(act, &QAction::toggled, this,
+              [this, name](bool on) { toggle_group_float(name, on); });
+    }
     view_menu_->addSeparator();
     action_reset_tool_layout_ =
         view_menu_->addAction("Reset Tool Layout");
@@ -4778,8 +4938,8 @@ QTabBar::tab {
   background: #e4e8ee;
   border: 1px solid #cbd2db;
   border-bottom: none;
-  padding: 7px 14px;
-  min-height: 26px;
+  padding: 4px 12px;
+  min-height: 22px;
   margin-right: 2px;
   border-top-left-radius: 5px;
   border-top-right-radius: 5px;
@@ -4794,8 +4954,8 @@ QTabBar::tear { border: 0; }
 QTabWidget::pane { border: 1px solid #d2d8e0; border-radius: 3px; }
 /* 视口内二级控制页签: 紧凑化, 把空间让给 3D 场景 */
 QTabWidget#controlTabs QTabBar::tab {
-  padding: 4px 10px;
-  min-height: 20px;
+  padding: 3px 8px;
+  min-height: 18px;
 }
 QTabWidget#controlTabs QTabWidget::tab-bar {
   left: 4px;
@@ -4811,7 +4971,7 @@ QLineEdit:focus, QPlainTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus,
 QComboBox:focus {
   border: 1px solid #2f6fed;
 }
-QTreeWidget::item, QTreeView::item { padding: 4px 6px; }
+QTreeWidget::item, QTreeView::item { padding: 3px 6px; }
 QTreeView::item:selected, QTreeWidget::item:selected {
   background: #dbe7ff; color: #1e3a5f;
 }
@@ -4828,7 +4988,7 @@ QHeaderView::section {
 }
 
 QComboBox {
-  min-height: 24px;
+  min-height: 22px;
   min-width: 56px;
   padding: 2px 22px 2px 8px;
   text-align: left;
@@ -4862,9 +5022,9 @@ QComboBox QAbstractItemView::item:selected { background: #bcd4ff; color: #1e3a5f
 
 QGroupBox {
   border: 1px solid #d2d8e0;
-  border-radius: 5px;
-  margin-top: 10px;
-  padding-top: 6px;
+  border-radius: 4px;
+  margin-top: 8px;
+  padding-top: 4px;
   background: #fbfcfd;
 }
 QGroupBox::title {
@@ -4878,9 +5038,9 @@ QGroupBox::title {
 QPushButton {
   background: #ffffff;
   border: 1px solid #c6cdd7;
-  border-radius: 4px;
-  padding: 5px 10px;
-  min-height: 24px;
+  border-radius: 3px;
+  padding: 3px 9px;
+  min-height: 22px;
 }
 QPushButton:hover { background: #eef4ff; border-color: #2f6fed; }
 QPushButton:pressed { background: #dbe7ff; }
@@ -5359,8 +5519,8 @@ void MainWindow::apply_module_workspace_profile(bool sketch_editor) {
     module_workspace_sketch_profile_ = sketch_editor;
   }
 
-  const QSize minimum = sketch_editor ? QSize(640, 320) : QSize(620, 540);
-  const QSize initial = sketch_editor ? QSize(680, 350) : QSize(760, 700);
+  const QSize minimum = sketch_editor ? QSize(640, 320) : QSize(620, 400);
+  const QSize initial = sketch_editor ? QSize(680, 350) : QSize(680, 560);
   module_work_window_->setProperty(
       "gmpWorkspaceProfile", sketch_editor ? "sketch" : "module");
   module_work_window_->setMinimumSize(minimum);
@@ -6912,8 +7072,8 @@ QDockWidget* MainWindow::create_results_compare_window() {
   window->setFeatures(QDockWidget::DockWidgetClosable |
                       QDockWidget::DockWidgetMovable |
                       QDockWidget::DockWidgetFloatable);
-  window->setMinimumSize(480, 400);
-  window->resize(640, 520);
+  window->setMinimumSize(400, 260);
+  window->resize(560, 400);
   addDockWidget(Qt::RightDockWidgetArea, window);
   window->setFloating(true);
   window->setAllowedAreas(Qt::NoDockWidgetArea);
@@ -6939,7 +7099,7 @@ QDockWidget* MainWindow::create_results_compare_window() {
   auto* list = new QListWidget(content);
   list->setObjectName("resultsCompareList");
   list->setSelectionMode(QAbstractItemView::SingleSelection);
-  list->setMinimumHeight(140);
+  list->setMinimumHeight(96);
   layout->addWidget(list);
 
   auto* preview = new QPlainTextEdit(content);
@@ -8656,8 +8816,10 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         "meshToolGroup", "jobToolGroup"};
                     for (const QString& name : groups) {
                       auto* group = findChild<QToolBar*>(name);
+                      // 工具组禁用 Qt 原生拖出浮动（macOS 可靠性决策），
+                      // 保留停靠区间拖动（movable）与全区域停靠能力。
                       if (!group || !group->isMovable() ||
-                          !group->isFloatable() ||
+                          group->isFloatable() ||
                           group->allowedAreas() != Qt::AllToolBarAreas) {
                         throw std::runtime_error("L-05 movable toolbar contract failed");
                       }
@@ -8665,10 +8827,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     auto* toolbar_menu =
                         findChild<QMenu*>("toolbarVisibilityMenu");
                     if (!display_tool_group_ ||
-                        !display_tool_group_->isFloating() ||
+                        display_tool_group_->isFloating() ||
+                        toolBarArea(display_tool_group_) !=
+                            Qt::TopToolBarArea ||
                         display_tool_group_->allowedAreas() !=
                             Qt::AllToolBarAreas ||
-                        !toolbar_menu || toolbar_menu->actions().size() != 6 ||
+                        !toolbar_menu || toolbar_menu->actions().size() != 7 ||
                         !action_reset_tool_layout_ ||
                         saveState(3).isEmpty()) {
                       throw std::runtime_error("L-05 display/persistence contract failed");
@@ -8713,18 +8877,13 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   this});
     steps.append({"l05_display_group_default",
                   [this]() {
-                    if (!display_tool_group_ || !viewer_ ||
+                    // 默认位置：停靠进顶部工具组区域，不再舞台浮动预置。
+                    if (!display_tool_group_ ||
                         !display_tool_group_->isVisible() ||
-                        !display_tool_group_->isFloating()) {
-                      throw std::runtime_error("L-05 default display group is not floating");
-                    }
-                    const QRect viewer_rect(viewer_->mapToGlobal(QPoint(0, 0)),
-                                            viewer_->size());
-                    const QRect group_rect = display_tool_group_->frameGeometry();
-                    if (group_rect.center().x() < viewer_rect.center().x() ||
-                        group_rect.top() > viewer_rect.top() +
-                                               viewer_rect.height() / 3) {
-                      throw std::runtime_error("L-05 display group is not in the stage top-right preset");
+                        display_tool_group_->isFloating() ||
+                        toolBarArea(display_tool_group_) !=
+                            Qt::TopToolBarArea) {
+                      throw std::runtime_error("L-05 default display group is not docked in the top tool area");
                     }
                   },
                   display_tool_group_});
@@ -8796,7 +8955,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                             ? mesh_page->findChild<QTabWidget*>(
                                                   "gmshGroupsTabs")
                                             : nullptr;
-                    if (!gmsh_tabs || gmsh_tabs->count() != 5 ||
+                    if (!gmsh_tabs || gmsh_tabs->count() != 4 ||
                         !geometry_tabs || geometry_tabs->count() != 3 ||
                         !groups_tabs || groups_tabs->count() != 2) {
                       throw std::runtime_error("Phase 2 mesh workspace tabs contract failed");
@@ -10025,7 +10184,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                                      ->availableGeometry()
                                                : QRect();
                   if (!mesh_work_window_ || !gmsh_tabs ||
-                      gmsh_tabs->count() != 5 || !geometry_tabs ||
+                      gmsh_tabs->count() != 4 || !geometry_tabs ||
                       geometry_tabs->count() != 3 || !groups_tabs ||
                       groups_tabs->count() != 2 ||
                       (!available.isEmpty() &&
@@ -10055,7 +10214,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                                      ->availableGeometry()
                                                : QRect();
                   if (!job_tabs || job_tabs->count() != 2 || !moose_tabs ||
-                      moose_tabs->count() != 4 ||
+                      moose_tabs->count() != 3 ||
                       (!available.isEmpty() &&
                        job_work_window_->height() > available.height())) {
                     throw std::runtime_error("Phase 2 job workspace layout contract failed");
@@ -10792,6 +10951,422 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                 },
                 this});
+  steps.append({"console_log_forwarding",
+                [this]() {
+                  // 弹窗精简合同：Gmsh/MOOSE 日志镜像到主 Console；
+                  // Results 预览默认折叠且可切换。
+                  if (!console_ || !results_preview_) {
+                    throw std::runtime_error("Console forwarding fixture is missing");
+                  }
+                  if (!console_->toPlainText().contains("[op] gmsh |")) {
+                    throw std::runtime_error("Gmsh log forwarding contract failed");
+                  }
+                  auto* toggle =
+                      findChild<QPushButton*>("resultsPreviewToggle");
+                  if (!toggle) {
+                    throw std::runtime_error("Results preview toggle is missing");
+                  }
+                  // 用 isHidden() 判定显隐意图，不受祖先窗口可见性影响。
+                  if (!results_preview_->isHidden()) {
+                    throw std::runtime_error("Results preview should be collapsed by default");
+                  }
+                  toggle->click();
+                  if (results_preview_->isHidden()) {
+                    throw std::runtime_error("Results preview expand contract failed");
+                  }
+                  toggle->click();
+                  if (!results_preview_->isHidden()) {
+                    throw std::runtime_error("Results preview collapse contract failed");
+                  }
+                },
+                results_work_window_});
+  steps.append({"combo_wheel_block",
+                [this]() {
+                  // 下拉框不响应滚轮：只能通过展开下拉点选切换。
+                  if (!job_state_filter_) {
+                    throw std::runtime_error("Combo wheel fixture is missing");
+                  }
+                  const int before = job_state_filter_->currentIndex();
+                  QWheelEvent wheel(
+                      job_state_filter_->rect().center(),
+                      job_state_filter_->mapToGlobal(
+                          job_state_filter_->rect().center()),
+                      QPoint(0, 0), QPoint(0, -120), Qt::NoButton,
+                      Qt::NoModifier, Qt::NoScrollPhase, false);
+                  QApplication::sendEvent(job_state_filter_, &wheel);
+                  if (job_state_filter_->currentIndex() != before) {
+                    throw std::runtime_error("Combo wheel block contract failed");
+                  }
+                  // 数值微调框（QDoubleSpinBox）同样不响应滚轮。
+                  auto* spin = gmsh_panel_
+                                   ? gmsh_panel_->findChild<QDoubleSpinBox*>()
+                                   : nullptr;
+                  if (!spin) {
+                    throw std::runtime_error("Spin wheel fixture is missing");
+                  }
+                  const double value_before = spin->value();
+                  QWheelEvent spin_wheel(
+                      spin->rect().center(),
+                      spin->mapToGlobal(spin->rect().center()),
+                      QPoint(0, 0), QPoint(0, -120), Qt::NoButton,
+                      Qt::NoModifier, Qt::NoScrollPhase, false);
+                  QApplication::sendEvent(spin, &spin_wheel);
+                  if (spin->value() != value_before) {
+                    throw std::runtime_error("Spin wheel block contract failed");
+                  }
+                },
+                this});
+  steps.append({"main_window_maximize_expands",
+                [this]() {
+                  // 主窗口最大化后中央区域必须充满：小窗 → 最大化，
+                  // 中央控件尺寸应跟随窗口。
+                  resize(800, 600);
+                  qApp->processEvents();
+                  showMaximized();
+                  qApp->processEvents();
+                  QTimer::singleShot(600, this, [this]() {
+                    qApp->processEvents();
+                    const QSize cs = centralWidget()->size();
+                    const QSize ws = size();
+                    qInfo("[tour] maximize check: window=%dx%d central=%dx%d",
+                          ws.width(), ws.height(), cs.width(), cs.height());
+                    if (cs.width() < ws.width() - 40 ||
+                        cs.height() < ws.height() - 120) {
+                      qCritical("[tour] FAILED: central does not expand after maximize");
+                      QApplication::exit(2);
+                      return;
+                    }
+                    qInfo("[tour] maximize check OK");
+                    QApplication::quit();
+                  });
+                },
+                nullptr});
+  // 该步骤自带退出逻辑，放入独立执行路径
+  if (qEnvironmentVariableIsSet("GMP_TOUR_MAXIMIZE_ONLY")) {
+    decltype(steps) only;
+    for (const auto& st : steps) {
+      if (st.name == "main_window_maximize_expands") {
+        only.append(st);
+      }
+    }
+    steps = only;
+  }
+  if (qEnvironmentVariableIsSet("GMP_TOUR_TOOLBAR_SCENARIOS")) {
+    // 两个工具栏场景的独立诊断（真实鼠标事件模拟拖动）：
+    // S1 显示组拖出 → 恢复默认 → 应回顶部；S2 拖动工作窗 → 工具条不空白。
+    decltype(steps) scenarios;
+    auto post_mouse = [](QWidget* w, QEvent::Type type, const QPoint& global,
+                         Qt::MouseButton button = Qt::LeftButton) {
+      QMouseEvent ev(type, w->mapFromGlobal(global),
+                     w->mapToGlobal(w->mapFromGlobal(global)), button,
+                     type == QEvent::MouseMove ? Qt::LeftButton
+                                               : Qt::NoButton,
+                     Qt::NoModifier);
+      QApplication::sendEvent(w, &ev);
+    };
+    scenarios.append({"s1_display_group_drag_reset",
+                      [this, post_mouse, dir]() {
+                        if (!display_tool_group_) {
+                          throw std::runtime_error("S1 fixture missing");
+                        }
+                        auto* tb = display_tool_group_;
+                        auto geo_probe = [this](const char* tag) {
+                          auto* g = findChild<QToolBar*>("projectToolGroup");
+                          auto* d = display_tool_group_;
+                          auto* mb = findChild<QWidget*>("moduleBar");
+                          qInfo("[S1probe] %s project gy=%d h=%d display gy=%d h=%d moduleBar gy=%d",
+                                tag,
+                                g ? g->mapToGlobal(QPoint(0, 0)).y() : -1,
+                                g ? g->height() : -1,
+                                d ? d->mapToGlobal(QPoint(0, 0)).y() : -1,
+                                d ? d->height() : -1,
+                                mb ? mb->mapToGlobal(QPoint(0, 0)).y() : -1);
+                        };
+                        geo_probe("startup");
+                        grab().save(dir + "/s1_startup.png");
+                        // 真实拖出：按住工具条空白处 → 移出主窗口 → 释放。
+                        const QPoint grip =
+                            tb->mapToGlobal(QPoint(6, tb->height() / 2));
+                        post_mouse(tb, QEvent::MouseButtonPress, grip);
+                        qApp->processEvents();
+                        for (int i = 1; i <= 8; ++i) {
+                          post_mouse(tb, QEvent::MouseMove,
+                                     grip + QPoint(i * 40, i * 30));
+                          qApp->processEvents();
+                        }
+                        post_mouse(tb, QEvent::MouseButtonRelease,
+                                   grip + QPoint(320, 240));
+                        qApp->processEvents();
+                        qInfo("[S1] after drag-out: floating=%d area=%d visible=%d",
+                              tb->isFloating(), int(toolBarArea(tb)),
+                              tb->isVisible());
+                        geo_probe("after-dragout");
+                        grab().save(dir + "/s1_after_dragout.png");
+                        reset_tool_group_layout(false);
+                        qApp->processEvents();
+                        QTimer::singleShot(300, this, [this, dir]() {
+                          qApp->processEvents();
+                          // 复位可能已重建工具组（旧对象已 deleteLater），
+                          // 必须使用成员指针取当前实例。
+                          auto* tb = display_tool_group_;
+                          qInfo("[S1] after reset: floating=%d area=%d visible=%d",
+                                tb->isFloating(), int(toolBarArea(tb)),
+                                tb->isVisible());
+                          const QStringList gnames = {
+                              "projectToolGroup", "editToolGroup",
+                              "modelToolGroup", "meshToolGroup",
+                              "jobToolGroup", "displayToolGroup"};
+                          for (const QString& n : gnames) {
+                            auto* g = findChild<QToolBar*>(n);
+                            if (g) {
+                              qInfo("[S1geo] %s visible=%d pos=(%d,%d) size=(%d,%d) floating=%d parent=(%d,%d,%d,%d)",
+                                    qPrintable(n), g->isVisible(), g->x(),
+                                    g->y(), g->width(), g->height(),
+                                    g->isFloating(),
+                                    g->parentWidget() ? g->parentWidget()->x() : -1,
+                                    g->parentWidget() ? g->parentWidget()->y() : -1,
+                                    g->parentWidget() ? g->parentWidget()->width() : -1,
+                                    g->parentWidget() ? g->parentWidget()->height() : -1);
+                            }
+                          }
+                          grab().save(dir + "/s1_after_reset.png");
+                          if (tb->isFloating() || !tb->isVisible() ||
+                              toolBarArea(tb) != Qt::TopToolBarArea) {
+                            qCritical("[S1] FAILED: display group not docked back");
+                            QApplication::exit(2);
+                            return;
+                          }
+                          qInfo("[S1] OK");
+                          QApplication::quit();
+                        });
+                      },
+                      nullptr});
+    scenarios.append({"s2_workspace_drag_toolbar",
+                      [this, post_mouse, dir]() {
+                        if (!job_work_window_) {
+                          throw std::runtime_error("S2 fixture missing");
+                        }
+                        job_work_window_->show();
+                        job_work_window_->raise();
+                        qApp->processEvents();
+                        // 把工作窗拖到工具条区域上方再移开。
+                        QWidget* title = job_work_window_;
+                        const QPoint start =
+                            title->mapToGlobal(QPoint(title->width() / 2, 12));
+                        post_mouse(title, QEvent::MouseButtonPress, start);
+                        qApp->processEvents();
+                        const QPoint over_toolbar =
+                            mapToGlobal(QPoint(width() / 2, 60));
+                        for (int i = 1; i <= 6; ++i) {
+                          post_mouse(title, QEvent::MouseMove,
+                                     start + (over_toolbar - start) * i / 6);
+                          qApp->processEvents();
+                        }
+                        for (int i = 1; i <= 6; ++i) {
+                          post_mouse(title, QEvent::MouseMove,
+                                     over_toolbar + QPoint(i * 30, i * 40));
+                          qApp->processEvents();
+                        }
+                        post_mouse(title, QEvent::MouseButtonRelease,
+                                   over_toolbar + QPoint(180, 240));
+                        qApp->processEvents();
+                        QTimer::singleShot(400, this, [this, dir]() {
+                          qApp->processEvents();
+                          // 工具条区域逐个截图并检查非空白。
+                          const QStringList names = {
+                              "projectToolGroup", "editToolGroup",
+                              "modelToolGroup", "meshToolGroup",
+                              "jobToolGroup", "displayToolGroup"};
+                          bool blank_found = false;
+                          for (const QString& n : names) {
+                            auto* tb = findChild<QToolBar*>(n);
+                            if (!tb) {
+                              continue;
+                            }
+                            qInfo("[S2] %s visible=%d floating=%d area=%d",
+                                  qPrintable(n), tb->isVisible(),
+                                  tb->isFloating(), int(toolBarArea(tb)));
+                            const QImage img = tb->grab().toImage();
+                            // 空白检测：整图近似单一颜色。
+                            QRgb ref = img.pixel(2, 2);
+                            bool uniform = true;
+                            for (int x = 0; x < img.width() && uniform; x += 7) {
+                              for (int y = 0; y < img.height(); y += 5) {
+                                if (qAbs(qRed(img.pixel(x, y)) - qRed(ref)) > 12 ||
+                                    qAbs(qGreen(img.pixel(x, y)) - qGreen(ref)) > 12 ||
+                                    qAbs(qBlue(img.pixel(x, y)) - qBlue(ref)) > 12) {
+                                  uniform = false;
+                                  break;
+                                }
+                              }
+                            }
+                            qInfo("[S2] %s blank=%d", qPrintable(n), uniform);
+                            blank_found = blank_found || uniform;
+                          }
+                          grab().save(dir + "/s2_after_drag.png");
+                          if (blank_found) {
+                            qCritical("[S2] FAILED: toolbar area blank after workspace drag");
+                            QApplication::exit(2);
+                            return;
+                          }
+                          qInfo("[S2] OK");
+                          QApplication::quit();
+                        });
+                      },
+                      nullptr});
+    scenarios.append({"s5_controlled_group_float",
+                      [this, dir]() {
+                        // 受控浮动：菜单动作浮出两组 → 窗口可见浮动；
+                        // 动作停回 → 顶部停靠；再浮出 → 复位 → 回顶部。
+                        auto* menu = findChild<QMenu*>("floatToolGroupMenu");
+                        auto* display = display_tool_group_;
+                        auto* job = findChild<QToolBar*>("jobToolGroup");
+                        if (!menu || !display || !job) {
+                          throw std::runtime_error("S5 fixture missing");
+                        }
+                        toggle_group_float("displayToolGroup", true);
+                        toggle_group_float("jobToolGroup", true);
+                        qApp->processEvents();
+                        if (!display_tool_group_->isFloating() ||
+                            !findChild<QToolBar*>("jobToolGroup")
+                                 ->isFloating() ||
+                            !display_tool_group_->isVisible() ||
+                            !findChild<QToolBar*>("jobToolGroup")
+                                 ->isVisible()) {
+                          throw std::runtime_error("S5 float contract failed");
+                        }
+                        grab().save(dir + "/s5_floating.png");
+                        toggle_group_float("displayToolGroup", false);
+                        toggle_group_float("jobToolGroup", false);
+                        qApp->processEvents();
+                        if (display_tool_group_->isFloating() ||
+                            findChild<QToolBar*>("jobToolGroup")
+                                ->isFloating()) {
+                          throw std::runtime_error("S5 dock contract failed");
+                        }
+                        toggle_group_float("displayToolGroup", true);
+                        toggle_group_float("jobToolGroup", true);
+                        qApp->processEvents();
+                        reset_tool_group_layout(false);
+                        qApp->processEvents();
+                        QTimer::singleShot(300, this, [this, dir]() {
+                          qApp->processEvents();
+                          grab().save(dir + "/s5_after_reset.png");
+                          if (display_tool_group_->isFloating() ||
+                              findChild<QToolBar*>("jobToolGroup")
+                                  ->isFloating() ||
+                              !display_tool_group_->isVisible() ||
+                              !findChild<QToolBar*>("jobToolGroup")
+                                   ->isVisible()) {
+                            qCritical("[S5] FAILED: reset after controlled float");
+                            QApplication::exit(2);
+                            return;
+                          }
+                          qInfo("[S5] OK");
+                          QApplication::quit();
+                        });
+                      },
+                      nullptr});
+    scenarios.append({"s4_two_groups_float_reset",
+                      [this, post_mouse, dir]() {
+                        // 用户现场：同时拖出显示组与作业组，再复位。
+                        auto drag_out = [this, post_mouse](QToolBar* tb,
+                                                           const QPoint& delta) {
+                          // 工具条右端必为空白拖拽区（左侧可能命中按钮）。
+                          const QPoint grip = tb->mapToGlobal(
+                              QPoint(tb->width() - 3, tb->height() / 2));
+                          post_mouse(tb, QEvent::MouseButtonPress, grip);
+                          qApp->processEvents();
+                          for (int i = 1; i <= 6; ++i) {
+                            post_mouse(tb, QEvent::MouseMove,
+                                       grip + delta * i / 6);
+                            qApp->processEvents();
+                          }
+                          post_mouse(tb, QEvent::MouseButtonRelease,
+                                     grip + delta);
+                          qApp->processEvents();
+                        };
+                        drag_out(display_tool_group_, QPoint(320, 240));
+                        drag_out(findChild<QToolBar*>("jobToolGroup"),
+                                 QPoint(-280, 200));
+                        qInfo("[S4] after drag-out: display floating=%d, job floating=%d",
+                              display_tool_group_->isFloating(),
+                              findChild<QToolBar*>("jobToolGroup")->isFloating());
+                        reset_tool_group_layout(false);
+                        qApp->processEvents();
+                        QTimer::singleShot(500, this, [this, dir]() {
+                          qApp->processEvents();
+                          const QStringList names = {
+                              "projectToolGroup", "editToolGroup",
+                              "modelToolGroup", "meshToolGroup",
+                              "jobToolGroup", "displayToolGroup"};
+                          for (const QString& n : names) {
+                            auto* g = findChild<QToolBar*>(n);
+                            qInfo("[S4] %s visible=%d floating=%d area=%d pos=(%d,%d) size=(%d,%d)",
+                                  qPrintable(n), g ? g->isVisible() : -1,
+                                  g ? g->isFloating() : -1,
+                                  g ? int(toolBarArea(g)) : -1,
+                                  g ? g->x() : -1, g ? g->y() : -1,
+                                  g ? g->width() : -1, g ? g->height() : -1);
+                          }
+                          auto* mb = findChild<QWidget*>("moduleBar");
+                          qInfo("[S4] moduleBar gy=%d",
+                                mb ? mb->mapToGlobal(QPoint(0, 0)).y() : -1);
+                          grab().save(dir + "/s4_after_reset.png");
+                          qInfo("[S4] done");
+                          QApplication::quit();
+                        });
+                      },
+                      nullptr});
+    scenarios.append({"s3_drag_module_workspace_toolbar",
+                      [this, post_mouse, dir]() {
+                        // 用户现场：拖动浮动的部件工作窗经过顶部工具条区域。
+                        module_work_window_->show();
+                        module_work_window_->raise();
+                        qApp->processEvents();
+                        QWidget* win = module_work_window_;
+                        const QPoint start =
+                            win->mapToGlobal(QPoint(win->width() / 2, 12));
+                        post_mouse(win, QEvent::MouseButtonPress, start);
+                        qApp->processEvents();
+                        const QPoint over_toolbar =
+                            mapToGlobal(QPoint(width() / 2, 50));
+                        for (int i = 1; i <= 6; ++i) {
+                          post_mouse(win, QEvent::MouseMove,
+                                     start + (over_toolbar - start) * i / 6);
+                          qApp->processEvents();
+                        }
+                        // 在工具条区域停留几拍再移开。
+                        for (int k = 0; k < 3; ++k) {
+                          qApp->processEvents();
+                        }
+                        for (int i = 1; i <= 6; ++i) {
+                          post_mouse(win, QEvent::MouseMove,
+                                     over_toolbar + QPoint(i * 30, i * 40));
+                          qApp->processEvents();
+                        }
+                        post_mouse(win, QEvent::MouseButtonRelease,
+                                   over_toolbar + QPoint(180, 240));
+                        qApp->processEvents();
+                        reset_tool_group_layout(false);
+                        qApp->processEvents();
+                        QTimer::singleShot(400, this, [this, dir]() {
+                          qApp->processEvents();
+                          auto* mb = findChild<QWidget*>("moduleBar");
+                          auto* g = findChild<QToolBar*>("projectToolGroup");
+                          qInfo("[S3] moduleBar gy=%d, project gy=%d h=%d visible=%d",
+                                mb ? mb->mapToGlobal(QPoint(0, 0)).y() : -1,
+                                g ? g->mapToGlobal(QPoint(0, 0)).y() : -1,
+                                g ? g->height() : -1,
+                                g ? g->isVisible() : -1);
+                          grab().save(dir + "/s3_after_reset.png");
+                          qInfo("[S3] done");
+                          QApplication::quit();
+                        });
+                      },
+                      nullptr});
+    steps = scenarios;
+  }
   const QString step_filter =
       qEnvironmentVariable("GMP_TOUR_STEP_FILTER").trimmed();
   if (!step_filter.isEmpty()) {
