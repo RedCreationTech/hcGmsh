@@ -2319,8 +2319,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     if (!row || !results_preview_) {
       return;
     }
-    sync_results_tree_selection(row);
+    // 先取数据副本：sync_results_tree_selection 经模型树选择链可能
+    // 刷新结果列表并销毁 row 指向的条目（18:29 崩溃即此路径）。
     const QString path = row->data(Qt::UserRole).toString();
+    sync_results_tree_selection(row);
     if (path.isEmpty()) {
       results_preview_->setPlainText("No file path for this result.");
       return;
@@ -2412,19 +2414,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
               }
               return;
             }
-            sync_results_tree_selection(current);
+            // 先取数据副本：sync_results_tree_selection 经模型树选择链
+            // 可能刷新结果列表并销毁 current 指向的条目（崩溃栈确认）。
             const QString path = current->data(Qt::UserRole).toString();
+            const QString job = current->data(Qt::UserRole + 1).toString();
+            const QString text = current->text();
+            sync_results_tree_selection(current);
             if (path.isEmpty()) {
               results_preview_->setPlainText(
-                  QString("No file attached for: %1")
-                      .arg(current->text()));
+                  QString("No file attached for: %1").arg(text));
               return;
             }
-            const QString job = current->data(Qt::UserRole + 1).toString();
             const QString ext = QFileInfo(path).suffix().toLower();
             const QFileInfo fi(path);
             QString details;
-            details += QString("Result: %1").arg(current->text());
+            details += QString("Result: %1").arg(text);
             details += QString("\nPath: %1").arg(path);
             if (!job.isEmpty()) {
               details += QString("\nJob: %1").arg(job);
