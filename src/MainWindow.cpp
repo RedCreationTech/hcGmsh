@@ -11166,6 +11166,55 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   });
                 },
                 nullptr});
+  steps.append({"sketch_nested_loop_hole_extrude",
+                [this]() {
+                  // 嵌套环拉伸成孔：矩形+圆（对照）与手画多边形+圆
+                  // （历史缺陷：线段端点乱序导致内圆不中空）都必须
+                  // 拉伸为单个体（外轮廓带内孔），而不是两个独立体。
+                  auto make_doc = [](bool concave) {
+                    SketchDocument doc;
+                    auto add_line = [&doc](double x1, double y1, double x2,
+                                           double y2) {
+                      SketchEntity e;
+                      e.type = SketchEntityType::Line;
+                      e.p1 = {x1, y1};
+                      e.p2 = {x2, y2};
+                      doc.add_entity(e);
+                    };
+                    if (concave) {
+                      // 模拟手画凹多边形：各线段方向故意不一致。
+                      add_line(0, 0, 2, 0);
+                      add_line(4, 1, 2, 0);
+                      add_line(4, 1, 3, 2);
+                      add_line(1, 3, 3, 2);
+                      add_line(0, 0, 1, 3);
+                    } else {
+                      add_line(0, 0, 4, 0);
+                      add_line(4, 0, 4, 2);
+                      add_line(4, 2, 0, 2);
+                      add_line(0, 2, 0, 0);
+                    }
+                    SketchEntity circle;
+                    circle.type = SketchEntityType::Circle;
+                    circle.center = {2.2, 1.2};
+                    circle.radius = 0.4;
+                    doc.add_entity(circle);
+                    return doc;
+                  };
+                  for (const bool concave : {false, true}) {
+                    SketchDocument doc = make_doc(concave);
+                    const FeatureResult result =
+                        extrude_sketch(doc, 1.0);
+                    if (!result.ok ||
+                        result.gmsh_volume_tags.size() != 1) {
+                      throw std::runtime_error(
+                          concave
+                              ? "Concave polygon with inner circle must extrude to one holed solid"
+                              : "Rectangle with inner circle must extrude to one holed solid");
+                    }
+                  }
+                },
+                this});
   // 该步骤自带退出逻辑，放入独立执行路径
   if (qEnvironmentVariableIsSet("GMP_TOUR_MAXIMIZE_ONLY")) {
     decltype(steps) only;

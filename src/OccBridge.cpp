@@ -106,25 +106,44 @@ TopoDS_Wire wire_from_loop(const SketchDocument& doc,
 std::vector<SketchPoint2d> sample_loop_polygon(const SketchDocument& doc,
                                                const std::vector<int>& loop) {
   std::vector<SketchPoint2d> poly;
+  auto near_pt = [](const SketchPoint2d& a, const SketchPoint2d& b) {
+    const double dx = a.x - b.x;
+    const double dy = a.y - b.y;
+    return dx * dx + dy * dy <= 1e-8;  // ~1e-4 mm 容差
+  };
   for (const int id : loop) {
     const SketchEntity* e = doc.entity(id);
     if (!e) {
       continue;
     }
     if (e->type == SketchEntityType::Line) {
-      poly.push_back(e->p1);
+      // 线段端点必须按环的遍历方向首尾相连成链。手画线方向任意，若直接
+      // 取 p1，顶点顺序会被打乱（矩形因绘制方向天然一致才“碰巧”正确），
+      // 射线法包含判定随之失效，导致内环无法识别为孔。
+      if (poly.empty()) {
+        poly.push_back(e->p1);
+        poly.push_back(e->p2);
+      } else if (near_pt(poly.back(), e->p1)) {
+        poly.push_back(e->p2);
+      } else if (near_pt(poly.back(), e->p2)) {
+        poly.push_back(e->p1);
+      } else {
+        // 链尾对不上（数据异常），按原方向附加，避免丢点。
+        poly.push_back(e->p1);
+        poly.push_back(e->p2);
+      }
     } else if (e->type == SketchEntityType::Circle) {
       for (int i = 0; i < 36; ++i) {
         const double a = kTwoPi * i / 36.0;
         poly.push_back({e->center.x + e->radius * std::cos(a),
                         e->center.y + e->radius * std::sin(a)});
       }
-    } else {  // Arc: 起止角之间采样
+    } else {  // Arc: 起止角之间采样 (含端点, 便于与相邻图元链式匹配)
       double span = std::fmod(e->end_angle - e->start_angle, kTwoPi);
       if (span <= 0.0) {
         span += kTwoPi;
       }
-      for (int i = 0; i < 24; ++i) {
+      for (int i = 0; i <= 24; ++i) {
         const double a = e->start_angle + span * i / 24.0;
         poly.push_back({e->center.x + e->radius * std::cos(a),
                         e->center.y + e->radius * std::sin(a)});
