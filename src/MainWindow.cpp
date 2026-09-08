@@ -4126,6 +4126,16 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
       if ((current - tool_group_press_global_).manhattanLength() > 12) {
         // 拖拽超阈值：受控浮出，窗口标题栏放到光标下继续拖动。
         tool_group_press_target_ = nullptr;
+        // 先补发一次释放，让 Qt 自己的拖拽状态机（QToolBarPrivate 的
+        // dragging）在布局尚未变化时正常收尾；否则浮出改变布局后，
+        // 释放阶段的 QToolBarPrivate::endDrag → revert 会访问失效 item
+        // 而段错误（全屏拖出崩溃即此路径）。
+        QMouseEvent end_drag(QEvent::MouseButtonRelease,
+                             group_tb->mapFromGlobal(current),
+                             group_tb->mapToGlobal(
+                                 group_tb->mapFromGlobal(current)),
+                             Qt::LeftButton, Qt::NoButton, Qt::NoModifier);
+        QApplication::sendEvent(group_tb, &end_drag);
         float_group_at(group_tb, current);
       }
     } else if (event->type() == QEvent::MouseButtonPress &&
