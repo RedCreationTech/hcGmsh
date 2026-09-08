@@ -4108,6 +4108,44 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     }
     tool_drag_restore_picking_ = false;
   }
+  // ---- 工具组受控拖拽（浮出/磁吸，替代 Qt 原生拖出浮动）----
+  auto* group_tb = qobject_cast<QToolBar*>(watched);
+  if (group_tb && group_tb->property("gmpToolGroup").toBool() && event) {
+    auto* mouse_event = static_cast<QMouseEvent*>(event);
+    if (event->type() == QEvent::MouseButtonPress &&
+        mouse_event->button() == Qt::LeftButton &&
+        !group_tb->isFloating() &&
+        !group_tb->actionAt(mouse_event->pos())) {
+      // 空白区按下：可能是拖拽起点（按钮上不触发）。
+      tool_group_press_target_ = group_tb;
+      tool_group_press_global_ = mouse_event->globalPosition().toPoint();
+    } else if (event->type() == QEvent::MouseMove &&
+               tool_group_press_target_ == group_tb &&
+               (mouse_event->buttons() & Qt::LeftButton)) {
+      const QPoint current = mouse_event->globalPosition().toPoint();
+      if ((current - tool_group_press_global_).manhattanLength() > 12) {
+        // 拖拽超阈值：受控浮出，窗口标题栏放到光标下继续拖动。
+        tool_group_press_target_ = nullptr;
+        float_group_at(group_tb, current);
+      }
+    } else if (event->type() == QEvent::MouseButtonPress &&
+               mouse_event->button() == Qt::LeftButton &&
+               group_tb->isFloating()) {
+      tool_group_float_dragging_ = true;
+    } else if (event->type() == QEvent::MouseButtonRelease) {
+      tool_group_press_target_ = nullptr;
+      tool_group_float_dragging_ = false;
+    } else if (event->type() == QEvent::Move &&
+               group_tb->isFloating()) {
+      try_snap_group(group_tb);
+    } else if (event->type() == QEvent::Close && group_tb->isFloating()) {
+      // 浮动窗的关闭按钮 = 停回工具条行，而不是隐藏工具组
+      // （隐藏会让工具组从行内消失，不符合工具组浮动语义）。
+      event->ignore();
+      toggle_group_float(group_tb->objectName(), false);
+      return true;
+    }
+  }
   // 浮动工作窗（任意 QDockWidget 顶层窗）拖拽释放后自愈一次工具条渲染。
   if (event && event->type() == QEvent::MouseButtonRelease && watched &&
       watched->isWidgetType() &&
@@ -4187,6 +4225,83 @@ void MainWindow::recover_floating_tool_groups() {
   }
 }
 
+void MainWindow::try_snap_group(QToolBar* group_tb) {
+  // 磁吸判定（Move 事件与轮询共用）：按住拖动（自有标志或物理按键）且
+  // 窗口中心/顶边进入顶部工具条行磁吸区时吸回行内。
+  if (!group_tb || !group_tb->isFloating()) {
+    return;
+  }
+  const bool dragging = tool_group_float_dragging_ ||
+                        (QGuiApplication::mouseButtons() & Qt::LeftButton);
+  if (!dragging) {
+    return;
+  }
+  int row_top = menuBar() ? menuBar()->frameGeometry().bottom() : 0;
+  int row_bottom = row_top + 34;
+  if (auto* any_group = findChild<QToolBar*>("projectToolGroup")) {
+    if (!any_group->isFloating()) {
+      row_top = any_group->frameGeometry().top();
+      row_bottom = any_group->frameGeometry().bottom();
+    }
+  }
+  const QRect frame = group_tb->frameGeometry();
+  const int win_left = mapToGlobal(QPoint(0, 0)).x();
+  const int win_right = win_left + width();
+  const bool center_in = frame.center().y() >= row_top - 12 &&
+                         frame.center().y() <= row_bottom + 12;
+  const bool top_in =
+      frame.top() >= row_top - 16 && frame.top() <= row_bottom + 16;
+  const bool overlap_x =
+      frame.right() >= win_left && frame.left() <= win_right;
+  if ((center_in || top_in) && overlap_x) {
+    const QString name = group_tb->objectName();
+    QTimer::singleShot(0, this,
+                       [this, name]() { toggle_group_float(name, false); });
+  }
+}
+
+void MainWindow::float_group_at(QToolBar* toolbar,
+                                const QPoint& global_pos) {
+  if (!toolbar) {
+    return;
+  }
+  // 受控浮动：从工具条布局拔出，切为 Tool 顶层窗。此路径与 Qt 原生
+  // 拖出浮动不同，重停靠经复位验证可靠。global_pos 有效时把窗口标题栏
+  // 放到光标下（拖拽浮出场景），否则层叠摆放在主窗右上方（菜单触发）。
+  removeToolBar(toolbar);
+  toolbar->setParent(this, Qt::Tool);
+  toolbar->setOrientation(Qt::Horizontal);
+  toolbar->adjustSize();
+  QPoint target;
+  if (!global_pos.isNull()) {
+    target = global_pos - QPoint(toolbar->frameGeometry().width() / 2, 12);
+  } else {
+    static const QStringList names = {"projectToolGroup", "editToolGroup",
+                                      "modelToolGroup",  "meshToolGroup",
+                                      "jobToolGroup",    "displayToolGroup"};
+    const int index =
+        std::max(0, int(names.indexOf(toolbar->objectName())));
+    target = mapToGlobal(
+        QPoint(std::max(12, width() - toolbar->frameGeometry().width() - 24),
+               96 + index * 28));
+  }
+  toolbar->move(target);
+  toolbar->show();
+  toolbar->raise();
+  ensure_group_snap_timer();
+  // 同步 Float Group 菜单勾选。
+  if (auto* menu = findChild<QMenu*>("floatToolGroupMenu")) {
+    for (auto* act : menu->actions()) {
+      if (act->data().toString() == toolbar->objectName()) {
+        const QSignalBlocker blocker(act);
+        act->setChecked(true);
+      }
+    }
+  }
+  gmp::log_operation(
+      "ui", QString("Tool group %1: float").arg(toolbar->objectName()));
+}
+
 void MainWindow::toggle_group_float(const QString& object_name,
                                     bool floating) {
   auto* toolbar = findChild<QToolBar*>(object_name);
@@ -4194,23 +4309,10 @@ void MainWindow::toggle_group_float(const QString& object_name,
     return;
   }
   if (floating) {
-    // 受控浮动：从工具条布局拔出，切为 Tool 顶层窗并层叠摆放在主窗
-    // 右上方。此路径与 Qt 原生拖出浮动不同，重停靠经复位验证可靠。
-    removeToolBar(toolbar);
-    toolbar->setParent(this, Qt::Tool);
-    toolbar->setOrientation(Qt::Horizontal);
-    toolbar->adjustSize();
-    static const QStringList names = {"projectToolGroup", "editToolGroup",
-                                      "modelToolGroup",  "meshToolGroup",
-                                      "jobToolGroup",    "displayToolGroup"};
-    const int index = std::max(0, int(names.indexOf(object_name)));
-    const QSize size = toolbar->frameGeometry().size();
-    const QPoint target = mapToGlobal(
-        QPoint(std::max(12, width() - size.width() - 24), 96 + index * 28));
-    toolbar->move(target);
-    toolbar->show();
-    toolbar->raise();
-  } else {
+    float_group_at(toolbar, QPoint());
+    return;
+  }
+  {
     removeToolBar(toolbar);
     toolbar->setParent(this, Qt::Widget);
     toolbar->setOrientation(Qt::Horizontal);
@@ -4230,6 +4332,27 @@ void MainWindow::toggle_group_float(const QString& object_name,
       "ui", QString("Tool group %1: %2 (floating=%3)")
                 .arg(object_name, floating ? "float" : "dock")
                 .arg(toolbar->isFloating()));
+}
+
+void MainWindow::ensure_group_snap_timer() {
+  if (group_snap_timer_) {
+    return;
+  }
+  group_snap_timer_ = new QTimer(this);
+  group_snap_timer_->setInterval(60);
+  connect(group_snap_timer_, &QTimer::timeout, this, [this]() {
+    static const QStringList names = {"projectToolGroup", "editToolGroup",
+                                      "modelToolGroup",  "meshToolGroup",
+                                      "jobToolGroup",    "displayToolGroup"};
+    for (const QString& name : names) {
+      if (auto* tb = findChild<QToolBar*>(name)) {
+        if (tb->isFloating()) {
+          try_snap_group(tb);
+        }
+      }
+    }
+  });
+  group_snap_timer_->start();
 }
 
 void MainWindow::reset_tool_group_layout(bool show_feedback) {
@@ -4678,6 +4801,8 @@ QToolBar* MainWindow::make_tool_group(const QString& title,
   toolbar->setAllowedAreas(Qt::AllToolBarAreas);
   toolbar->setIconSize(QSize(18, 18));
   toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  // 受控拖拽（浮出/磁吸）由应用级事件过滤实现。
+  toolbar->installEventFilter(this);
   auto update_compact_extent = [toolbar](Qt::Orientation orientation) {
     if (orientation == Qt::Horizontal) {
       toolbar->setMinimumWidth(0);
@@ -11210,6 +11335,52 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                             return;
                           }
                           qInfo("[S2] OK");
+                          QApplication::quit();
+                        });
+                      },
+                      nullptr});
+    scenarios.append({"s6_drag_float_and_snap",
+                      [this, post_mouse, dir]() {
+                        // 拖拽浮出 + 磁吸停靠全链路。
+                        auto* tb = display_tool_group_;
+                        const QPoint grip = tb->mapToGlobal(
+                            QPoint(tb->width() - 3, tb->height() / 2));
+                        post_mouse(tb, QEvent::MouseButtonPress, grip);
+                        qApp->processEvents();
+                        for (int i = 1; i <= 6; ++i) {
+                          post_mouse(tb, QEvent::MouseMove,
+                                     grip + QPoint(i * 30, i * 25));
+                          qApp->processEvents();
+                        }
+                        post_mouse(tb, QEvent::MouseButtonRelease,
+                                   grip + QPoint(180, 150));
+                        qApp->processEvents();
+                        if (!tb->isFloating()) {
+                          qCritical("[S6] FAILED: drag did not float the group");
+                          QApplication::exit(2);
+                          return;
+                        }
+                        grab().save(dir + "/s6_floated.png");
+                        // 按住左键把浮动窗移回工具条行上方：应磁吸停靠。
+                        post_mouse(tb, QEvent::MouseButtonPress,
+                                   tb->mapToGlobal(QPoint(30, 10)));
+                        qApp->processEvents();
+                        auto* row = findChild<QToolBar*>("projectToolGroup");
+                        tb->move(QPoint(row->frameGeometry().center().x() -
+                                            tb->width() / 2,
+                                        row->frameGeometry().top() + 4));
+                        qApp->processEvents();
+                        QTimer::singleShot(200, this, [this, tb, dir]() {
+                          qApp->processEvents();
+                          grab().save(dir + "/s6_snapped.png");
+                          if (tb->isFloating() ||
+                              toolBarArea(tb) != Qt::TopToolBarArea ||
+                              !tb->isVisible()) {
+                            qCritical("[S6] FAILED: magnetic snap did not dock");
+                            QApplication::exit(2);
+                            return;
+                          }
+                          qInfo("[S6] OK");
                           QApplication::quit();
                         });
                       },

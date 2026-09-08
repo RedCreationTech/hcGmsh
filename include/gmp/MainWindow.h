@@ -70,6 +70,13 @@ class MainWindow : public QMainWindow {
   // 隔离；Qt 原生浮动在 macOS 上不可靠已禁用）。View → Toolbars →
   // Float Group 菜单触发；复位时浮动态组走重建兜底回顶部。
   void toggle_group_float(const QString& object_name, bool floating);
+  // 受控拖拽交互（替代不可靠的 Qt 原生拖出浮动）：工具组空白区拖拽
+  // 超阈值浮出为 Tool 顶层窗；浮动窗拖动靠近顶部工具条行 12px 内时
+  // 磁吸停靠回行内。磁吸仅在按住左键拖动时触发。
+  void float_group_at(QToolBar* toolbar, const QPoint& global_pos);
+  // 磁吸判定（Move 事件与轮询共用）。
+  void try_snap_group(QToolBar* group_tb);
+  void ensure_group_snap_timer();
   void build_model_tree();
   void apply_theme();
   void reset_tool_group_layout(bool show_feedback = true);
@@ -295,6 +302,15 @@ class MainWindow : public QMainWindow {
   QPushButton* job_retry_button_ = nullptr;
   bool tool_drag_guard_active_ = false;
   bool tool_drag_restore_picking_ = false;
+  // 受控拖拽状态：按下的工具组与按下点（全局坐标）。
+  QToolBar* tool_group_press_target_ = nullptr;
+  QPoint tool_group_press_global_;
+  // 浮动组被按住拖动的跟踪标志（真实/合成事件均可靠，不依赖
+  // QGuiApplication::mouseButtons 的物理按键状态）。
+  bool tool_group_float_dragging_ = false;
+  // 磁吸轮询定时器：原生标题栏拖拽不向控件投递 Move/鼠标事件，
+  // 事件监听不可靠，改以轮询判定磁吸区（任一浮动组存在时运行）。
+  QTimer* group_snap_timer_ = nullptr;
 
   // Phase 0 数据合同字段
   int schema_version_ = 2;
