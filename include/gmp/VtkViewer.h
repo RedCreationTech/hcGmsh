@@ -13,14 +13,12 @@ class QLabel;
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
-class QPlainTextEdit;
 class QSlider;
 class QPushButton;
 class QTimer;
 class QSpinBox;
 class QFileSystemWatcher;
 class QListWidget;
-class QTableWidget;
 
 #ifdef GMP_ENABLE_VTK_VIEWER
 class QVTKOpenGLNativeWidget;
@@ -199,6 +197,8 @@ signals:
   void update_vector_list();
   void update_deformation_pipeline();
   void update_vector_tab();
+  // Plot/Table 控制页已删除, 这两个函数只重算缓存文本,
+  // 供 Results 工作窗经 plot_snapshot_text()/table_snapshot_text() 读取
   void update_plot_view();
   void update_table_view();
 
@@ -283,7 +283,6 @@ signals:
   QSlider* time_slider_ = nullptr;
   QLabel* time_label_ = nullptr;
   QPushButton* reload_btn_ = nullptr;
-  QLabel* output_label_ = nullptr;
   QComboBox* output_combo_ = nullptr;
   QPushButton* output_pick_ = nullptr;
   QComboBox* array_filter_ = nullptr;
@@ -299,17 +298,11 @@ signals:
   QCheckBox* vector_auto_sync_deform_ = nullptr;
   QPushButton* vector_apply_to_deform_ = nullptr;
   QLabel* vector_info_ = nullptr;
- QPlainTextEdit* plot_view_ = nullptr;
   QString cached_plot_text_;
   QString cached_plot_stats_;
-  QPushButton* plot_refresh_btn_ = nullptr;
-  QLabel* plot_stats_ = nullptr;
-  QTableWidget* table_view_ = nullptr;
   QString cached_table_text_;
   QString cached_table_stats_;
-  QSpinBox* table_rows_spin_ = nullptr;
-  QPushButton* table_refresh_btn_ = nullptr;
-  QLabel* table_stats_ = nullptr;
+  int table_rows_ = 100;  // 表格预览行数(10~5000), 随 viewer_settings 持久化
 
 #ifdef GMP_ENABLE_VTK_VIEWER
   QVTKOpenGLNativeWidget* vtk_widget_ = nullptr;

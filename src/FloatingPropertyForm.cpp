@@ -120,7 +120,7 @@ FloatingPropertyForm::FloatingPropertyForm(
 
   QSettings settings("gmp-ise", "gmp_ise");
   const QSize remembered = settings.value(settings_key()).toSize();
-  resize(remembered.isValid() ? remembered : QSize(760, 700));
+  resize(remembered.isValid() ? remembered : QSize(760, 560));
 }
 
 QString FloatingPropertyForm::settings_key() const {

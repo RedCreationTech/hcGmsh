@@ -71,9 +71,6 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   layout->setContentsMargins(8, 8, 8, 8);
   layout->setSpacing(8);
 
-  auto* title = new QLabel("Gmsh Panel");
-  layout->addWidget(title);
-
   auto* workspace_tabs = new QTabWidget();
   workspace_tabs->setObjectName("gmshWorkspaceTabs");
   layout->addWidget(workspace_tabs, 1);
@@ -477,9 +474,14 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
           &GmshPanel::on_apply_boolean_cut);
   connect(intersect_btn, &QPushButton::clicked, this,
           &GmshPanel::on_apply_boolean_intersect);
-  bool_form->addRow(fuse_btn);
-  bool_form->addRow(cut_btn);
-  bool_form->addRow(intersect_btn);
+  auto* boolean_actions = new QHBoxLayout();
+  boolean_actions->addWidget(fuse_btn);
+  boolean_actions->addWidget(cut_btn);
+  boolean_actions->addWidget(intersect_btn);
+  boolean_actions->addStretch(1);
+  auto* boolean_actions_container = new QWidget();
+  boolean_actions_container->setLayout(boolean_actions);
+  bool_form->addRow("", boolean_actions_container);
   add_scrolled_tool_tab(geometry_tabs, bool_box, "Boolean",
                         "gmshBooleanPage");
 
@@ -523,8 +525,12 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
         pick_entities_dialog(dim, "Select Physical Group Entities",
                              phys_group_entities_->text()));
   });
-  phys_form->addRow("Entities", phys_group_entities_);
-  phys_form->addRow(phys_entities_pick);
+  auto* phys_entities_row = new QHBoxLayout();
+  phys_entities_row->addWidget(phys_group_entities_);
+  phys_entities_row->addWidget(phys_entities_pick);
+  auto* phys_entities_container = new QWidget();
+  phys_entities_container->setLayout(phys_entities_row);
+  phys_form->addRow("Entities", phys_entities_container);
   bind_entity_input_validation(phys_group_entities_, phys_group_dim_, false);
 
   phys_group_add_ = new QPushButton("Add");
@@ -536,9 +542,14 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
           &GmshPanel::on_physical_group_update);
   connect(phys_group_delete_, &QPushButton::clicked, this,
           &GmshPanel::on_physical_group_delete);
-  phys_form->addRow(phys_group_add_);
-  phys_form->addRow(phys_group_update_);
-  phys_form->addRow(phys_group_delete_);
+  auto* phys_group_actions = new QHBoxLayout();
+  phys_group_actions->addWidget(phys_group_add_);
+  phys_group_actions->addWidget(phys_group_update_);
+  phys_group_actions->addWidget(phys_group_delete_);
+  phys_group_actions->addStretch(1);
+  auto* phys_group_actions_container = new QWidget();
+  phys_group_actions_container->setLayout(phys_group_actions);
+  phys_form->addRow("", phys_group_actions_container);
 
   phys_group_table_ = new QTableWidget();
   phys_group_table_->setColumnCount(5);
@@ -599,8 +610,12 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
                              field_entities_->text()));
   });
   field_form->addRow("Dim", field_dim_);
-  field_form->addRow("Entities", field_entities_);
-  field_form->addRow(field_entities_pick);
+  auto* field_entities_row = new QHBoxLayout();
+  field_entities_row->addWidget(field_entities_);
+  field_entities_row->addWidget(field_entities_pick);
+  auto* field_entities_container = new QWidget();
+  field_entities_container->setLayout(field_entities_row);
+  field_form->addRow("Entities", field_entities_container);
   bind_entity_input_validation(field_entities_, field_dim_, false);
 
   field_dist_min_ = new QDoubleSpinBox();
@@ -628,9 +643,14 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   connect(field_clear, &QPushButton::clicked, this, &GmshPanel::on_field_clear);
   connect(field_refresh, &QPushButton::clicked, this,
           &GmshPanel::on_field_refresh);
-  field_form->addRow(field_apply);
-  field_form->addRow(field_clear);
-  field_form->addRow(field_refresh);
+  auto* field_actions = new QHBoxLayout();
+  field_actions->addWidget(field_apply);
+  field_actions->addWidget(field_clear);
+  field_actions->addWidget(field_refresh);
+  field_actions->addStretch(1);
+  auto* field_actions_container = new QWidget();
+  field_actions_container->setLayout(field_actions);
+  field_form->addRow("", field_actions_container);
 
   field_list_ = new QPlainTextEdit();
   field_list_->setReadOnly(true);
@@ -689,12 +709,21 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   connect(entity_size_clear_, &QPushButton::clicked, this,
           &GmshPanel::on_entity_size_clear);
   mesh_form->addRow("Dim", entity_size_dim_);
-  mesh_form->addRow("IDs", entity_size_ids_);
-  mesh_form->addRow(entity_size_pick);
+  auto* entity_size_row = new QHBoxLayout();
+  entity_size_row->addWidget(entity_size_ids_);
+  entity_size_row->addWidget(entity_size_pick);
+  auto* entity_size_container = new QWidget();
+  entity_size_container->setLayout(entity_size_row);
+  mesh_form->addRow("IDs", entity_size_container);
   bind_entity_input_validation(entity_size_ids_, entity_size_dim_, false);
   mesh_form->addRow("Size", entity_size_value_);
-  mesh_form->addRow(entity_size_apply_);
-  mesh_form->addRow(entity_size_clear_);
+  auto* entity_size_actions = new QHBoxLayout();
+  entity_size_actions->addWidget(entity_size_apply_);
+  entity_size_actions->addWidget(entity_size_clear_);
+  entity_size_actions->addStretch(1);
+  auto* entity_size_actions_container = new QWidget();
+  entity_size_actions_container->setLayout(entity_size_actions);
+  mesh_form->addRow("", entity_size_actions_container);
 
   elem_order_ = new QComboBox();
   elem_order_->addItem("Linear (1)", 1);

@@ -2,10 +2,8 @@
 
 #include <QComboBox>
 #include <QDoubleSpinBox>
-#include <QFont>
 #include <QFormLayout>
 #include <QGroupBox>
-#include <QLabel>
 #include <QPushButton>
 #include <QTabWidget>
 #include <QVBoxLayout>
@@ -46,21 +44,7 @@ PartFeaturePanel::PartFeaturePanel(QWidget* parent) : QWidget(parent) {
   layout->setContentsMargins(10, 10, 10, 10);
   layout->setSpacing(6);
 
-  auto* heading = new QLabel("Part Features", this);
-  QFont hfont = heading->font();
-  hfont.setPointSize(hfont.pointSize() + 3);
-  hfont.setBold(true);
-  heading->setFont(hfont);
-  layout->addWidget(heading);
-
-  auto* desc = new QLabel(
-      "Create 3D features from closed sketch profiles: extrude, revolve, "
-      "loft and sweep. The result is imported into the mesh model and can be "
-      "written to a BREP file.",
-      this);
-  desc->setWordWrap(true);
-  layout->addWidget(desc);
-
+  // 页内标题/描述已删除（P0 审计 C1）：dock 窗口标题即模块名。
   auto* feature_tabs = new QTabWidget(this);
   feature_tabs->setObjectName("partFeatureTabs");
   feature_tabs->setDocumentMode(true);

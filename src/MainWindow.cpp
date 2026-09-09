@@ -601,19 +601,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     outer->setObjectName("modulePageLayout");
     outer->setContentsMargins(18, 16, 18, 16);
     outer->setSpacing(10);
-
-    auto* heading = new QLabel(title, container);
-    heading->setObjectName("modulePageHeading");
-    QFont hfont = heading->font();
-    hfont.setPointSize(hfont.pointSize() + 2);
-    hfont.setBold(true);
-    heading->setFont(hfont);
-    outer->addWidget(heading);
-
-    auto* desc = new QLabel(description, container);
-    desc->setObjectName("modulePageDescription");
-    desc->setWordWrap(true);
-    outer->addWidget(desc);
+    // 页内标题/描述/HLine 已删除（P0 审计 C1）：dock 窗口标题即模块名。
+    Q_UNUSED(title);
+    Q_UNUSED(description);
 
     if (!buttons.empty()) {
       auto* actions = new QWidget(container);
@@ -633,10 +623,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       outer->addWidget(actions);
     }
 
-    auto* separator = new QFrame(container);
-    separator->setFrameShape(QFrame::HLine);
-    separator->setFrameShadow(QFrame::Sunken);
-    outer->addWidget(separator);
     outer->addStretch(1);
     return container;
   };
@@ -965,20 +951,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* plot_layout = new QVBoxLayout(plot_page);
   plot_layout->setContentsMargins(8, 8, 8, 8);
   plot_layout->setSpacing(6);
-  auto* plot_head = new QLabel("Plot Preview (from active dataset)", plot_page);
-  QFont plot_font = plot_head->font();
-  plot_font.setBold(true);
-  plot_head->setFont(plot_font);
-  plot_layout->addWidget(plot_head);
   auto* plot_open_row = new QHBoxLayout();
   auto* plot_open_btn = new QPushButton("Open Visualization", plot_page);
   auto* plot_refresh_btn = new QPushButton("Refresh", plot_page);
-  auto* plot_help = new QLabel("Tip: full visualization is in Visualization module.", plot_page);
   auto* plot_status = new QLabel("No data", plot_page);
   plot_open_row->addWidget(plot_open_btn);
   plot_open_row->addWidget(plot_refresh_btn);
   plot_open_row->addWidget(plot_status, 1);
-  plot_open_row->addWidget(plot_help);
   plot_layout->addLayout(plot_open_row);
   auto* plot_view = new QPlainTextEdit(plot_page);
   plot_view->setReadOnly(true);
@@ -993,11 +972,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* table_layout = new QVBoxLayout(table_page);
   table_layout->setContentsMargins(8, 8, 8, 8);
   table_layout->setSpacing(6);
-  auto* table_head = new QLabel("Table Preview (from active dataset)", table_page);
-  QFont table_font = table_head->font();
-  table_font.setBold(true);
-  table_head->setFont(table_font);
-  table_layout->addWidget(table_head);
   auto* table_open_row = new QHBoxLayout();
   auto* table_open_btn = new QPushButton("Open Visualization", table_page);
   auto* table_refresh_btn = new QPushButton("Refresh", table_page);
@@ -1120,7 +1094,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "Visualization Workspace", "visualizationWorkspaceWindow",
       QSize(660, 540));
   results_work_window_ = make_floating_workspace(
-      "Results Workspace", "resultsWorkspaceWindow", QSize(640, 400));
+      "Results Workspace", "resultsWorkspaceWindow", QSize(720, 400));
   mesh_work_window_ = make_floating_workspace(
       "Mesh Workspace", "meshWorkspaceWindow", QSize(760, 520));
 
@@ -1162,7 +1136,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   job_actions->addWidget(job_log_btn);
   job_actions->addWidget(job_result_btn);
   // 作业监控筛选与刷新（参照 LIMS 任务监控）。
-  auto* filter_label = new QLabel("  State:", job_manager_page);
+  auto* filter_label = new QLabel("State:", job_manager_page);
   job_state_filter_ = new QComboBox(job_manager_page);
   job_state_filter_->setObjectName("jobStateFilter");
   job_state_filter_->addItem("All", "all");
@@ -1252,8 +1226,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   detail_layout->addWidget(job_progress_text_);
 
   auto* detail_grid_box = new QGroupBox("Execution Details", detail_content);
-  auto* detail_grid = new QFormLayout(detail_grid_box);
-  detail_grid->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+  auto* detail_columns = new QHBoxLayout(detail_grid_box);
   const QStringList field_keys = {"input_file", "pid",      "parallel",
                                   "cpu",        "memory",   "step",
                                   "dt",         "physical", "converged",
@@ -1264,12 +1237,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                                    "dt",         "Phy. Time", "Converged",
                                    "Avg Step",   "Elapsed",   "ETA",
                                    "Heartbeat",  "Health"};
-  for (int i = 0; i < field_keys.size(); ++i) {
-    auto* value = new QLabel("-", detail_grid_box);
-    value->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    value->setObjectName("jobDetail_" + field_keys.at(i));
-    detail_grid->addRow(field_names.at(i) + ":", value);
-    job_detail_fields_.insert(field_keys.at(i), value);
+  // 14 个字段按 2 列 7 行排布（P0 审计 C3），左列 Input..dt，右列 Phy. Time..Health。
+  const int fields_per_column = (field_keys.size() + 1) / 2;
+  for (int column = 0; column < 2; ++column) {
+    auto* column_widget = new QWidget(detail_grid_box);
+    auto* column_form = new QFormLayout(column_widget);
+    column_form->setContentsMargins(0, 0, 0, 0);
+    column_form->setLabelAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    const int begin = column * fields_per_column;
+    const int end = qMin(begin + fields_per_column, field_keys.size());
+    for (int i = begin; i < end; ++i) {
+      auto* value = new QLabel("-", column_widget);
+      value->setTextInteractionFlags(Qt::TextSelectableByMouse);
+      value->setObjectName("jobDetail_" + field_keys.at(i));
+      column_form->addRow(field_names.at(i) + ":", value);
+      job_detail_fields_.insert(field_keys.at(i), value);
+    }
+    detail_columns->addWidget(column_widget, 1);
   }
   detail_layout->addWidget(detail_grid_box);
 
@@ -2246,20 +2230,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   results_layout->setContentsMargins(10, 10, 10, 10);
   results_layout->setSpacing(6);
 
-  auto* results_head = new QLabel("Results", results_page);
-  QFont results_font = results_head->font();
-  results_font.setPointSize(results_font.pointSize() + 3);
-  results_font.setBold(true);
-  results_head->setFont(results_font);
-  results_layout->addWidget(results_head);
-
-  auto* results_desc = new QLabel(
-      "Review generated outputs and quickly open results in the viewer.",
-      results_page);
-  results_desc->setWordWrap(true);
-  results_layout->addWidget(results_desc);
-
-  auto* results_actions = new QHBoxLayout();
+  // 页内标题/描述已删除（P0 审计 C1）：dock 窗口标题即模块名。
+  auto* results_file_actions = new QHBoxLayout();
   auto* results_open_root = new QPushButton("Open Results Root", results_page);
   auto* results_refresh = new QPushButton("Refresh List", results_page);
   auto* results_import = new QPushButton("Import Result File...", results_page);
@@ -2285,9 +2257,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   results_type_filter_->addItem("Solver (.e/.exo)", "e");
   results_type_filter_->addItem("Mesh (.msh)", "msh");
   results_type_filter_->addItem("Text (.txt/.csv/.log/.yaml/.yml)", "txt");
-  results_actions->addWidget(results_open_root);
-  results_actions->addWidget(results_refresh);
-  results_actions->addWidget(results_import);
+  // 操作行拆两行（P0 审计 C7）：第一行文件操作，第二行视图与过滤。
+  results_file_actions->addWidget(results_open_root);
+  results_file_actions->addWidget(results_refresh);
+  results_file_actions->addWidget(results_import);
   connect(results_import, &QPushButton::clicked, this, [this]() {
     const QString path = QFileDialog::getOpenFileName(
         this, "Import Result File", QDir::homePath(),
@@ -2297,19 +2270,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       import_result_file(path);
     }
   });
-  results_actions->addWidget(results_open_view);
-  results_actions->addWidget(results_open_text);
-  results_actions->addWidget(results_preview_toggle);
-  results_actions->addWidget(results_new_compare);
+  results_file_actions->addStretch(1);
+  auto* results_file_row = new QWidget(results_page);
+  results_file_row->setLayout(results_file_actions);
+  results_layout->addWidget(results_file_row);
+
+  auto* results_view_actions = new QHBoxLayout();
+  results_view_actions->addWidget(results_open_view);
+  results_view_actions->addWidget(results_open_text);
+  results_view_actions->addWidget(results_preview_toggle);
+  results_view_actions->addWidget(results_new_compare);
   connect(results_new_compare, &QPushButton::clicked, this,
           [this]() { create_results_compare_window(); });
-  results_actions->addStretch(1);
-  results_actions->addWidget(results_filter_label);
-  results_actions->addWidget(results_type_filter_);
-  results_actions->addStretch(1);
-  auto* results_actions_row = new QWidget(results_page);
-  results_actions_row->setLayout(results_actions);
-  results_layout->addWidget(results_actions_row);
+  results_view_actions->addStretch(1);
+  results_view_actions->addWidget(results_filter_label);
+  results_view_actions->addWidget(results_type_filter_);
+  auto* results_view_row = new QWidget(results_page);
+  results_view_row->setLayout(results_view_actions);
+  results_layout->addWidget(results_view_row);
 
   results_list_ = new QListWidget(results_page);
   results_list_->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -2515,7 +2493,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   mesh_work_window_->setWidget(mesh_page);
   job_work_window_->resize(820, 560);
   visualization_work_window_->resize(660, 540);
-  results_work_window_->resize(640, 400);
+  results_work_window_->resize(720, 400);
   mesh_work_window_->resize(760, 520);
   plot_open_btn->setText("Focus Viewport");
   table_open_btn->setText("Focus Viewport");
@@ -9002,7 +8980,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
       if (viewer_) {
         viewer_->set_mesh_file(mesh_path);
       }
-      // 可选: GMP_TOUR_NAV=<index> 切换边栏控制页(0=标量 1=网格 2=视图 3=切片...)
+      // 可选: GMP_TOUR_NAV=<index> 切换边栏控制页(0=标量 1=网格 2=视图 3=时间 4=变形)
       const QByteArray nav = qgetenv("GMP_TOUR_NAV");
       if (!nav.isEmpty() && viewer_ && viewer_->control_tabs()) {
         if (auto* nav_combo =

@@ -219,3 +219,18 @@
 - 根因链：`module_tabs_` 切到 11（可视化）→ `currentChanged` 处理器末尾 `restore_active_object_for_module(11)`；可视化与结果共用树“Results”根节点（`context_root_for_module` 11/12 均返回 "Results"）。当前树选中不在 Results 根下时，恢复逻辑 `setCurrentItem(Results 根/记忆子项)` 触发 `itemSelectionChanged`，树选择处理器按 kind=="Results" 把页签拨到 `results_tab(12)`，覆盖了用户的选择。第二次切换时选中已在 Results 根下（`already_in_context` 命中），不再 `setCurrentItem`，故正常。
 - 修复：`restore_active_object_for_module` 本就用 `active_ui_context_.synchronizing` 包住程序化 `setCurrentItem`，但树选择处理器从未检查该标志。现树处理器在该标志为真时只同步树选中/属性/视口，不反向切 `module_tabs_`（含 Sketches 两个分支共三处 `setCurrentIndex` 均加 `may_switch_tab` 守卫）。
 - 巡览新增 `module_selector_viz_first_switch` 回归断言（先停在 Part，再经选择器切可视化，断言 tab==11、Visualization 工作窗可见、Results 工作窗未抢前台）。
+
+## 32. 工作窗 P0 视觉紧凑化 + UI 功能手册（2026-09-09）
+
+- 前置审计：新增 `doc/UI视觉交互对标审计.md`——对照需求文档与 44 张 Abaqus 操作截图，提炼弹窗视觉范式六条，诊断出七个共性布局问题（双/三标题、按钮独占整行、单列长表单、标签控件两行、占位空白、功能重复、尺寸错配），并按 P0/P1/P2 分级优化清单。
+- P0 实施（全部排版调整，不改功能语义与 objectName）：
+  1. 删页内标题/描述/HLine：make_module_page、GmshPanel“Gmsh 面板”、MoosePanel“MOOSE Panel”、PartFeaturePanel、SketchPanel 管理态、Results 页头、可视化页头（dock 标题保留）。
+  2. 按钮同行化：GmshPanel 物理组 Add/Update/Delete、网格场 Apply/Clear/Refresh、实体尺寸 Apply/Clear、布尔 Fuse/Cut/Intersect 各并一行；IDs+Pick 三处同行；Results 7 按钮拆文件操作/视图过滤两行。
+  3. 标签—控件同行：可视化 Scalar 页 8 行→QFormLayout 4 行；输出下拉+加载所选并一行。
+  4. 可视化控制页 10→5：Slice 并入 View、Probe 并入 Mesh、Vector 并入 Deformation、Plot/Table 页删除（由 Results 工作窗承担，快照 API 保留改为纯缓存）。
+  5. Job Execution Details 14 行→2 列 7 行；修 "  State:" 前导空格。
+  6. 尺寸矫正：Results 窗 640→720 宽；FloatingPropertyForm 默认 760×700→760×560。
+- Open Log 去重经核实为不等价（顶部恒为本地日志，详情区对远程作业走远程拉取），两个都保留。
+- 已知遗留（未动）：L10n 字典中 "Gmsh Panel"/"MOOSE Panel"/"Part Features"/Plot/Table 提示等条目成死键，后续清理；启动器页标题属 P1 第 10 项。
+- 交付文档：`doc/UI功能手册.md`（菜单/工具组/上下文条/舞台工具栏/导航/各模块弹窗全功能说明，按美化后状态编写）。
+- 验证：定向巡览 i04_work_window_contracts、workspace_Visualization/Mesh、i04_results_compare_windows、i01_property_form×3、playback_controls_contract 通过；关键窗口截图复核符合范式；全量 85 步巡览零失败。

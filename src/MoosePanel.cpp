@@ -69,9 +69,6 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   layout->setContentsMargins(8, 8, 8, 8);
   layout->setSpacing(8);
 
-  auto* title = new QLabel("MOOSE Panel");
-  layout->addWidget(title);
-
   auto* workspace_tabs = new QTabWidget();
   workspace_tabs->setObjectName("mooseWorkspaceTabs");
 

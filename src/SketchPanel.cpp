@@ -26,20 +26,7 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   management_layout->setContentsMargins(0, 0, 0, 0);
   management_layout->setSpacing(6);
 
-  auto* heading = new QLabel("Sketch", management_box_);
-  QFont hfont = heading->font();
-  hfont.setPointSize(hfont.pointSize() + 3);
-  hfont.setBold(true);
-  heading->setFont(hfont);
-  management_layout->addWidget(heading);
-
-  auto* desc = new QLabel(
-      "Create and manage 2D sketches on the XY plane. Parts reference sketches "
-      "as the basis for feature operations (extrude, revolve, ...).",
-      management_box_);
-  desc->setWordWrap(true);
-  management_layout->addWidget(desc);
-
+  // 管理态页内标题/描述已删除（P0 审计 C1）：窗口标题已是 Sketch Editor。
   auto* new_btn = new QPushButton("New Sketch", management_box_);
   new_btn->setObjectName("newSketchButton");
   auto* open_edit_btn = new QPushButton("Open Edit", management_box_);

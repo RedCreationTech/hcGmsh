@@ -6,20 +6,16 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
-#include <QHeaderView>
+#include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QListWidget>
-#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSlider>
 #include <QSplitter>
-#include <QTabWidget>
 #include <QStackedWidget>
-#include <QTableWidget>
-#include <QTableWidgetItem>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QStringList>
@@ -644,7 +640,6 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
     top_bar_layout->addLayout(btn_row);
   }
 
-  output_label_ = new QLabel("Outputs");
   output_combo_ = new QComboBox();
   AttachComboPopupFix(output_combo_);
   output_pick_ = new QPushButton("Load Selected");
@@ -654,9 +649,15 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
       set_exodus_file(path);
     }
   });
-  top_bar_layout->addWidget(output_label_);
-  top_bar_layout->addWidget(output_combo_);
-  top_bar_layout->addWidget(output_pick_);
+  {
+    // 下拉框自带语义, 不再单独放 "Outputs" 标签行
+    auto* output_row = new QHBoxLayout();
+    output_row->setContentsMargins(0, 0, 0, 0);
+    output_row->setSpacing(6);
+    output_row->addWidget(output_combo_, 1);
+    output_row->addWidget(output_pick_);
+    top_bar_layout->addLayout(output_row);
+  }
 
   auto* main_split = new QSplitter(Qt::Horizontal, this);
   main_split->setChildrenCollapsible(false);
@@ -794,10 +795,15 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   connect(range_max_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
           this, &VtkViewer::on_apply_range);
 
-  vadd(scalar_layout,
-       {new QLabel("Scalar"), array_combo_, new QLabel("Preset"),
-        preset_combo_, new QLabel("Repr"), repr_combo_, new QLabel("Bar Pos"),
-        scalar_bar_pos_combo_});
+  // 标签—控件同行的紧凑表单(对标 Abaqus 弹窗范式), Auto Range 行保持一行
+  auto* scalar_form = new QFormLayout();
+  scalar_form->setContentsMargins(0, 0, 0, 0);
+  scalar_form->setSpacing(4);
+  scalar_form->addRow("Scalar", array_combo_);
+  scalar_form->addRow("Preset", preset_combo_);
+  scalar_form->addRow("Repr", repr_combo_);
+  scalar_form->addRow("Bar Pos", scalar_bar_pos_combo_);
+  scalar_layout->addLayout(scalar_form);
   hrow(scalar_layout, {auto_range_, range_min_, range_max_});
   scalar_layout->addStretch(1);
 
@@ -902,7 +908,49 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   hrow(mesh_layout, {new QLabel("Opacity"), mesh_opacity_, new QLabel("Shrink"),
                      mesh_shrink_});
   hrow(mesh_layout, {mesh_scalar_bar_, pick_enable_, pick_mode_, pick_clear_});
+
+  // 原 Probe 控制页并入本页底部作为分组
+  auto* probe_header = new QLabel("Probe");
+  probe_header->setStyleSheet("color: #666;");
+  mesh_layout->addWidget(probe_header);
+  probe_enable_ = new QCheckBox("Enable Probe");
+  probe_mode_ = new QComboBox();
+  probe_mode_->addItem("Point", 0);
+  probe_mode_->addItem("Cell", 1);
+  AttachComboPopupFix(probe_mode_);
+  probe_clear_ = new QPushButton("Clear");
+  hrow(mesh_layout, {probe_enable_, new QLabel("Mode"), probe_mode_,
+                     probe_clear_});
+  probe_info_ = new QLabel("Probe: disabled");
+  probe_info_->setWordWrap(true);
+  mesh_layout->addWidget(probe_info_);
   mesh_layout->addStretch(1);
+  auto update_probe_status = [this]() {
+    if (!probe_info_) {
+      return;
+    }
+    if (!probe_enable_ || !probe_enable_->isChecked()) {
+      probe_info_->setText("Probe: disabled");
+      return;
+    }
+    const QString mode =
+        probe_mode_ ? probe_mode_->currentText().toLower() : "point";
+    probe_info_->setText(QString("Probe: enabled (%1 mode)").arg(mode));
+  };
+  connect(probe_enable_, &QCheckBox::toggled, this,
+          [this, update_probe_status](bool enabled) {
+            update_probe_status();
+            if (probe_enable_ && probe_enable_->isEnabled()) {
+              emit stage_picking_changed(enabled);
+            }
+          });
+  connect(probe_mode_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+          this, [update_probe_status](int) { update_probe_status(); });
+  connect(probe_clear_, &QPushButton::clicked, this, [this]() {
+    if (probe_info_) {
+      probe_info_->setText("Probe: cleared");
+    }
+  });
 
   auto* view_layout = make_tab("View");
   view_combo_ = new QComboBox();
@@ -966,7 +1014,12 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   pick_info_ = new QLabel("Pick: disabled");
   view_layout->addWidget(pick_info_);
 
-  auto* slice_layout = make_tab("Slice");
+  mesh_legend_ = new QLabel();
+  mesh_legend_->setWordWrap(true);
+  mesh_legend_->setText("Groups: none");
+  view_layout->addWidget(mesh_legend_);
+
+  // 原 Slice 控制页并入本页底部作为分组(复选+轴向+滑块同行)
   slice_enable_ = new QCheckBox("Slice");
   slice_axis_ = new QComboBox();
   slice_axis_->addItems({"X", "Y", "Z"});
@@ -990,14 +1043,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
     slice_row->addWidget(slice_enable_);
     slice_row->addWidget(slice_axis_);
     slice_row->addWidget(slice_slider_, 1);
-    slice_layout->addLayout(slice_row);
+    view_layout->addLayout(slice_row);
   }
-  slice_layout->addStretch(1);
-
-  mesh_legend_ = new QLabel();
-  mesh_legend_->setWordWrap(true);
-  mesh_legend_->setText("Groups: none");
-  view_layout->addWidget(mesh_legend_);
   view_layout->addStretch(1);
 
   auto* time_layout = make_tab("Time");
@@ -1038,7 +1085,25 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   }
   time_layout->addStretch(1);
 
-  auto* vector_layout = make_tab("Vector");
+  auto* deform_layout = make_tab("Deformation");
+  deform_enable_ = new QCheckBox("Enable Deformation");
+  deform_vector_ = new QComboBox();
+  AttachComboPopupFix(deform_vector_);
+  deform_scale_ = new QDoubleSpinBox();
+  deform_scale_->setRange(0.0, 1000.0);
+  deform_scale_->setSingleStep(0.1);
+  deform_scale_->setValue(1.0);
+  vadd(deform_layout, {deform_enable_, new QLabel("Vector"), deform_vector_});
+  hrow(deform_layout, {new QLabel("Scale"), deform_scale_});
+  auto* deform_hint = new QLabel(
+      "Applies warping using the selected vector array.", control_stack_);
+  deform_hint->setStyleSheet("color: #666;");
+  deform_layout->addWidget(deform_hint);
+
+  // 原 Vector 控制页并入本页作为分组(向量数组/自动同步/Apply)
+  auto* vector_header = new QLabel("Vector Arrays");
+  vector_header->setStyleSheet("color: #666;");
+  deform_layout->addWidget(vector_header);
   vector_array_combo_ = new QComboBox();
   AttachComboPopupFix(vector_array_combo_);
   vector_auto_sync_deform_ = new QCheckBox("Auto-sync deformation vector");
@@ -1046,10 +1111,33 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   vector_apply_to_deform_ = new QPushButton("Apply to Deform");
   vector_info_ = new QLabel("No vector data loaded");
   vector_info_->setWordWrap(true);
-  vadd(vector_layout, {new QLabel("Vector"), vector_array_combo_});
-  hrow(vector_layout, {vector_auto_sync_deform_, vector_apply_to_deform_});
-  vector_layout->addWidget(vector_info_);
-  vector_layout->addStretch(1);
+  vadd(deform_layout, {vector_array_combo_});
+  hrow(deform_layout, {vector_auto_sync_deform_, vector_apply_to_deform_});
+  deform_layout->addWidget(vector_info_);
+  deform_layout->addStretch(1);
+  connect(deform_enable_, &QCheckBox::toggled, this, [this](bool) {
+    update_deformation_pipeline();
+    update_scene_extras();
+    if (render_window_) {
+      render_window_->Render();
+    }
+  });
+  connect(deform_vector_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+          this, [this](int) {
+            update_deformation_pipeline();
+            update_scene_extras();
+            if (render_window_) {
+              render_window_->Render();
+            }
+          });
+  connect(deform_scale_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+          this, [this](double) {
+            update_deformation_pipeline();
+            update_scene_extras();
+            if (render_window_) {
+              render_window_->Render();
+            }
+          });
   connect(vector_array_combo_,
           QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           [this](int) {
@@ -1090,128 +1178,6 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
       render_window_->Render();
     }
   });
-
-  auto* deform_layout = make_tab("Deformation");
-  deform_enable_ = new QCheckBox("Enable Deformation");
-  deform_vector_ = new QComboBox();
-  AttachComboPopupFix(deform_vector_);
-  deform_scale_ = new QDoubleSpinBox();
-  deform_scale_->setRange(0.0, 1000.0);
-  deform_scale_->setSingleStep(0.1);
-  deform_scale_->setValue(1.0);
-  vadd(deform_layout, {deform_enable_, new QLabel("Vector"), deform_vector_});
-  hrow(deform_layout, {new QLabel("Scale"), deform_scale_});
-  auto* deform_hint = new QLabel(
-      "Applies warping using the selected vector array.", control_stack_);
-  deform_hint->setStyleSheet("color: #666;");
-  deform_layout->addWidget(deform_hint);
-  deform_layout->addStretch(1);
-  connect(deform_enable_, &QCheckBox::toggled, this, [this](bool) {
-    update_deformation_pipeline();
-    update_scene_extras();
-    if (render_window_) {
-      render_window_->Render();
-    }
-  });
-  connect(deform_vector_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-          this, [this](int) {
-            update_deformation_pipeline();
-            update_scene_extras();
-            if (render_window_) {
-              render_window_->Render();
-            }
-          });
-  connect(deform_scale_, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-          this, [this](double) {
-            update_deformation_pipeline();
-            update_scene_extras();
-            if (render_window_) {
-              render_window_->Render();
-            }
-          });
-
-  auto* probe_layout = make_tab("Probe");
-  probe_enable_ = new QCheckBox("Enable Probe");
-  probe_mode_ = new QComboBox();
-  probe_mode_->addItem("Point", 0);
-  probe_mode_->addItem("Cell", 1);
-  AttachComboPopupFix(probe_mode_);
-  probe_clear_ = new QPushButton("Clear");
-  hrow(probe_layout, {probe_enable_, new QLabel("Mode"), probe_mode_,
-                      probe_clear_});
-  probe_info_ = new QLabel("Probe: disabled");
-  probe_info_->setWordWrap(true);
-  probe_layout->addWidget(probe_info_);
-  probe_layout->addStretch(1);
-  auto update_probe_status = [this]() {
-    if (!probe_info_) {
-      return;
-    }
-    if (!probe_enable_ || !probe_enable_->isChecked()) {
-      probe_info_->setText("Probe: disabled");
-      return;
-    }
-    const QString mode =
-        probe_mode_ ? probe_mode_->currentText().toLower() : "point";
-    probe_info_->setText(QString("Probe: enabled (%1 mode)").arg(mode));
-  };
-  connect(probe_enable_, &QCheckBox::toggled, this,
-          [this, update_probe_status](bool enabled) {
-            update_probe_status();
-            if (probe_enable_ && probe_enable_->isEnabled()) {
-              emit stage_picking_changed(enabled);
-            }
-          });
-  connect(probe_mode_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-          this, [update_probe_status](int) { update_probe_status(); });
-  connect(probe_clear_, &QPushButton::clicked, this, [this]() {
-    if (probe_info_) {
-      probe_info_->setText("Probe: cleared");
-    }
-  });
-
-  auto* plot_layout = make_tab("Plot");
-  plot_refresh_btn_ = new QPushButton("Refresh");
-  plot_stats_ = new QLabel("No data");
-  hrow(plot_layout, {plot_refresh_btn_, plot_stats_});
-  plot_view_ = new QPlainTextEdit();
-  plot_view_->setReadOnly(true);
-  plot_view_->setLineWrapMode(QPlainTextEdit::NoWrap);
-  QFont plot_font;
-  plot_font.setFamilies({"SFMono-Regular", "Monaco", "Consolas", "Menlo"});
-  plot_font.setStyleHint(QFont::Monospace);
-  plot_font.setPointSize(10);
-  plot_view_->setFont(plot_font);
-  plot_view_->setMinimumHeight(96);
-  plot_layout->addWidget(plot_view_, 1);
-  connect(plot_refresh_btn_, &QPushButton::clicked, this,
-          &VtkViewer::update_plot_view);
-
-  auto* table_layout = make_tab("Table");
-  table_rows_spin_ = new QSpinBox();
-  table_rows_spin_->setRange(10, 5000);
-  table_rows_spin_->setSingleStep(50);
-  table_rows_spin_->setValue(100);
-  table_refresh_btn_ = new QPushButton("Refresh");
-  table_stats_ = new QLabel("No data");
-  hrow(table_layout,
-       {new QLabel("Rows"), table_rows_spin_, table_refresh_btn_});
-  table_layout->addWidget(table_stats_);
-  table_view_ = new QTableWidget();
-  table_view_->setSelectionBehavior(QAbstractItemView::SelectRows);
-  table_view_->setSelectionMode(QAbstractItemView::SingleSelection);
-  table_view_->setEditTriggers(QAbstractItemView::NoEditTriggers);
-  table_view_->setAlternatingRowColors(true);
-  table_view_->horizontalHeader()->setSectionResizeMode(
-      QHeaderView::ResizeToContents);
-  table_view_->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
-  table_view_->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-  table_view_->setMinimumHeight(96);
-  table_layout->addWidget(table_view_, 1);
-  connect(table_rows_spin_, QOverload<int>::of(&QSpinBox::valueChanged), this,
-          &VtkViewer::update_table_view);
-  connect(table_refresh_btn_, &QPushButton::clicked, this,
-          &VtkViewer::update_table_view);
 
 #ifdef GMP_ENABLE_VTK_VIEWER
   vtk_widget_ = new QVTKOpenGLNativeWidget(right_panel);
@@ -1671,8 +1637,7 @@ QVariantMap VtkViewer::viewer_settings() const {
   map.insert("vector_auto_sync_deform",
              vector_auto_sync_deform_ && vector_auto_sync_deform_->isChecked());
   map.insert("vector_array", vector_array_combo_ ? vector_array_combo_->currentData().toString() : "");
-  map.insert("table_rows",
-             table_rows_spin_ ? table_rows_spin_->value() : 100);
+  map.insert("table_rows", table_rows_);
 
 #ifdef GMP_ENABLE_VTK_VIEWER
   if (mesh_group_) {
@@ -1898,10 +1863,7 @@ void VtkViewer::apply_viewer_settings(const QVariantMap& settings) {
       }
     }
   }
-  if (table_rows_spin_) {
-    const int rows = settings.value("table_rows", table_rows_spin_->value()).toInt();
-    table_rows_spin_->setValue(qBound(10, rows, 5000));
-  }
+  table_rows_ = qBound(10, settings.value("table_rows", table_rows_).toInt(), 5000);
 
   if (settings.contains("mesh_group_dim") && settings.contains("mesh_group_id")) {
     set_mesh_group_filter(settings.value("mesh_group_dim").toInt(),
@@ -1916,12 +1878,8 @@ void VtkViewer::apply_viewer_settings(const QVariantMap& settings) {
   apply_mesh_visuals();
   update_pipeline();
   update_vector_tab();
-  if (plot_view_) {
-    update_plot_view();
-  }
-  if (table_view_) {
-    update_table_view();
-  }
+  update_plot_view();
+  update_table_view();
 }
 
 void VtkViewer::set_exodus_history(const QStringList& paths) {
@@ -2011,12 +1969,8 @@ void VtkViewer::on_time_changed(int index) {
     refresh_time_only();
   }
   update_vector_tab();
-  if (plot_view_) {
-    update_plot_view();
-  }
-  if (table_view_) {
-    update_table_view();
-  }
+  update_plot_view();
+  update_table_view();
 #else
   Q_UNUSED(index);
 #endif
@@ -2088,12 +2042,8 @@ void VtkViewer::on_array_changed(int index) {
     render_window_->Render();
   }
   update_vector_tab();
-  if (plot_view_) {
-    update_plot_view();
-  }
-  if (table_view_) {
-    update_table_view();
-  }
+  update_plot_view();
+  update_table_view();
 #else
   Q_UNUSED(index);
 #endif
@@ -2272,12 +2222,8 @@ void VtkViewer::update_pipeline() {
   update_vector_list();
   update_vector_tab();
   update_scene_extras();
-  if (plot_view_) {
-    update_plot_view();
-  }
-  if (table_view_) {
-    update_table_view();
-  }
+  update_plot_view();
+  update_table_view();
   if (first_render_) {
     renderer_->ResetCamera();
     first_render_ = false;
@@ -2549,21 +2495,10 @@ void VtkViewer::update_vector_tab() {
 
 void VtkViewer::update_plot_view() {
 #ifndef GMP_ENABLE_VTK_VIEWER
-  if (plot_view_) {
-    plot_view_->setPlainText("vtk disabled");
-    if (plot_stats_) {
-      plot_stats_->setText("vtk disabled");
-    }
-  }
   cached_plot_text_ = QString::fromUtf8("vtk disabled");
   cached_plot_stats_ = QString::fromUtf8("vtk disabled");
   return;
 #endif
-  if (!plot_view_) {
-    cached_plot_text_ = QString::fromUtf8("No plot widget");
-    cached_plot_stats_ = QString::fromUtf8("No plot widget");
-    return;
-  }
   vtkDataSet* data = nullptr;
   if (mode_ == DataMode::Exodus && mapper_) {
     data = vtkDataSet::SafeDownCast(mapper_->GetInput());
@@ -2579,10 +2514,6 @@ void VtkViewer::update_plot_view() {
     }
   }
   if (!data) {
-    plot_view_->setPlainText("No data");
-    if (plot_stats_) {
-      plot_stats_->setText("No data");
-    }
     cached_plot_text_ = QString::fromUtf8("No data");
     cached_plot_stats_ = QString::fromUtf8("No data");
     return;
@@ -2596,10 +2527,6 @@ void VtkViewer::update_plot_view() {
     key = vector_array_combo_->currentData().toString();
   }
   if (key.isEmpty()) {
-    plot_view_->setPlainText("No array selected");
-    if (plot_stats_) {
-      plot_stats_->setText("No array selected");
-    }
     cached_plot_text_ = QString::fromUtf8("No array selected");
     cached_plot_stats_ = QString::fromUtf8("No array selected");
     return;
@@ -2618,10 +2545,6 @@ void VtkViewer::update_plot_view() {
                 : nullptr;
   }
   if (!array) {
-    plot_view_->setPlainText("Selected array not found");
-    if (plot_stats_) {
-      plot_stats_->setText("Invalid array");
-    }
     cached_plot_text_ = QString::fromUtf8("Selected array not found");
     cached_plot_stats_ = QString::fromUtf8("Invalid array");
     return;
@@ -2677,33 +2600,18 @@ void VtkViewer::update_plot_view() {
   if (tuples > limit) {
     lines << QString("... %1 rows omitted ...").arg(tuples - limit);
   }
-  plot_view_->setPlainText(lines.join('\n'));
-  if (plot_stats_) {
-    plot_stats_->setText(QString("mode=%1 tuples=%2").arg(mode_ == DataMode::Mesh ? "mesh"
-                                                                              : "exodus")
-                                                  .arg(tuples));
-  }
   cached_plot_text_ = lines.join('\n');
-  cached_plot_stats_ = plot_stats_ ? plot_stats_->text() : QString("No stats");
+  cached_plot_stats_ = QString("mode=%1 tuples=%2")
+                           .arg(mode_ == DataMode::Mesh ? "mesh" : "exodus")
+                           .arg(tuples);
 }
 
 void VtkViewer::update_table_view() {
 #ifndef GMP_ENABLE_VTK_VIEWER
-  if (table_view_) {
-    table_view_->setRowCount(0);
-    if (table_stats_) {
-      table_stats_->setText("vtk disabled");
-    }
-  }
   cached_table_text_ = QString::fromUtf8("vtk disabled");
   cached_table_stats_ = QString::fromUtf8("vtk disabled");
   return;
 #endif
-  if (!table_view_) {
-    cached_table_text_ = QString::fromUtf8("No table widget");
-    cached_table_stats_ = QString::fromUtf8("No table widget");
-    return;
-  }
   vtkDataSet* data = nullptr;
   if (mode_ == DataMode::Exodus && mapper_) {
     data = vtkDataSet::SafeDownCast(mapper_->GetInput());
@@ -2719,10 +2627,6 @@ void VtkViewer::update_table_view() {
     }
   }
   if (!data) {
-    table_view_->setRowCount(0);
-    if (table_stats_) {
-      table_stats_->setText("No data");
-    }
     cached_table_text_ = QString::fromUtf8("No data");
     cached_table_stats_ = QString::fromUtf8("No data");
     return;
@@ -2736,10 +2640,6 @@ void VtkViewer::update_table_view() {
     key = vector_array_combo_->currentData().toString();
   }
   if (key.isEmpty()) {
-    table_view_->setRowCount(0);
-    if (table_stats_) {
-      table_stats_->setText("No array selected");
-    }
     cached_table_text_ = QString::fromUtf8("No array selected");
     cached_table_stats_ = QString::fromUtf8("No array selected");
     return;
@@ -2758,10 +2658,6 @@ void VtkViewer::update_table_view() {
                 : nullptr;
   }
   if (!array) {
-    table_view_->setRowCount(0);
-    if (table_stats_) {
-      table_stats_->setText("Invalid array");
-    }
     cached_table_text_ = QString::fromUtf8("Invalid array");
     cached_table_stats_ = QString::fromUtf8("Invalid array");
     return;
@@ -2769,8 +2665,7 @@ void VtkViewer::update_table_view() {
 
   const int comps = array->GetNumberOfComponents();
   const vtkIdType tuples = array->GetNumberOfTuples();
-  const int show_rows =
-      qBound(1, table_rows_spin_ ? table_rows_spin_->value() : 100, 5000);
+  const int show_rows = qBound(1, table_rows_, 5000);
   const vtkIdType rows = std::min<vtkIdType>(tuples, show_rows);
 
   QStringList headers;
@@ -2781,30 +2676,6 @@ void VtkViewer::update_table_view() {
   if (comps > 1) {
     headers << "Magnitude";
   }
-  table_view_->setColumnCount(headers.size());
-  table_view_->setHorizontalHeaderLabels(headers);
-  table_view_->setRowCount(static_cast<int>(rows));
-
-  for (vtkIdType i = 0; i < rows; ++i) {
-    const int row = static_cast<int>(i);
-    table_view_->setItem(row, 0,
-                         new QTableWidgetItem(QString::number(i)));
-    double m = 0.0;
-    if (comps > 1) {
-      m = ComputeMagnitude(array, i);
-    }
-    for (int c = 0; c < comps; ++c) {
-      table_view_->setItem(
-          row, c + 1,
-          new QTableWidgetItem(QString::number(array->GetComponent(i, c), 'g', 6)));
-    }
-    if (comps > 1) {
-      const int mag_col = static_cast<int>(headers.size()) - 1;
-      table_view_->setItem(row, mag_col,
-                           new QTableWidgetItem(QString::number(m, 'g', 6)));
-    }
-  }
-  table_view_->resizeColumnsToContents();
   QStringList text_rows;
   text_rows << QString("Array: %1").arg(key);
   text_rows << QString("Tuples: %1").arg(tuples);
@@ -2814,9 +2685,11 @@ void VtkViewer::update_table_view() {
   for (vtkIdType i = 0; i < rows; ++i) {
     QStringList row_text;
     row_text << QString::number(i);
-    for (int c = 0; c < table_view_->columnCount() - 1; ++c) {
-      auto* item = table_view_->item(static_cast<int>(i), c);
-      row_text << (item ? item->text() : QString());
+    for (int c = 0; c < comps; ++c) {
+      row_text << QString::number(array->GetComponent(i, c), 'g', 6);
+    }
+    if (comps > 1) {
+      row_text << QString::number(ComputeMagnitude(array, i), 'g', 6);
     }
     text_rows << row_text.join('\t');
   }
@@ -2824,32 +2697,29 @@ void VtkViewer::update_table_view() {
     text_rows << QString("... omitted %1 rows ...").arg(tuples - rows);
   }
   cached_table_text_ = text_rows.join('\n');
-  if (table_stats_) {
-    if (comps > 1) {
-      VectorStats stats = AnalyzeVectorArray(array);
-      if (stats.has_data) {
-        table_stats_->setText(
-            QString("mode=%1, tuples=%2, show=%3, %4")
-                .arg(mode_ == DataMode::Mesh ? "mesh" : "exodus")
-                .arg(tuples)
-                .arg(rows)
-                .arg(FormatVectorStatsText(stats)));
-      } else {
-        table_stats_->setText(
-            QString("tuples=%1, show=%2, components=%3")
-                .arg(tuples)
-                .arg(rows)
-                .arg(comps));
-      }
+  if (comps > 1) {
+    VectorStats stats = AnalyzeVectorArray(array);
+    if (stats.has_data) {
+      cached_table_stats_ =
+          QString("mode=%1, tuples=%2, show=%3, %4")
+              .arg(mode_ == DataMode::Mesh ? "mesh" : "exodus")
+              .arg(tuples)
+              .arg(rows)
+              .arg(FormatVectorStatsText(stats));
     } else {
-      table_stats_->setText(
+      cached_table_stats_ =
           QString("tuples=%1, show=%2, components=%3")
               .arg(tuples)
               .arg(rows)
-              .arg(comps));
+              .arg(comps);
     }
+  } else {
+    cached_table_stats_ =
+        QString("tuples=%1, show=%2, components=%3")
+            .arg(tuples)
+            .arg(rows)
+            .arg(comps);
   }
-  cached_table_stats_ = table_stats_ ? table_stats_->text() : QString("No stats");
 }
 
 void VtkViewer::update_vector_list() {
