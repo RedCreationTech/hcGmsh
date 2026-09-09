@@ -177,3 +177,45 @@
 
 - 用户在全屏下拖出工具组时进程段错误退出。崩溃栈：`QMainWindowLayout::revert → QToolBarPrivate::endDrag`——按下时 Qt 自身拖拽状态机已启动，我方浮出先改了布局，释放时 `endDrag` 在失效状态上 `revert(nullptr)` 崩溃。
 - 修复：浮出前补发合成 `MouseButtonRelease`，让 Qt 拖拽状态机在布局未变时正常收尾，再执行受控浮出；真实释放到达时拖拽状态已空，不再进入崩溃路径。S6 场景与 82 步全量巡览通过，CTest `1/1` 通过。
+
+## 25. 可视化时间步动画回放工具组（2026-09-09）
+
+- 用户要求：可视化的时间滑块之外，在顶部工具栏提供自动播放/暂停按钮。新增 Playback 工具组（`playbackToolGroup`，加入显隐/浮动/复位/磁吸各组清单）：播放/暂停切换按钮（Run/Stop 图标与文字联动），150ms 定时循环推进时间步（`VtkViewer::set_time_step_index`，经滑块统一刷新管线/曲线/表格），到末尾自动循环回首帧；数据被卸载/替换时自动停止并复位按钮。
+- `VtkViewer` 新增公共接口 `time_step_count()/current_time_step_index()/set_time_step_index()`；`update_command_availability` 在无多步数据或草图编辑态禁用并给出原因（“Load an Exodus result with multiple time steps to play.”）。
+- 巡览新增 `playback_controls_contract`（无数据时禁用+原因提示的合同；有多步数据时验证播放推进时间步）。同时修正 `main_window_maximize_expands` 自带退出逻辑导致其后步骤不执行的问题：`sketch_nested_loop_hole_extrude` 与 `playback_controls_contract` 前移到该步骤之前（基线 84 步）。
+- 84 步全量巡览通过，CTest `1/1` 通过。
+
+## 26. 回放按钮状态随数据加载刷新 + 测试策略约定（2026-09-09）
+
+- 用户复现：已载入多时间步 Exodus 后播放按钮仍禁用。根因：`update_command_availability` 只在上下文变化时执行，文件加载后未再触发，按钮停在初始禁用态。修复：`VtkViewer` 新增 `time_steps_changed()` 信号（`update_time_steps_from_reader` 末尾发出），MainWindow 连接到 `update_command_availability()`。
+- 按用户要求建立 `AGENTS.md`（根目录）：日常修改只跑 1~2 个相关用例（`GMP_TOUR_STEP_FILTER` 定向 / CTest），全量 84 步巡览仅在 git commit 前或用户明确要求时执行；基线只增不减。
+
+## 27. 回放工具组进度条与独立暂停（2026-09-09）
+
+- 用户反馈播放按钮可用后，要求组内加进度条和独立暂停按钮。Playback 组现为：播放（Run 图标，trigger 启动 150ms 定时循环推进）+ 暂停（Stop 图标，trigger 停止）+ 进度条 `playbackProgressSlider`（120–180px，范围 0..steps-1，拖动即 `set_time_step_index` 定位，暂停后或播放中均可拖动；播放中从拖动点继续）。
+- 进度同步：`update_command_availability`（由 `time_steps_changed` 驱动）同步滑块范围/可用态/当前值；定时 tick 同步滑块位置；均用 QSignalBlocker 防反馈回环。
+- 巡览 `playback_controls_contract` 扩展：三组控件存在性与无数据禁用合同。定向巡览通过（按 AGENTS.md 策略，提交前再全量）。
+
+## 28. Playback 组复位后控件丢失修复（2026-09-09）
+
+- 用户反馈：加入 Playback 组后，工具组浮出→关闭恢复、恢复默认工具布局失效。根因：复位的“浮动态→同动作重建”路径对 Playback 组同样生效，但 `addActions` 只搬动作、搬不走进度条等内嵌控件，且 `action_playback_play_/pause_/playback_slider_` 成员指针随旧工具条销毁而悬空，后续可用性/菜单逻辑全部异常。
+- 修复：复位时 `playbackToolGroup` 不走重建，统一走停靠路径（`removeToolBar + setParent(Qt::Widget) + addToolBar + show`），完整保留组内控件与成员指针；其余五组维持重建兜底不变。
+- 巡览 `playback_controls_contract` 扩展“浮出→复位后停靠回顶部且三组控件结构完整”断言；S1/S5 场景复测通过。
+
+## 29. 回放进度条右侧单步后退/前进（2026-09-09）
+
+- Playback 组在进度条右侧新增“后退 / 前进”单步按钮（Undo/Redo 图标，`playbackPrevAction`/`playbackNextAction`）：停止状态下单步定位时间步，两端钳位不循环；与播放/暂停/进度条同一可用性条件（多时间步且非草图编辑态），单步后同步进度条位置（QSignalBlocker 防回环）。
+- 巡览 `playback_controls_contract` 扩展两组按钮存在性、禁用合同及浮出复位结构完整性断言。定向巡览通过。
+
+## 30. 暂停/终止语义与播放器图标（2026-09-09）
+
+- 用户指正：暂停按钮应是 `||` 而非方块（方块是“终止”语义）。修正：新增 `IconGlyph::Pause`（两条竖线）用于暂停按钮；新增独立“终止”按钮（方块图标，`playbackStopAction`）：停止播放并回到第 0 帧（进度条同步归零）。
+- 单步按钮同日改为播放器风格自绘字形：`StepPrev`（|<）与 `StepNext`（>|），替换原 Undo/Redo 弯曲箭头。
+- Playback 组最终布局：[播放 ▶] [暂停 ||] [终止 ■] [进度条] [后退 |<] [前进 >|]。巡览合同同步扩展（存在性/禁用/浮出复位结构断言），定向巡览通过。
+
+## 31. 首次切可视化落到 Results 修复（2026-09-09）
+
+- 用户反馈：模块选择器首次选“可视化”会先落到“结果”模块，再选一次才打开 Visualization 工作窗。非设计如此，是 bug。
+- 根因链：`module_tabs_` 切到 11（可视化）→ `currentChanged` 处理器末尾 `restore_active_object_for_module(11)`；可视化与结果共用树“Results”根节点（`context_root_for_module` 11/12 均返回 "Results"）。当前树选中不在 Results 根下时，恢复逻辑 `setCurrentItem(Results 根/记忆子项)` 触发 `itemSelectionChanged`，树选择处理器按 kind=="Results" 把页签拨到 `results_tab(12)`，覆盖了用户的选择。第二次切换时选中已在 Results 根下（`already_in_context` 命中），不再 `setCurrentItem`，故正常。
+- 修复：`restore_active_object_for_module` 本就用 `active_ui_context_.synchronizing` 包住程序化 `setCurrentItem`，但树选择处理器从未检查该标志。现树处理器在该标志为真时只同步树选中/属性/视口，不反向切 `module_tabs_`（含 Sketches 两个分支共三处 `setCurrentIndex` 均加 `may_switch_tab` 守卫）。
+- 巡览新增 `module_selector_viz_first_switch` 回归断言（先停在 Part，再经选择器切可视化，断言 tab==11、Visualization 工作窗可见、Results 工作窗未抢前台）。

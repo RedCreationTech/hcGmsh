@@ -1977,6 +1977,19 @@ void VtkViewer::on_reload() {
   }
 }
 
+int VtkViewer::current_time_step_index() const {
+  return time_slider_ ? time_slider_->value() : 0;
+}
+
+void VtkViewer::set_time_step_index(int index) {
+  if (!time_slider_ || time_steps_.empty()) {
+    return;
+  }
+  const int clamped = qBound(0, index, static_cast<int>(time_steps_.size()) - 1);
+  // 经滑块赋值，让 on_time_changed 统一刷新管线/曲线/表格。
+  time_slider_->setValue(clamped);
+}
+
 void VtkViewer::on_time_changed(int index) {
 #ifdef GMP_ENABLE_VTK_VIEWER
   if (mode_ != DataMode::Exodus) {
@@ -3206,8 +3219,8 @@ void VtkViewer::update_time_steps_from_reader(bool keep_index) {
   time_slider_->blockSignals(false);
   time_label_->setText(QString("t=%1").arg(time_steps_[idx]));
 #endif
+  emit time_steps_changed();
 }
-
 void VtkViewer::load_file(const QString& path) {
   if (path.endsWith(".msh", Qt::CaseInsensitive)) {
     set_mesh_file(path);

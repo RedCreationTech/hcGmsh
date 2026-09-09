@@ -33,6 +33,7 @@ class QEvent;
 class QProgressBar;
 class QCheckBox;
 class QTimer;
+class QSlider;
 
 namespace gmp {
 
@@ -296,6 +297,13 @@ class MainWindow : public QMainWindow {
   QAction* action_stage_pick_ = nullptr;
   QAction* action_stage_clear_ = nullptr;
   QAction* action_stage_slice_ = nullptr;
+  QAction* action_playback_play_ = nullptr;   // 时间步动画 播放
+  QAction* action_playback_pause_ = nullptr;  // 时间步动画 暂停
+  QAction* action_playback_stop_ = nullptr;   // 终止播放并回到第 0 帧
+  QAction* action_playback_prev_ = nullptr;   // 单步后退
+  QAction* action_playback_next_ = nullptr;   // 单步前进
+  QSlider* playback_slider_ = nullptr;        // 播放进度（可拖动定位）
+  QTimer* playback_timer_ = nullptr;
   QAction* action_reset_tool_layout_ = nullptr;
   QPushButton* job_run_button_ = nullptr;
   QPushButton* job_stop_button_ = nullptr;

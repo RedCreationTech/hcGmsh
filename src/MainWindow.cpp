@@ -172,6 +172,9 @@ enum class IconGlyph {
   Pick,
   ClearSelection,
   Slice,
+  Pause,     // 播放器“暂停”：||
+  StepPrev,  // 播放器“上一帧”：|<
+  StepNext,  // 播放器“下一帧”：>|
 };
 
 constexpr int kNavigationKindRole = Qt::UserRole + 100;
@@ -253,6 +256,34 @@ QIcon MakeIcon(IconGlyph glyph, int size = 18) {
         int y = m + i * (r.height() / 2);
         p.drawLine(m, y, s - m, y);
       }
+      break;
+    }
+    case IconGlyph::Pause: {
+      // 播放器“暂停”：两条竖线。
+      p.drawLine(m + 4, m + 1, m + 4, s - m - 1);
+      p.drawLine(s - m - 4, m + 1, s - m - 4, s - m - 1);
+      break;
+    }
+    case IconGlyph::StepPrev: {
+      // 播放器“上一帧”：左侧竖条 + 左指实心三角。
+      QPolygon tri;
+      tri << QPoint(s - m - 2, m + 1) << QPoint(m + 5, s / 2)
+          << QPoint(s - m - 2, s - m - 1);
+      p.setBrush(QColor("#2b2b2b"));
+      p.drawPolygon(tri);
+      p.setBrush(Qt::NoBrush);
+      p.drawLine(m + 2, m + 1, m + 2, s - m - 1);
+      break;
+    }
+    case IconGlyph::StepNext: {
+      // 播放器“下一帧”：右指实心三角 + 右侧竖条。
+      QPolygon tri;
+      tri << QPoint(m + 2, m + 1) << QPoint(s - m - 5, s / 2)
+          << QPoint(m + 2, s - m - 1);
+      p.setBrush(QColor("#2b2b2b"));
+      p.drawPolygon(tri);
+      p.setBrush(Qt::NoBrush);
+      p.drawLine(s - m - 2, m + 1, s - m - 2, s - m - 1);
       break;
     }
     case IconGlyph::Run: {
@@ -2577,6 +2608,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             const QSignalBlocker blocker(action_stage_slice_);
             action_stage_slice_->setChecked(enabled);
           });
+  connect(viewer_, &VtkViewer::time_steps_changed, this,
+          [this]() { update_command_availability(); });
   connect(viewer_, &VtkViewer::stage_command_feedback, this,
           [this](const QString& message) {
             statusBar()->showMessage(message, 4000);
@@ -3806,22 +3839,26 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       } else if (kind == "Assembly") {
         tab = item->parent() ? property_tab : -1;
       }
+      // 模块切换触发的程序化树选择恢复（restore_active_object_for_module）
+      // 只同步树选中与视口，不得反向覆盖用户刚选择的模块页签；否则首次切到
+      // Visualization（与 Results 共用 Results 根节点）会被拨回 Results。
+      const bool may_switch_tab = !active_ui_context_.synchronizing;
       if (tab >= 0) {
         if (kind == "Sketches" && sketch_panel_ && item->parent()) {
           // 单击草图子节点只同步选择与模块上下文；编辑由双击或显式命令进入。
           if (auto* list = sketch_panel_->sketch_list()) {
             list->setCurrentRow(item->parent()->indexOfChild(item));
           }
-          if (tab != module_tabs_->currentIndex()) {
+          if (may_switch_tab && tab != module_tabs_->currentIndex()) {
             module_tabs_->setCurrentIndex(tab);
           }
           preview_sketch(item);
         } else if (kind == "Sketches" && !item->parent()) {
-          if (tab != module_tabs_->currentIndex()) {
+          if (may_switch_tab && tab != module_tabs_->currentIndex()) {
             module_tabs_->setCurrentIndex(tab);
           }
           preview_sketch(nullptr);
-        } else if (tab != module_tabs_->currentIndex()) {
+        } else if (may_switch_tab && tab != module_tabs_->currentIndex()) {
           module_tabs_->setCurrentIndex(tab);
         }
       }
@@ -4230,7 +4267,8 @@ void MainWindow::recover_floating_tool_groups() {
   };
   const QStringList toolbar_names = {
       "projectToolGroup", "editToolGroup", "modelToolGroup",
-      "meshToolGroup", "jobToolGroup", "displayToolGroup"};
+      "meshToolGroup", "jobToolGroup", "displayToolGroup",
+      "playbackToolGroup"};
   for (const QString& name : toolbar_names) {
     auto* toolbar = findChild<QToolBar*>(name);
     if (toolbar && toolbar->isFloating()) {
@@ -4292,7 +4330,7 @@ void MainWindow::float_group_at(QToolBar* toolbar,
   } else {
     static const QStringList names = {"projectToolGroup", "editToolGroup",
                                       "modelToolGroup",  "meshToolGroup",
-                                      "jobToolGroup",    "displayToolGroup"};
+                                      "jobToolGroup",    "displayToolGroup", "playbackToolGroup"};
     const int index =
         std::max(0, int(names.indexOf(toolbar->objectName())));
     target = mapToGlobal(
@@ -4357,7 +4395,7 @@ void MainWindow::ensure_group_snap_timer() {
   connect(group_snap_timer_, &QTimer::timeout, this, [this]() {
     static const QStringList names = {"projectToolGroup", "editToolGroup",
                                       "modelToolGroup",  "meshToolGroup",
-                                      "jobToolGroup",    "displayToolGroup"};
+                                      "jobToolGroup",    "displayToolGroup", "playbackToolGroup"};
     for (const QString& name : names) {
       if (auto* tb = findChild<QToolBar*>(name)) {
         if (tb->isFloating()) {
@@ -4387,14 +4425,18 @@ void MainWindow::reset_tool_group_layout(bool show_feedback) {
   // 并替换 View 菜单的显隐开关与成员指针。
   const QStringList toolbar_names = {
       "projectToolGroup", "editToolGroup", "modelToolGroup",
-      "meshToolGroup", "jobToolGroup", "displayToolGroup"};
+      "meshToolGroup", "jobToolGroup", "displayToolGroup",
+      "playbackToolGroup"};
   for (const QString& name : toolbar_names) {
     auto* toolbar = findChild<QToolBar*>(name);
     if (!toolbar) {
       continue;
     }
     const bool was_floating = toolbar->isFloating();
-    if (was_floating) {
+    // Playback 组绝不走重建：addActions 搬不走进度条等内嵌控件，
+    // 且播放/暂停/滑块成员指针会随旧工具条销毁而悬空。它的浮动只来自
+    // 受控路径（Qt::Tool 窗口），停靠路径可完整保留内部结构。
+    if (was_floating && name != "playbackToolGroup") {
       auto* fresh = make_tool_group(toolbar->windowTitle(),
                                     toolbar->objectName());
       fresh->setIconSize(toolbar->iconSize());
@@ -4913,6 +4955,99 @@ void MainWindow::build_toolbar() {
   // Abaqus 风格的紧凑显示组：默认悬浮于舞台右上角，同时保留 Qt
   // 原生的四向停靠预览和整组拖拽行为。
   display_tool_group_ = make_tool_group("Display Group", "displayToolGroup");
+  auto* playback_tool_group = make_tool_group("Playback", "playbackToolGroup");
+  // 时间步动画回放：播放 / 暂停 / 进度条（可拖动定位）。
+  action_playback_play_ = playback_tool_group->addAction("Play");
+  action_playback_play_->setObjectName("playbackPlayAction");
+  action_playback_play_->setIcon(MakeIcon(IconGlyph::Run));
+  action_playback_play_->setToolTip("Play the time-step animation.");
+  action_playback_pause_ = playback_tool_group->addAction("Pause");
+  action_playback_pause_->setObjectName("playbackPauseAction");
+  action_playback_pause_->setIcon(MakeIcon(IconGlyph::Pause));
+  action_playback_pause_->setToolTip("Pause the time-step animation.");
+  action_playback_stop_ = playback_tool_group->addAction("Stop");
+  action_playback_stop_->setObjectName("playbackStopAction");
+  action_playback_stop_->setIcon(MakeIcon(IconGlyph::Stop));
+  action_playback_stop_->setToolTip(
+      "Stop playback and return to the first time step.");
+  playback_slider_ = new QSlider(Qt::Horizontal, playback_tool_group);
+  playback_slider_->setObjectName("playbackProgressSlider");
+  playback_slider_->setRange(0, 0);
+  playback_slider_->setEnabled(false);
+  playback_slider_->setMinimumWidth(120);
+  playback_slider_->setMaximumWidth(180);
+  playback_slider_->setToolTip(
+      "Time-step playback progress. Drag to scrub (pause first or any time).");
+  playback_tool_group->addWidget(playback_slider_);
+  // 进度条右侧：单步后退/前进（停止状态下单步定位，两端钳位不循环）。
+  action_playback_prev_ = playback_tool_group->addAction("Prev");
+  action_playback_prev_->setObjectName("playbackPrevAction");
+  action_playback_prev_->setIcon(MakeIcon(IconGlyph::StepPrev));
+  action_playback_prev_->setToolTip("Step backward one time step.");
+  action_playback_next_ = playback_tool_group->addAction("Next");
+  action_playback_next_->setObjectName("playbackNextAction");
+  action_playback_next_->setIcon(MakeIcon(IconGlyph::StepNext));
+  action_playback_next_->setToolTip("Step forward one time step.");
+  auto playback_step = [this](int delta) {
+    if (!viewer_ || viewer_->time_step_count() <= 1) {
+      return;
+    }
+    const int target = qBound(0, viewer_->current_time_step_index() + delta,
+                              viewer_->time_step_count() - 1);
+    viewer_->set_time_step_index(target);
+    if (playback_slider_) {
+      const QSignalBlocker blocker(playback_slider_);
+      playback_slider_->setValue(viewer_->current_time_step_index());
+    }
+  };
+  connect(action_playback_prev_, &QAction::triggered, this,
+          [this, playback_step]() { playback_step(-1); });
+  connect(action_playback_next_, &QAction::triggered, this,
+          [this, playback_step]() { playback_step(1); });
+  playback_timer_ = new QTimer(this);
+  playback_timer_->setInterval(150);
+  connect(action_playback_play_, &QAction::triggered, this, [this]() {
+    if (viewer_ && viewer_->time_step_count() > 1) {
+      playback_timer_->start();
+      gmp::log_operation("ui", "Playback started.");
+    }
+  });
+  connect(action_playback_pause_, &QAction::triggered, this, [this]() {
+    playback_timer_->stop();
+    gmp::log_operation("ui", "Playback paused.");
+  });
+  connect(action_playback_stop_, &QAction::triggered, this, [this]() {
+    playback_timer_->stop();
+    if (viewer_ && viewer_->time_step_count() > 0) {
+      viewer_->set_time_step_index(0);
+      if (playback_slider_) {
+        const QSignalBlocker blocker(playback_slider_);
+        playback_slider_->setValue(0);
+      }
+    }
+    gmp::log_operation("ui", "Playback stopped and reset to first step.");
+  });
+  connect(playback_timer_, &QTimer::timeout, this, [this]() {
+    if (!viewer_ || viewer_->time_step_count() <= 1) {
+      // 数据被卸载/替换：自动停止。
+      playback_timer_->stop();
+      return;
+    }
+    const int next =
+        (viewer_->current_time_step_index() + 1) % viewer_->time_step_count();
+    viewer_->set_time_step_index(next);
+    if (playback_slider_) {
+      const QSignalBlocker blocker(playback_slider_);
+      playback_slider_->setValue(viewer_->current_time_step_index());
+    }
+  });
+  // 拖动进度条定位（暂停后或播放中均可；播放中从拖动点继续）。
+  connect(playback_slider_, &QSlider::valueChanged, this, [this](int value) {
+    if (viewer_ && viewer_->time_step_count() > 1 &&
+        value != viewer_->current_time_step_index()) {
+      viewer_->set_time_step_index(value);
+    }
+  });
   action_display_mode_ = display_tool_group_->addAction(
       MakeIcon(IconGlyph::Display), "Cycle Display Mode");
   action_stage_pick_ = display_tool_group_->addAction(
@@ -4960,7 +5095,7 @@ void MainWindow::build_toolbar() {
     auto* toolbars_menu = view_menu_->addMenu("Toolbars");
     toolbars_menu->setObjectName("toolbarVisibilityMenu");
     for (auto* toolbar : {project_toolbar, edit_toolbar, model_toolbar,
-                          mesh_toolbar, job_toolbar}) {
+                          mesh_toolbar, job_toolbar, playback_tool_group}) {
       auto* toggle = toolbar->toggleViewAction();
       toggle->setText(toolbar->windowTitle());
       toolbars_menu->addAction(toggle);
@@ -4973,7 +5108,8 @@ void MainWindow::build_toolbar() {
     auto* float_menu = toolbars_menu->addMenu("Float Group");
     float_menu->setObjectName("floatToolGroupMenu");
     for (auto* toolbar : {project_toolbar, edit_toolbar, model_toolbar,
-                          mesh_toolbar, job_toolbar, display_tool_group_}) {
+                          mesh_toolbar, job_toolbar, display_tool_group_,
+                          playback_tool_group}) {
       auto* act = float_menu->addAction(toolbar->windowTitle());
       act->setCheckable(true);
       act->setChecked(toolbar->isFloating());
@@ -5923,6 +6059,41 @@ void MainWindow::update_command_availability() {
     }
   }
 
+  if (action_playback_play_) {
+    const int steps = viewer_ ? viewer_->time_step_count() : 0;
+    const bool can_play = steps > 1 && !sketch_editing;
+    action_playback_play_->setEnabled(can_play);
+    if (action_playback_pause_) {
+      action_playback_pause_->setEnabled(can_play);
+    }
+    if (action_playback_stop_) {
+      action_playback_stop_->setEnabled(can_play);
+    }
+    if (action_playback_prev_) {
+      action_playback_prev_->setEnabled(can_play);
+    }
+    if (action_playback_next_) {
+      action_playback_next_->setEnabled(can_play);
+    }
+    if (playback_slider_) {
+      const QSignalBlocker blocker(playback_slider_);
+      playback_slider_->setRange(0, std::max(0, steps - 1));
+      playback_slider_->setEnabled(can_play);
+      if (viewer_ && steps > 0) {
+        playback_slider_->setValue(viewer_->current_time_step_index());
+      }
+    }
+    if (!can_play && playback_timer_) {
+      playback_timer_->stop();
+    }
+    if (can_play) {
+      action_playback_play_->setToolTip(
+          "Play/Pause the time-step animation.");
+    } else if (!sketch_editing) {
+      action_playback_play_->setToolTip(
+          "Load an Exodus result with multiple time steps to play.");
+    }
+  }
   if (job_run_button_) {
     job_run_button_->setEnabled(!task_busy);
     job_run_button_->setText(
@@ -8971,7 +9142,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                             Qt::TopToolBarArea ||
                         display_tool_group_->allowedAreas() !=
                             Qt::AllToolBarAreas ||
-                        !toolbar_menu || toolbar_menu->actions().size() != 7 ||
+                        !toolbar_menu || toolbar_menu->actions().size() != 8 ||
                         !action_reset_tool_layout_ ||
                         saveState(3).isEmpty()) {
                       throw std::runtime_error("L-05 display/persistence contract failed");
@@ -11155,31 +11326,112 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                 },
                 this});
-  steps.append({"main_window_maximize_expands",
+  steps.append({"module_selector_viz_first_switch",
                 [this]() {
-                  // 主窗口最大化后中央区域必须充满：小窗 → 最大化，
-                  // 中央控件尺寸应跟随窗口。
-                  resize(800, 600);
+                  // 首次从模块选择器切到 Visualization：内部模块索引必须为
+                  // 11 且打开 Visualization 工作窗，不得落到 Results。
+                  if (!module_selector_ || !module_tabs_) {
+                    throw std::runtime_error("Module selector fixture missing");
+                  }
+                  module_tabs_->setCurrentIndex(1);  // 先停在 Part
+                  const int combo_index = module_selector_->findData(11);
+                  if (combo_index < 0) {
+                    throw std::runtime_error("Visualization is missing from module selector");
+                  }
+                  module_selector_->setCurrentIndex(combo_index);
                   qApp->processEvents();
-                  showMaximized();
-                  qApp->processEvents();
-                  QTimer::singleShot(600, this, [this]() {
-                    qApp->processEvents();
-                    const QSize cs = centralWidget()->size();
-                    const QSize ws = size();
-                    qInfo("[tour] maximize check: window=%dx%d central=%dx%d",
-                          ws.width(), ws.height(), cs.width(), cs.height());
-                    if (cs.width() < ws.width() - 40 ||
-                        cs.height() < ws.height() - 120) {
-                      qCritical("[tour] FAILED: central does not expand after maximize");
-                      QApplication::exit(2);
-                      return;
-                    }
-                    qInfo("[tour] maximize check OK");
-                    QApplication::quit();
-                  });
+                  const int tab = module_tabs_->currentIndex();
+                  const bool viz_visible =
+                      visualization_work_window_ &&
+                      visualization_work_window_->isVisible();
+                  const bool results_visible =
+                      results_work_window_ &&
+                      results_work_window_->isVisible();
+                  qInfo("[tour] viz switch: tab=%d viz_visible=%d results_visible=%d",
+                        tab, viz_visible, results_visible);
+                  if (tab != 11 || !viz_visible ||
+                      (results_visible && !viz_visible)) {
+                    throw std::runtime_error("First switch to Visualization landed on Results");
+                  }
                 },
-                nullptr});
+                this});
+  steps.append({"playback_controls_contract",
+                [this]() {
+                  // 时间步回放工具组：存在、无多步数据时禁用并给出原因、
+                  // 停靠在顶部工具组行。
+                  auto* group = findChild<QToolBar*>("playbackToolGroup");
+                  if (!group) {
+                    throw std::runtime_error("Playback tool group is missing");
+                  }
+                  auto* play =
+                      group->findChild<QAction*>("playbackPlayAction");
+                  auto* pause =
+                      group->findChild<QAction*>("playbackPauseAction");
+                  auto* slider =
+                      group->findChild<QSlider*>("playbackProgressSlider");
+                  auto* prev =
+                      group->findChild<QAction*>("playbackPrevAction");
+                  auto* next =
+                      group->findChild<QAction*>("playbackNextAction");
+                  auto* stop =
+                      group->findChild<QAction*>("playbackStopAction");
+                  if (!play || !pause || !slider || !prev || !next || !stop) {
+                    throw std::runtime_error("Playback controls are missing");
+                  }
+                  // Playback 组受控浮出 → 复位：必须停靠回顶部且
+                  // 进度条/播放/暂停控件结构完整（不走重建路径）。
+                  toggle_group_float("playbackToolGroup", true);
+                  if (!group->isFloating()) {
+                    throw std::runtime_error("Playback group should float");
+                  }
+                  reset_tool_group_layout(false);
+                  auto* group_after =
+                      findChild<QToolBar*>("playbackToolGroup");
+                  if (!group_after || group_after->isFloating() ||
+                      !group_after->isVisible() ||
+                      !group_after->findChild<QSlider*>(
+                          "playbackProgressSlider") ||
+                      !group_after->findChild<QAction*>("playbackPlayAction") ||
+                      !group_after->findChild<QAction*>(
+                          "playbackPauseAction") ||
+                      !group_after->findChild<QAction*>(
+                          "playbackStopAction") ||
+                      !group_after->findChild<QAction*>(
+                          "playbackPrevAction") ||
+                      !group_after->findChild<QAction*>(
+                          "playbackNextAction")) {
+                    throw std::runtime_error("Playback group structure lost after float+reset");
+                  }
+                  group = group_after;
+                  const int steps = viewer_ ? viewer_->time_step_count() : -1;
+                  if (steps > 1) {
+                    // 有多步数据：可用，且播放确实推进时间步。
+                    if (!play->isEnabled()) {
+                      throw std::runtime_error("Playback should be enabled with time steps");
+                    }
+                    const int before = viewer_->current_time_step_index();
+                    play->trigger();  // 开始播放
+                    QTimer::singleShot(400, this, [this, play, before]() {
+                      if (viewer_->current_time_step_index() == before) {
+                        qCritical("[tour] FAILED: playback did not advance time step");
+                        QApplication::exit(2);
+                        return;
+                      }
+                      play->trigger();  // 暂停
+                      qInfo("[tour] playback advanced and paused OK");
+                      QApplication::quit();
+                    });
+                    return;
+                  }
+                  // 无多步数据：播放/暂停/进度条全部禁用且给出原因。
+                  if (play->isEnabled() || pause->isEnabled() ||
+                      stop->isEnabled() || prev->isEnabled() ||
+                      next->isEnabled() || slider->isEnabled() ||
+                      !play->toolTip().contains("Exodus")) {
+                    throw std::runtime_error("Playback disabled-state contract failed");
+                  }
+                },
+                this});
   steps.append({"sketch_nested_loop_hole_extrude",
                 [this]() {
                   // 嵌套环拉伸成孔：矩形+圆（对照）与手画多边形+圆
@@ -11229,6 +11481,31 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                 },
                 this});
+  steps.append({"main_window_maximize_expands",
+                [this]() {
+                  // 主窗口最大化后中央区域必须充满：小窗 → 最大化，
+                  // 中央控件尺寸应跟随窗口。
+                  resize(800, 600);
+                  qApp->processEvents();
+                  showMaximized();
+                  qApp->processEvents();
+                  QTimer::singleShot(600, this, [this]() {
+                    qApp->processEvents();
+                    const QSize cs = centralWidget()->size();
+                    const QSize ws = size();
+                    qInfo("[tour] maximize check: window=%dx%d central=%dx%d",
+                          ws.width(), ws.height(), cs.width(), cs.height());
+                    if (cs.width() < ws.width() - 40 ||
+                        cs.height() < ws.height() - 120) {
+                      qCritical("[tour] FAILED: central does not expand after maximize");
+                      QApplication::exit(2);
+                      return;
+                    }
+                    qInfo("[tour] maximize check OK");
+                    QApplication::quit();
+                  });
+                },
+                nullptr});
   // 该步骤自带退出逻辑，放入独立执行路径
   if (qEnvironmentVariableIsSet("GMP_TOUR_MAXIMIZE_ONLY")) {
     decltype(steps) only;
@@ -11303,7 +11580,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                           const QStringList gnames = {
                               "projectToolGroup", "editToolGroup",
                               "modelToolGroup", "meshToolGroup",
-                              "jobToolGroup", "displayToolGroup"};
+                              "jobToolGroup", "displayToolGroup", "playbackToolGroup"};
                           for (const QString& n : gnames) {
                             auto* g = findChild<QToolBar*>(n);
                             if (g) {
@@ -11364,7 +11641,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                           const QStringList names = {
                               "projectToolGroup", "editToolGroup",
                               "modelToolGroup", "meshToolGroup",
-                              "jobToolGroup", "displayToolGroup"};
+                              "jobToolGroup", "displayToolGroup", "playbackToolGroup"};
                           bool blank_found = false;
                           for (const QString& n : names) {
                             auto* tb = findChild<QToolBar*>(n);
@@ -11533,7 +11810,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                           const QStringList names = {
                               "projectToolGroup", "editToolGroup",
                               "modelToolGroup", "meshToolGroup",
-                              "jobToolGroup", "displayToolGroup"};
+                              "jobToolGroup", "displayToolGroup", "playbackToolGroup"};
                           for (const QString& n : names) {
                             auto* g = findChild<QToolBar*>(n);
                             qInfo("[S4] %s visible=%d floating=%d area=%d pos=(%d,%d) size=(%d,%d)",

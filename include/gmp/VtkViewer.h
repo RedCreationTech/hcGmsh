@@ -152,6 +152,8 @@ signals:
   void sketch_cursor_moved(double x, double y);
   void stage_picking_changed(bool enabled);
   void stage_slice_changed(bool enabled);
+  // 时间步集合或文件数据状态变化（加载/卸载/刷新后），供命令可用性刷新
+  void time_steps_changed();
   void stage_command_feedback(const QString& message);
 
  private slots:
@@ -164,6 +166,12 @@ signals:
   void on_repr_changed(int index);
   void on_auto_refresh_toggled(bool enabled);
   void on_auto_refresh_tick();
+
+ public:
+  // 时间步回放公共接口：供顶部“播放/暂停”工具驱动动画。
+  int time_step_count() const { return static_cast<int>(time_steps_.size()); }
+  int current_time_step_index() const;
+  void set_time_step_index(int index);
 
  private:
   void init_vtk();
