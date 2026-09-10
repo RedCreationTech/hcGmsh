@@ -103,6 +103,17 @@ if (Test-Path $dist) { Remove-Item $dist -Recurse -Force }
 New-Item -ItemType Directory -Path $dist | Out-Null
 Copy-Item $exe $dist
 
+# 运行时数据：MOOSE 模板 / 应用档案 / 映射注册表。
+# 应用按 appDir 候选路径解析 templates/moose（ApplicationProfile.cpp /
+# MooseTemplates.cpp），免安装包必须把它放在 exe 旁的 templates\ 下，
+# 否则档案选择器显示“未配置”、模板下拉为空。
+$tplSrc = Join-Path $RepoRoot "templates\moose"
+if (Test-Path $tplSrc) {
+  New-Item -ItemType Directory -Path (Join-Path $dist "templates") -Force | Out-Null
+  Copy-Item $tplSrc (Join-Path $dist "templates") -Recurse
+  Write-Host "==> deployed runtime data: templates/moose"
+}
+
 if ($CondaPrefix) {
   # conda 版 Qt 布局与 windeployqt 的路径推导不兼容(前缀重复拼接),
   # 改为手动部署: Qt6 DLL 已由下方 *.dll 复制覆盖, 这里补插件与 MSVC 运行时
