@@ -2,7 +2,7 @@
 
 > 来源：`doc/UI重构需求记录.md`  
 > 用途：按可逐步执行、可人工验证的粒度拆分的开发任务清单  
-> 版本：2026-09-06 v5（Phase 3 全部验收关闭，进入 Phase 4）
+> 版本：2026-09-10 v6（Phase 4 按 `doc/UI重构Phase4方案设计.md` 细化为 W-00～W-07 切片与 M 级验收）
 
 ---
 
@@ -23,8 +23,8 @@
 
 - Phase 0、Phase 1、Phase 2 已全部完成（I-01、I-01A、I-02、I-03、I-04 均通过自动回归和人工验收；I-04 验收记录 TEST-P2-I04-01～09 于 2026-09-06 全部通过）。
 - I-04 期间同步完成的增量：操作日志基建、`.geo` 导入失败反馈与退化几何拦截、空网格生成保护、远程（LIMS）作业登记与作业监控页、Results 对比窗口/结果导入/结果导航右键菜单。
-- Phase 0、Phase 1、Phase 2、Phase 3 已全部完成（2026-09-06 Phase 3 人工验收通过；Windows/Linux 冒烟后续补验）。
-- 下一阶段：Phase 4（Abaqus 式前处理工作流闭环），按 W-01～W-07 执行；回归基线为 80 步真实点击巡览 + CTest `1/1`（含弹窗整理：日志统一出口与 Results 预览折叠，见 `doc/UI重构Phase3开发记录.md` §8）。各阶段开发记录与验收清单见 `doc/UI重构Phase2开发记录.md`、`doc/UI重构Phase3开发记录.md` 及对应验收清单。
+- Phase 0、Phase 1、Phase 2、Phase 3 已全部完成（2026-09-06 Phase 3 人工验收通过；Windows/Linux 冒烟后续补验）。Phase 3 后增量：回放工具组、首次切可视化落点修复、工作窗 P0 视觉紧凑化（见 `doc/UI重构Phase3开发记录.md` §25～§32、`doc/UI视觉交互对标审计.md`、`doc/UI功能手册.md`）。
+- 下一阶段：Phase 4（Abaqus 式前处理工作流闭环），按 **W-00～W-07** 执行；方案设计与目标算例分析见 `doc/UI重构Phase4方案设计.md`（以 damASR 的 cdp-v01/v02/r01/r02 四个已验证 `.i` 为验收基线；回归基线为 85 步真实点击巡览 + CTest `1/1`）。各阶段开发记录与验收清单见 `doc/UI重构Phase2开发记录.md`、`doc/UI重构Phase3开发记录.md` 及对应验收清单。
 - 跨电脑接续、环境恢复、已知风险和首轮任务拆分见 `doc/UI重构下一阶段交接说明.md`。
 
 ---
@@ -456,126 +456,145 @@
 ## Phase 4：Abaqus 式前处理工作流闭环（P0）
 
 > 目标：建立几何 → 材料/区域 → 装配 → Step/物理 → 接触/约束 → 网格 → BC/Load → 输出 → `.i` 装配 → 校验 → 快照 → 作业提交的完整闭环。
+> 方案与目标算例分析：`doc/UI重构Phase4方案设计.md`。验收基线为 damASR 四个已验证算例（`cdp-v01/v02` 单轴拉压、`cdp-r01/r02` 复载）的**语义等价**复现：块集合、对象 type、参数值逐项一致；block/boundary 命名允许按 Physical Group 命名差异，r01 诊断块（CDPTrialProblem/Predictor/Probe/accepted_state/checkpoint 时间窗）仅经专家扩展注入，不做结构化表单。
+> 关键基线事实：Phase 0 的 F-02～F-05 合同层（profile registry、mapping registry、PG manifest、快照 v2）已实现但仅有测试调用，未接入运行中 UI——故 W-00 为本 Phase 前置。
+
+### W-00 接线 Phase 0 合同层（前置，新增）
+
+- **优先级**：P0
+- **关联需求**：REQ-012、REQ-013、REQ-016；方案 §4 W-00a~d
+- **交付物**：
+  - 工作上下文条“应用”选择器（项目级活动档案，单例）
+  - 网格生成后的 PhysicalGroupManifest + mesh_snapshot 生产者
+  - 快照导出切换到 `export_job_snapshot_v2()`；SimClient solver 名读活动档案
+  - 装配器与表单共用 mapping-v1 注册表的消费路径
+- **实现要点**：
+  1. `ApplicationProfileRegistry` 接入 MainWindow：档案选择、项目 YAML 持久化、切换前兼容性报告（提示级）；无档案时生成/提交禁用并提示。同步修订 DamSafetyApp-opt profile：声明 CDP 物理、AbaqusCDPStressUpdate、cdp_* Aux property 命名约定与 supported_blocks。
+  2. 网格生成后用 Gmsh API 读回物理组清单（名称/维度/实体数/单元数/质量摘要/SHA-256）填充 manifest 与 `mesh_snapshot_`；失效传播复用 `invalidate_downstream_from`。
+  3. `on_export_snapshot` 从 v1 切到 v2（input_mode 白名单、case_id/profile/PG 必填、相对路径、`.e` role、traceability、recommended_command 均已有实现）；`SimClient.cpp` 去掉硬编码 `"DamSafetyApp-opt"`。
+  4. mapping registry 损坏时 UI 给出可读错误并禁止生成。
+- **自动合同验收**：profile 选择持久化 round-trip；生成 `.msh` 后 Mesh 节点含组清单/单元数/质量摘要；缺 profile/PG 时快照导出被拒绝并说明。
+- **人工验证**：选择 DamSafetyApp-opt 保存重开仍在；生成网格后查看 Mesh 节点摘要；导出快照检查 v2 manifest 全字段。
 
 ### W-01 补齐 Assembly、Physics、Constraints、Selections 节点类型与过期传播
 
 - **优先级**：P0
-- **关联需求**：REQ-011、REQ-013
+- **关联需求**：REQ-011、REQ-013；方案 §4 W-01a~d
 - **交付物**：
-  - 模型树新增节点类型：Assembly、Instances、Physics、Constraints、Selections/Sets
-  - 依赖与过期状态传播机制
-  - 节点状态图标集成
+  - Physics 真实节点：创建/表单（action 类型与参数，mapping 驱动）/持久化/失效传播
+  - Section 指派语义：材料下拉 + Physical Volume 多选（体组名）
+  - Selections 生产路径：从舞台拾取/物理组创建
+  - Assembly 最小语义：部件引用 + 变换，网格生成前落实到 Gmsh 几何
+  - 依赖与过期状态传播机制与节点状态图标（既有机制扩展）
 - **实现要点**：
-  1. Assembly 节点记录部件引用与变换；变换在网格生成前落实到最终几何。
-  2. Physics 节点代表物理场/求解方程，受当前应用模板约束。
-  3. Constraints 节点代表耦合/约束/接触等高级条件。
-  4. Selections/Sets 节点代表命名的节点/面/体集合，可引用 Physical Groups 或舞台选择。
-  5. 上游对象修改后，下游网格、`.i`、作业快照自动标记为过期。
+  1. Physics 子项替代空壳：SolidMechanics/QuasiStatic action 表单；CDPQuasiStatic 仅在档案声明支持时出现。
+  2. Section 生成语义 = 材料 ↔ Physical Volume 绑定，产出相关 Material/Physics 对象的 `block` 限制，不输出 `[Sections]`。
+  3. Assembly 变换在网格生成前落实；上游修改后 Assembly、Mesh、`.i`、作业快照自动标记过期（复用既有传播）。
+  4. Constraints 维持表单级建模；目标应用不支持时标记“不支持生成”，不静默输出。
+- **自动合同验收**：Physics/Section/Selections 子项保存重开恢复；删除被引用材料/体组后对应节点标 invalid。
 - **人工验证**：
-  1. 创建一个 Assembly 节点，引用两个 Part 并设置平移变换，确认保存/重开后数据正确。
+  1. 创建 Section 并把材料指派给 Physical Volume，确认保存/重开正确。
   2. 修改 Part 几何后，确认 Assembly、Mesh、`.i` 节点标记为失效/过期。
-  3. 创建一个 Selection 节点，选择舞台上的面，确认 Selection 记录 Physical Surface 名称而非 tag。
+  3. 从物理组创建 Selection，确认后续表单可按名称引用。
 
 ### W-02 实现 Gmsh 几何 → Physical Groups → `.msh` 语义链路
 
 - **优先级**：P0
-- **关联需求**：REQ-012
+- **关联需求**：REQ-012；方案 §4 W-02a~c
 - **交付物**：
-  - `.geo`/OCC/STEP/IGES/BREP → Gmsh 模型同步
-  - Physical Groups 命名唯一性与维度校验
-  - `.msh` 生成后物理组清单保存
+  - PG 创建/刷新的名称唯一性、维度正确性、非空校验
+  - “导入 Exodus 网格”显式入口（role=input_mesh，决策 6 例外路径）
+  - `[Mesh]` 生成从 FileMesh 旧写法升级为 FileMeshGenerator 子块
 - **实现要点**：
   1. 统一几何来源到 Gmsh 模型；Assembly 实例变换/布尔在生成网格前落实。
-  2. 创建/刷新 Physical Groups 时检查名称唯一性、维度正确性、非空。
-  3. 生成 `.msh` 后读取物理组清单、维度、实体数量、网格维度、单元类型、单元数、质量摘要并持久化。
-  4. 若 `.geo` 缺少所需物理组或名称冲突，阻止 `.i` 进入可提交状态并定位问题对象。
+  2. 同名/空组/维度错误阻断生成并定位问题对象。
+  3. 生成 `.msh` 后物理组清单与摘要经 W-00b 持久化；缺组/冲突时阻止 `.i` 进入可提交状态。
+  4. 导入的 `.e` 登记为 Mesh 节点并在 manifest 标记 `input_mesh`（对应 v01 的 uniaxial_compression_mesh.e 用法）。
+- **自动合同验收**：同名 Physical Surface 生成 `.msh` 时报错定位；`.e` 导入后可用于装配与快照。
 - **人工验证**：
   1. 导入一个 `.geo` 文件，生成 `.msh`，确认项目模型中 Physical Groups 清单与 Gmsh 一致。
-  2. 在 `.geo` 中创建两个同名 Physical Surface，确认生成 `.msh` 时报错并定位冲突。
-  3. 从 `.msh` 生成 `.i`，确认 `.i` 的 `[Mesh]` 使用 `type = FileMesh` 并引用相对路径。
+  2. 导入 `uniaxial_compression_mesh.e`，确认 Mesh 节点登记且后续表单可选 top/bottom 面组。
+  3. 从 `.msh` 生成 `.i`，确认 `[Mesh]` 为 FileMeshGenerator 并引用相对路径。
 
 ### W-03 建立前处理对象到 MOOSE blocks 的显式映射
 
-- **优先级**：P0
-- **关联需求**：REQ-013
+- **优先级**：P0（本 Phase 核心）
+- **关联需求**：REQ-013；方案 §2.2 映射表、§4 W-03a~e
 - **交付物**：
-  - 应用选择 UI（项目级活动应用档案）
-  - Section → Material `block` 限制映射
-  - Load → Kernel/BC/Function/Postprocessor 映射
-  - Step → Executioner/求解控制映射
-  - Contact/Constraint/Interaction 支持级别控制
+  - CDP 材料模板（Material type=AbaqusCDP）：弹性 + CDP 五参数 + recovery + 子步上限 + 4 张 CSV 文件选择器 + MPa→Pa 单位换算，成组生成 ComputeIsotropicElasticityTensor + ComputeMultipleInelasticStress + AbaqusCDPStressUpdate
+  - Physics action 生成：QuasiStatic（block/volumetric_locking_correction/incremental/strain/generate_output/save_in）
+  - BC/Function 类型扩展：FunctionDirichletBC、PiecewiseLinear 函数编辑（复载曲线）
+  - 场/历史输出套餐：Aux 成组（DamageC/DamageT/cdp_*）、Postprocessor 套餐（NodalSum/AverageNodalVariableValue/ElementExtremeValue）、Times + sync_only
+  - Step→Executioner/TimeStepper/Preconditioning 映射（`*Static` 四参数语义）
 - **实现要点**：
-  1. 顶部工作上下文提供应用选择入口；项目记录活动档案。
-  2. Section 指派转换为相关 Material/Physics 对象的 `block` 限制，不输出 `[Sections]` block。
-  3. Load 根据物理类型映射到对应 MOOSE 对象，不统一作为 `BodyForce`。
-  4. Step 同时约束 Executioner、时间/增量、非线性和线性求解配置；多 Step 不支持时明确提示。
-  5. Interaction/Contact/Coupling 仅在当前应用模板声明支持时生成；否则标记为“不支持生成”。
-  6. 切换应用前生成兼容性报告，不兼容对象保留但标记为“未映射/阻断”。
+  1. 顶部工作上下文提供应用选择入口（W-00a）；表单字段由当前档案与 mapping 注册表约束。
+  2. BC 的 boundary 取自命名面组下拉；位移加载引用 Functions 节点；禁止手输 tag。
+  3. Aux/Postprocessor 套餐按映射注册表的 cdp_* 命名约定成组生成；resid_* 由“反力输出”勾选自动带出。
+  4. 多 Step 目标应用不支持串联执行时明确提示并阻止，不静默只取第一个。
+  5. Interaction/Contact/Coupling 仅在档案声明支持时生成，否则标记“不支持生成”。
+- **自动合同验收**：CDP 表单生成的 Materials 三件套与 v01 语义一致（type/参数值逐项）；PiecewiseLinear 生成 r01 式加卸载函数。
 - **人工验证**：
-  1. 选择 `DamSafetyApp-opt`，创建一个 Section 并指派给 Physical Volume，生成 `.i`，确认对应 Material 对象包含正确的 `block` 参数。
-  2. 创建一个 Displacement Load，生成 `.i`，确认映射为对应 BC/Function，而非 `BodyForce`。
-  3. 创建两个 Step，确认目标应用不支持串联执行时给出明确提示并阻止只取第一个。
+  1. 选择 `DamSafetyApp-opt`，创建 AbaqusCDP 材料并指派，生成 `.i`，确认三件套参数与单位换算正确（29791.5 MPa→2.97915e10 Pa）。
+  2. 创建顶面位移加载（ParsedFunction 与 PiecewiseLinear 各一），确认映射为 FunctionDirichletBC。
+  3. 创建两个 Step，确认不支持串联时给出明确提示。
   4. 切换应用到 `blackbear-opt`，确认生成兼容性报告，不兼容对象被标记。
 
 ### W-04 实现确定性的 MOOSE `.i` 装配器
 
 - **优先级**：P0
-- **关联需求**：REQ-014
+- **关联需求**：REQ-014；方案 §2.3-2、§4 W-04a~c
 - **交付物**：
-  - 结构化装配服务
-  - 稳定输出顺序
-  - 来源追踪与生成报告
-  - 普通/专家/完全手工三种模式支持
+  - mapping-v1 驱动的结构化装配服务（替代 7-block 字符串拼接）
+  - 稳定输出顺序与来源追踪（block → 树节点/Physical Group/模板版本）
+  - 普通模式只读 + 专家扩展层（Custom Blocks）合并校验与差异预览
+  - `sync_model_to_input()` 旧链路下线，菜单/按钮切到新装配器
 - **实现要点**：
-  1. 装配器输入：模板/应用、最新有效 `.msh`、Physical Groups、模型树对象、求解/并行配置、专家扩展片段。
-  2. 按稳定顺序输出 blocks：`[Mesh]`、`[GlobalParams]`、`[Variables]`、`[ICs]`、`[Kernels]`/`[Physics]`、`[AuxVariables]`、`[AuxKernels]`、`[Materials]`、`[BCs]`、`[Constraints]`、`[Executioner]`、`[Preconditioning]`、`[Postprocessors]`、`[VectorPostprocessors]`、`[Outputs]`。
-  3. 仅输出当前应用真实支持且需要的 blocks；参数由映射注册表决定。
-  4. 同一项目状态重复生成结果语义和文本稳定。
-  5. 路径使用相对路径；特殊字符按 MOOSE 输入规则引用。
-  6. 普通模式 `.i` 只读；专家模式通过 Custom Objects/Blocks 扩展；完全手工模式生成独立副本。
+  1. 按注册表 ordering 稳定输出 blocks；仅输出当前档案真实支持且需要的 blocks。
+  2. 同一项目状态重复生成语义与文本稳定；相对路径；特殊字符按 MOOSE 规则引用。
+  3. 专家扩展层与系统生成区分离保存；合并时执行名称冲突/引用/档案支持校验。
+  4. 旧演示案例（扩散/热力/ASR 库模板）按各自档案继续可生成运行。
+- **自动合同验收**：同项目连生成两次 diff 为空；r01 诊断块经专家层注入合并通过，冲突有报错。
 - **人工验证**：
   1. 对同一个项目连续生成两次 `.i`，使用 `diff` 确认无非预期差异。
   2. 检查 `.i` 不含占位路径、空 boundary、未知类型或需要手工删除的行。
   3. 打开生成报告，确认每个 block/对象可定位回模型树节点、Physical Group 和模板版本。
-  4. 在普通模式下尝试编辑 `.i`，确认只读不可改；切换到专家模式添加 Custom Block，确认可合并生成。
+  4. 普通模式 `.i` 只读；专家模式添加 Custom Block（如 Checkpoint）确认可合并生成。
 
 ### W-05 实现生成前校验与 MOOSE 输入预检
 
 - **优先级**：P0
-- **关联需求**：REQ-015
+- **关联需求**：REQ-015；方案 §2.3-6、§4 W-05a~b
 - **交付物**：
   - 结构校验：网格存在/未过期、物理组有效、材料已指派、变量与方程完整、BC/Load/Contact 选择集存在、Step/Executioner 完整、输出变量受支持、引用可解析
-  - 语义校验：区域维度匹配、约束冲突、未使用对象、单位/量纲提示、应用不支持类型、Step 策略、网格/物理维度一致
+  - 语义校验：boundary 存在于面组、block 有 Section 指派、函数/变量引用可解析、区域维度匹配、约束冲突、未使用对象、单位/量纲提示、应用不支持类型、多 Step 策略、网格/物理维度一致
   - 错误/警告/提示分级与跳转
-  - `--check-input` 调用集成
+  - `--check-input` 集成（check_command 从档案读取，生成后自动预检）
 - **实现要点**：
-  1. 校验器读取映射注册表，按 block 类型逐项校验。
-  2. 错误阻止提交；警告需要用户确认或显式豁免。
-  3. 点击问题可跳转到对应树节点和表单字段。
-  4. `.i` 生成后执行内部语法/映射校验；本地有 MOOSE 可执行程序时自动执行 `--check-input`。
-  5. “Workflow ready” 必须通过所有阻断校验。
+  1. 校验器读取映射注册表逐项校验；错误阻止提交，警告需用户确认或显式豁免。
+  2. 点击问题跳转到对应树节点和表单字段。
+  3. “Workflow ready” 必须通过所有阻断校验，不再是节点计数。
+- **自动合同验收**：删材料指派/改组名不重生成网格/缺 Step 均被阻断并定位。
 - **人工验证**：
-  1. 创建一个合法案例，确认“Workflow ready”为真，生成 `.i` 后 `--check-input` 通过（本地有 MOOSE 时）。
-  2. 删除材料指派，确认校验报错并定位到对应 Section/Material 节点。
-  3. 重命名 Physical Group 后不重生成网格，确认 `.i` 生成时校验报错并定位问题。
-  4. 使用目标应用不支持的 Contact 类型，确认校验提示“不支持生成”并阻止提交。
+  1. 创建一个合法案例，确认“Workflow ready”为真，生成 `.i` 后 `--check-input` 通过（本地有可执行程序时）。
+  2. 重命名 Physical Group 后不重生成网格，确认 `.i` 生成时校验报错并定位问题。
+  3. 使用目标应用不支持的 Contact 类型，确认校验提示“不支持生成”并阻止提交。
 
 ### W-06 生成可复现的计算案例包
 
 - **优先级**：P0
-- **关联需求**：REQ-016
+- **关联需求**：REQ-016；方案 §4 W-06
 - **交付物**：
-  - 快照生成器：`.i` + `.msh` + extra files + `manifest.json`
+  - v2 快照生成器：`.i` + 网格 + 材料 CSV 等 extra files + `manifest.json`
   - 只读快照目录；再次生成产生新版本
-  - 追溯关系：当前项目状态 → 输入快照 → 作业 ID → 结果文件
+  - 追溯链 UI：当前项目状态 → 输入快照 → 作业 ID → 结果文件
 - **实现要点**：
-  1. 生成快照时拷贝/打包所需文件；计算所有文件 SHA-256。
-  2. manifest 包含第 F-05 条中规定的全部字段。
-  3. `.i` 中相对路径在快照根目录下可解析。
+  1. 生成快照时拷贝/打包所需文件（含 CDP 4 张 CSV）；计算所有文件 SHA-256。
+  2. manifest 包含 F-05 规定的全部字段（含 application_profile、unit_contract、input_mode、hash 三件套）。
+  3. `.i` 中相对路径在快照根目录下可解析；`.e` 仅在显式标记角色时作为输入。
   4. 快照提交后不可被 UI 编辑原地修改。
-  5. UI 支持查看从项目状态到结果文件的追溯链。
+- **自动合同验收**：快照含 CSV 附件与 v2 全字段；覆盖已有快照被拒绝。
 - **人工验证**：
-  1. 生成快照，检查目录结构符合预期；检查 manifest 字段和哈希正确。
+  1. 生成快照，检查目录结构、manifest 字段和哈希正确。
   2. 将快照复制到干净目录，按 manifest 命令运行（本地有 MOOSE 时），确认不依赖原项目路径。
   3. 修改项目后再次生成快照，确认产生新版本，旧快照内容不变。
   4. 在 Jobs 节点中查看快照版本，确认可追溯。
@@ -583,15 +602,15 @@
 ### W-07 与现有作业系统形成提交和结果闭环
 
 - **优先级**：P0
-- **关联需求**：REQ-017
+- **关联需求**：REQ-017；方案 §4 W-07
 - **交付物**：
   - 标准操作链入口：生成网格 → 装配 `.i` → 校验 → 创建快照 → 提交作业
   - 一键入口（前置条件满足时启用）
-  - 远程提交上传 `.i`、`.msh`、附件
+  - 远程提交上传 `.i`、网格、附件（应用档案固化进作业）
   - 作业状态/日志/结果回写
 - **实现要点**：
   1. 标准链可分步执行，也提供一键入口。
-  2. 远程提交直接上传文件，不要求本地有 MOOSE 可执行程序。
+  2. 远程提交直接上传文件，不要求本地有 MOOSE 可执行程序；solver 名与版本从活动档案读取。
   3. Jobs 节点显示排队、运行、成功、失败、取消状态，记录快照版本、计算节点/队列、并行配置、起止时间、日志入口。
   4. 失败时保留生成报告、预检结果、stdout/stderr；重试默认复用原快照。
   5. 作业完成后自动登记 Exodus/CSV/日志 Results 节点，并保留追溯到 Job、`.i`、网格、项目版本的能力。
@@ -600,6 +619,13 @@
   2. 一键入口仅在所有前置条件满足时可用；破坏任一条件时按钮禁用并提示原因。
   3. 提交远程作业后，在 Jobs 节点查看状态更新、日志入口。
   4. 作业完成后，确认 Results 节点自动登记，且可追溯回输入快照版本。
+
+### M-P4 阶段准出验收（新增，对应方案 §4 M 级）
+
+- **M-P4-1（核心验收）**：仅经 UI 操作，从导入 `uniaxial_compression_mesh.e` 开始，配置 CDP 材料、Section 指派、QuasiStatic action、Step、BC（底面固定 + 顶面位移函数）、场/历史输出，装配生成与 `tpl-cdpc-tension-single-recheck.i` 语义等价的 `.i`，`--check-input` 通过。
+- **M-P4-2（复载）**：同一项目改 PiecewiseLinear 复载函数 + 3 s 时长，生成 r01/r02 主体等价 `.i`（不含诊断块）。
+- **M-P4-3（专家扩展）**：r01 诊断块经 Custom Blocks 注入、合并校验通过、快照 manifest 记 `input_mode=expert`。
+- **M-P4-4（闭环）**：快照导出 →（有计算资源时）远程提交 → Results 自动登记 → 可视化加载 Exodus 并可用回放工具组播放。
 
 ---
 
@@ -694,9 +720,9 @@ Phase 3
         └── V-03
 
 Phase 4
-  W-01 ─┬── W-02 ─┬── W-03 ─┬── W-04 ─┬── W-05 ─┬── W-06 ── W-07
-        │         │         │         │         │
-        └── 依赖 F-01～F-05、L-01～L-05、I-01～I-04
+  W-00 ── W-01 ─┬── W-02 ─┬── W-03 ─┬── W-04 ─┬── W-05 ─┬── W-06 ── W-07 ── M-P4-1～4
+  （接线F-02～05）│         │         │         │         │
+                 └── 依赖 F-01～F-05、L-01～L-05、I-01～I-04；方案见 doc/UI重构Phase4方案设计.md
 
 Phase 5
   M-01 ── M-02 ── M-03
