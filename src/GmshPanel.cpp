@@ -10,7 +10,9 @@
 #include <QDialogButtonBox>
 #include "gmp/ComboPopupFix.h"
 #include <QEvent>
+#include <QFile>
 #include <QFileDialog>
+#include <QCryptographicHash>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QFrame>
@@ -1579,6 +1581,10 @@ void GmshPanel::on_generate() {
     update_physical_group_list();
     update_field_list();
 
+    double quality_min = 0.0;
+    double quality_mean = 0.0;
+    double quality_max = 0.0;
+    bool has_quality = false;
     if (!all_element_tags.empty()) {
       try {
         std::vector<double> qualities;
@@ -1594,6 +1600,10 @@ void GmshPanel::on_generate() {
           qsum += q;
         }
         const double qmean = qsum / static_cast<double>(qualities.size());
+        quality_min = qmin;
+        quality_mean = qmean;
+        quality_max = qmax;
+        has_quality = true;
         append_log(QString("Quality (minSICN) min=%1 mean=%2 max=%3")
                        .arg(qmin, 0, 'g', 6)
                        .arg(qmean, 0, 'g', 6)
@@ -1634,6 +1644,83 @@ void GmshPanel::on_generate() {
       }
     } catch (const std::exception& ex) {
       append_log(QString("Physical group count failed: %1").arg(ex.what()));
+    }
+
+    // W-00b：回读物理组清单 + 网格摘要 + 文件 SHA-256，作为
+    // PhysicalGroupManifest 的生产者。读取失败仅降级为警告，不阻断生成。
+    try {
+      QVariantMap manifest;
+      manifest.insert("mesh_path", out_path);
+      QFile mesh_file(out_path);
+      if (mesh_file.open(QIODevice::ReadOnly)) {
+        manifest.insert(
+            "mesh_sha256",
+            QString::fromLatin1(
+                QCryptographicHash::hash(mesh_file.readAll(),
+                                         QCryptographicHash::Sha256)
+                    .toHex()));
+      }
+      QVariantList group_list;
+      std::vector<std::pair<int, int>> manifest_groups;
+      gmsh::model::getPhysicalGroups(manifest_groups);
+      for (const auto& g : manifest_groups) {
+        std::string gname;
+        gmsh::model::getPhysicalName(g.first, g.second, gname);
+        QVariantMap entry;
+        entry.insert("name",
+                     gname.empty()
+                         ? QString("group_%1_%2").arg(g.first).arg(g.second)
+                         : QString::fromStdString(gname));
+        entry.insert("dim", g.first);
+        entry.insert("tags", QVariantList{g.second});
+        std::vector<int> ent_tags;
+        gmsh::model::getEntitiesForPhysicalGroup(g.first, g.second, ent_tags);
+        entry.insert("entity_count", static_cast<int>(ent_tags.size()));
+        std::size_t group_elements = 0;
+        for (int ent : ent_tags) {
+          std::vector<int> etypes;
+          std::vector<std::vector<std::size_t>> etags;
+          std::vector<std::vector<std::size_t>> enodes;
+          gmsh::model::mesh::getElements(etypes, etags, enodes, g.first, ent);
+          for (const auto& tags : etags) {
+            group_elements += tags.size();
+          }
+        }
+        entry.insert("element_count", static_cast<int>(group_elements));
+        group_list.append(entry);
+      }
+      manifest.insert("physical_groups", group_list);
+      manifest.insert("mesh_dim", dim);
+      manifest.insert("node_count", static_cast<int>(node_tags.size()));
+      manifest.insert("element_count", static_cast<int>(elem_count));
+      QString dominant_type;
+      std::size_t dominant_count = 0;
+      for (std::size_t t = 0; t < element_types.size(); ++t) {
+        if (t < element_tags.size() && element_tags[t].size() > dominant_count) {
+          dominant_count = element_tags[t].size();
+          std::string type_name;
+          int etype_dim = 0;
+          int etype_order = 0;
+          int num_nodes = 0;
+          int num_primary_nodes = 0;
+          std::vector<double> local_coords;
+          gmsh::model::mesh::getElementProperties(
+              element_types[t], type_name, etype_dim, etype_order, num_nodes,
+              local_coords, num_primary_nodes);
+          dominant_type = QString::fromStdString(type_name);
+        }
+      }
+      manifest.insert("element_type", dominant_type);
+      if (has_quality) {
+        manifest.insert("quality_summary",
+                        QVariantMap{{"quality_min", quality_min},
+                                    {"quality_avg", quality_mean},
+                                    {"quality_max", quality_max}});
+      }
+      emit mesh_manifest(manifest);
+    } catch (const std::exception& ex) {
+      append_log(
+          QString("Physical group manifest collection failed: %1").arg(ex.what()));
     }
     success = true;
     completion_message = "Mesh generated.";

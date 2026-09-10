@@ -25,7 +25,9 @@ class SimClient : public QObject {
 
   // 由 C01 任务快照 manifest（export_job_snapshot 产出的
   // contract/input_snapshot 结构）构造 C06 提交侧 manifest
-  // （project_id/case_name/input_file/input_sha256/mesh_files/extra_files/command）。
+  // （project_id/case_name/input_file/input_sha256/mesh_files/extra_files/
+  // command/solver_program，v2 快照另透传 profile_id/profile_version/
+  // mapping_version——向后兼容，服务端可忽略未知字段）。
   // command 采用白名单形态 "<solver_program> -i <input_file>"。
   // 失败返回空对象并填写 error。
   static QJsonObject build_submission_manifest(
@@ -34,6 +36,8 @@ class SimClient : public QObject {
 
   // ---- TASK-E2E-11：提交与轮询 ----
   // snapshot_dir 为导出任务快照目录（含 manifest.json 与全部输入文件）。
+  // solver 程序名读快照 manifest 的 application_profile.solver_program；
+  // v1 旧快照缺该字段时回落到缺省 "DamSafetyApp-opt" 并打日志说明。
   void submit_snapshot(const QString& snapshot_dir, const QString& project_id);
   void fetch_job(const QString& job_id);
   // 拉取任务摘要列表（GET /api/sim/jobs，可带 project_id/limit），

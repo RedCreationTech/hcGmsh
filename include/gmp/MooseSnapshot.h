@@ -26,6 +26,9 @@ struct SnapshotExportConfig {
   ApplicationProfile profile;
   QMap<QString, double> unit_factors;  // 显示 -> 求解单位比例因子
   QMap<QString, QString> file_roles;   // 相对路径 -> input_mesh/initial_state/...
+  // 快照内相对名 -> 来源绝对路径。UI 侧把 .i 中的绝对引用归一化为快照相对名后，
+  // 经此表告诉导出器去哪里取源文件（合同仍要求快照内引用全部为相对路径）。
+  QMap<QString, QString> file_sources;
   PhysicalGroupManifest physical_groups;
   QVariantMap extra;  // 扩展字段
 };

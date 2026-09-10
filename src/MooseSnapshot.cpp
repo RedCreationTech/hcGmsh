@@ -88,10 +88,12 @@ bool is_safe_snapshot_relative_path(const QString& path) {
          !clean.startsWith(QStringLiteral("../"));
 }
 
-SnapshotExportResult export_job_snapshot(const QString& dest_dir,
-                                         const QString& input_text,
-                                         const QString& input_file,
-                                         const MooseTemplateInfo& tpl) {
+namespace {
+
+SnapshotExportResult export_job_snapshot_impl(
+    const QString& dest_dir, const QString& input_text,
+    const QString& input_file, const MooseTemplateInfo& tpl,
+    const QMap<QString, QString>* file_sources) {
   SnapshotExportResult result;
   result.dir = dest_dir;
   result.input_file = input_file;
@@ -145,9 +147,15 @@ SnapshotExportResult export_job_snapshot(const QString& dest_dir,
   }
   refs.removeDuplicates();
   for (const auto& ref : refs) {
-    // 解析来源路径：模板目录相对路径 > 绝对/工作目录相对路径
+    // 解析来源路径：显式来源表 > 模板目录相对路径 > 绝对/工作目录相对路径
     QString source;
-    if (tpl.valid && !tpl.dir.isEmpty()) {
+    if (file_sources) {
+      const QString mapped = file_sources->value(ref);
+      if (!mapped.isEmpty() && QFileInfo::exists(mapped)) {
+        source = QFileInfo(mapped).absoluteFilePath();
+      }
+    }
+    if (source.isEmpty() && tpl.valid && !tpl.dir.isEmpty()) {
       const QString in_tpl = QDir(tpl.dir).filePath(ref);
       if (QFileInfo::exists(in_tpl)) {
         source = in_tpl;
@@ -287,6 +295,16 @@ SnapshotExportResult export_job_snapshot(const QString& dest_dir,
   return result;
 }
 
+}  // namespace
+
+SnapshotExportResult export_job_snapshot(const QString& dest_dir,
+                                         const QString& input_text,
+                                         const QString& input_file,
+                                         const MooseTemplateInfo& tpl) {
+  return export_job_snapshot_impl(dest_dir, input_text, input_file, tpl,
+                                  nullptr);
+}
+
 SnapshotExportResult export_job_snapshot_v2(const QString& dest_dir,
                                             const QString& input_text,
                                             const QString& input_file,
@@ -333,8 +351,8 @@ SnapshotExportResult export_job_snapshot_v2(const QString& dest_dir,
   }
 
   // v2 入口复用 v1 的文件复制与哈希逻辑，再组装 v2 manifest。
-  SnapshotExportResult result =
-      export_job_snapshot(dest_dir, input_text, input_file, tpl);
+  SnapshotExportResult result = export_job_snapshot_impl(
+      dest_dir, input_text, input_file, tpl, &cfg.file_sources);
   if (!result.ok) {
     return result;
   }

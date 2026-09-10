@@ -149,6 +149,45 @@
           "param_schema": {
             "type": { "type": "enum", "value": "ComputeLinearElasticStress", "readonly": true }
           }
+        },
+        "ComputeMultipleInelasticStress": {
+          "required_params": ["type", "inelastic_models"],
+          "optional_params": ["block", "perform_finite_strain_rotations"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "ComputeMultipleInelasticStress", "readonly": true },
+            "inelastic_models": { "type": "material_ref", "label": "非弹性模型" },
+            "perform_finite_strain_rotations": { "type": "bool", "label": "有限应变旋转" }
+          }
+        },
+        "AbaqusCDPStressUpdate": {
+          "required_params": [
+            "type", "youngs_modulus", "poissons_ratio",
+            "dilation_angle", "eccentricity",
+            "biaxial_to_uniaxial_compression_ratio", "tensile_meridian_ratio",
+            "viscosity", "tension_recovery", "compression_recovery",
+            "compression_hardening_file", "compression_damage_file",
+            "tension_stiffening_file", "tension_damage_file"
+          ],
+          "optional_params": ["block", "maximum_substeps", "maximum_strain_increment", "enable_performance_diagnostics"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "AbaqusCDPStressUpdate", "readonly": true },
+            "youngs_modulus": { "type": "scalar", "unit": "pressure", "label": "弹性模量" },
+            "poissons_ratio": { "type": "scalar", "label": "泊松比" },
+            "dilation_angle": { "type": "scalar", "unit": "deg", "label": "剪胀角" },
+            "eccentricity": { "type": "scalar", "label": "偏心率" },
+            "biaxial_to_uniaxial_compression_ratio": { "type": "scalar", "label": "双轴/单轴抗压强度比" },
+            "tensile_meridian_ratio": { "type": "scalar", "label": "拉子午线比" },
+            "viscosity": { "type": "scalar", "label": "黏性系数" },
+            "tension_recovery": { "type": "scalar", "label": "受拉恢复" },
+            "compression_recovery": { "type": "scalar", "label": "受压恢复" },
+            "maximum_substeps": { "type": "int", "label": "最大子步数" },
+            "maximum_strain_increment": { "type": "scalar", "label": "最大应变增量" },
+            "enable_performance_diagnostics": { "type": "bool", "label": "性能诊断" },
+            "compression_hardening_file": { "type": "file", "label": "受压硬化曲线 CSV" },
+            "compression_damage_file": { "type": "file", "label": "受压损伤曲线 CSV" },
+            "tension_stiffening_file": { "type": "file", "label": "受拉刚化曲线 CSV" },
+            "tension_damage_file": { "type": "file", "label": "受拉损伤曲线 CSV" }
+          }
         }
       }
     },

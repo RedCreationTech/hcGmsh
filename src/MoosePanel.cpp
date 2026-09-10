@@ -12,6 +12,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMap>
+#include <QMessageBox>
 #include <QRegularExpression>
 #include <QPlainTextEdit>
 #include <QPushButton>
@@ -28,12 +29,15 @@
 #include "gmp/ComboPopupFix.h"
 
 #include "gmp/ArtifactDialog.h"
+#include "gmp/ApplicationProfile.h"
 #include "gmp/MooseSnapshot.h"
 #include "gmp/OperationLog.h"
 #include "gmp/RunSpec.h"
 #include "gmp/SimClient.h"
 
 #include <QDateTime>
+
+#include <algorithm>
 
 #ifdef GMP_ENABLE_GMSH_GUI
 #include <gmsh.h>
@@ -774,15 +778,197 @@ void MoosePanel::update_template_status_label() {
   }
 }
 
+void MoosePanel::set_application_profile(const QVariantMap& profile) {
+  application_profile_map_ = profile;
+}
+
+void MoosePanel::set_unit_contract(const QVariantMap& unit_contract) {
+  unit_contract_map_ = unit_contract;
+}
+
+void MoosePanel::set_physical_group_manifest(
+    const PhysicalGroupManifest& manifest) {
+  physical_group_manifest_ = manifest;
+}
+
+void MoosePanel::set_project_context(const QString& project_path) {
+  project_path_ = project_path;
+}
+
+void MoosePanel::set_input_mode(const QString& input_mode) {
+  static const QSet<QString> allowed = {QStringLiteral("structured"),
+                                        QStringLiteral("expert"),
+                                        QStringLiteral("manual")};
+  if (!allowed.contains(input_mode)) {
+    append_log("Unknown snapshot input_mode ignored: " + input_mode);
+    return;
+  }
+  input_mode_ = input_mode;
+}
+
+void MoosePanel::set_extra_file_sources(
+    const QMap<QString, QString>& sources) {
+  extra_file_sources_ = sources;
+}
+
+QString MoosePanel::input_text() const {
+  return input_editor_ ? input_editor_->toPlainText() : QString();
+}
+
+ApplicationProfile MoosePanel::snapshot_profile() const {
+  ApplicationProfile profile;
+  profile.id = application_profile_map_.value("id").toString();
+  profile.display_name =
+      application_profile_map_.value("display_name").toString();
+  profile.version = application_profile_map_.value("version").toString();
+  profile.status = application_profile_map_.value("status").toString();
+  profile.status_note =
+      application_profile_map_.value("status_note").toString();
+  profile.solver_program =
+      application_profile_map_.value("solver_program").toString();
+  profile.mapping_version =
+      application_profile_map_.value("mapping_version").toString();
+  if (profile.mapping_version.isEmpty()) {
+    // 兼容原始 profile JSON 形态：mapping_registry: {path, version}。
+    profile.mapping_version = application_profile_map_.value("mapping_registry")
+                                  .toMap()
+                                  .value("version")
+                                  .toString();
+  }
+  profile.check_command =
+      application_profile_map_.value("check_command").toString();
+  profile.support_level =
+      application_profile_map_.value("support_level").toString();
+  QVariantMap units = application_profile_map_.value("unit_contract").toMap();
+  if (units.isEmpty()) {
+    // 档案未内嵌单位合同时回落到项目级 unit_contract（决策 7）。
+    units = unit_contract_map_;
+  }
+  for (auto it = units.begin(); it != units.end(); ++it) {
+    if (it.value().typeId() == QMetaType::QString) {
+      profile.unit_contract.insert(it.key(), it.value().toString());
+    }
+  }
+  profile.valid = !profile.id.trimmed().isEmpty();
+  return profile;
+}
+
+QString MoosePanel::normalize_snapshot_refs(
+    QString* input_text, QMap<QString, QString>* file_sources,
+    QMap<QString, QString>* file_roles) const {
+  QStringList refs = scan_input_file_refs(*input_text);
+  refs.removeDuplicates();
+  // 先处理较长的引用，避免一个绝对路径是另一个的前缀时替换错位。
+  std::sort(refs.begin(), refs.end(),
+            [](const QString& a, const QString& b) {
+              return a.size() > b.size();
+            });
+  const QString mesh_text =
+      mesh_path_ ? mesh_path_->text().trimmed() : QString();
+  const QString mesh_abs =
+      mesh_text.isEmpty() ? QString() : QFileInfo(mesh_text).absoluteFilePath();
+  QString text = *input_text;
+  for (const QString& ref : refs) {
+    if (!QFileInfo(ref).isAbsolute()) {
+      continue;  // 相对引用由 v2 合同直接校验
+    }
+    if (!QFileInfo::exists(ref)) {
+      return "referenced file does not exist: " + ref;
+    }
+    const QString abs = QFileInfo(ref).absoluteFilePath();
+    const QString base = QFileInfo(ref).fileName();
+    if (file_sources->contains(base) && file_sources->value(base) != abs) {
+      return "referenced files from different directories share the same "
+             "file name: " +
+             base;
+    }
+    file_sources->insert(base, abs);
+    text.replace(ref, base);
+    if (base.toLower().endsWith(".e")) {
+      // .e 必须显式角色：仅当用户经 Mesh File 字段显式指定该文件为网格时
+      // 才标记 input_mesh，其余情形拒绝并说明。
+      if (!mesh_abs.isEmpty() && mesh_abs == abs) {
+        file_roles->insert(base, QStringLiteral("input_mesh"));
+      } else {
+        return "Exodus file must be explicitly imported as the mesh "
+               "(role=input_mesh) before export: " +
+               ref;
+      }
+    }
+  }
+  *input_text = text;
+  return QString();
+}
+
 void MoosePanel::on_export_snapshot() {
+  // 拒绝原因既写日志也在交互模式弹窗（巡览模式不弹窗，避免阻塞自动化）。
+  const bool tour_mode = qEnvironmentVariableIsSet("GMP_SCREENSHOT_DIR");
+  const auto reject = [this, tour_mode](const QString& reason) {
+    append_log("Snapshot export rejected: " + reason);
+    if (!tour_mode) {
+      QMessageBox::warning(this, "Export Job Snapshot", reason);
+    }
+  };
+  // W-00c：快照合同 v2——缺活动档案或 Physical Groups 清单时拒绝导出，
+  // 不产出半成品快照目录。
+  const ApplicationProfile profile = snapshot_profile();
+  if (!profile.valid || profile.mapping_version.trimmed().isEmpty()) {
+    reject(QStringLiteral(
+        "No active application profile (with mapping version). Select an "
+        "application profile in the work context bar before exporting "
+        "(snapshot contract v2 requires application_profile)."));
+    return;
+  }
+  // 导出就绪检查：清单需有物理组、SHA-256 与网格维度。生成时 mesh_path
+  // 记录为绝对路径是合法的；相对路径约束作用于打包后的快照清单，
+  // 导出时以快照内 basename 重写（见 cfg 组装处）。
+  static const QRegularExpression sha256_re(
+      QStringLiteral("^[0-9a-fA-F]{64}$"));
+  if (physical_group_manifest_.groups.isEmpty() ||
+      !sha256_re.match(physical_group_manifest_.mesh_sha256).hasMatch() ||
+      physical_group_manifest_.mesh_dim < 1 ||
+      physical_group_manifest_.mesh_dim > 3) {
+    reject(QStringLiteral(
+        "Physical group manifest is missing or incomplete. Generate the mesh "
+        "first (snapshot contract v2 requires traceability.physical_groups)."));
+    return;
+  }
+
+  QString input_text = input_editor_->toPlainText();
+  QMap<QString, QString> file_sources;
+  QMap<QString, QString> file_roles;
+  const QString normalize_error =
+      normalize_snapshot_refs(&input_text, &file_sources, &file_roles);
+  if (!normalize_error.isEmpty()) {
+    reject(normalize_error);
+    return;
+  }
+  // W-03a：并入材料 CSV 等显式来源表（不覆盖 .i 绝对引用已登记的条目）。
+  for (auto it = extra_file_sources_.constBegin();
+       it != extra_file_sources_.constEnd(); ++it) {
+    if (!file_sources.contains(it.key())) {
+      file_sources.insert(it.key(), it.value());
+    }
+  }
+
   const QString start_dir = workdir_path_ && !workdir_path_->text().isEmpty()
                                 ? workdir_path_->text()
                                 : QDir::currentPath();
-  const QString dest = QFileDialog::getExistingDirectory(
+  const QString dest_parent = QFileDialog::getExistingDirectory(
       this, "Select snapshot export directory", start_dir);
-  if (dest.isEmpty()) {
+  if (dest_parent.isEmpty()) {
     return;
   }
+
+  // 合同 §5：每次导出生成新的 case-<timestamp> 版本目录，旧快照保持不变。
+  QString dir_name =
+      "case-" + QDateTime::currentDateTime().toString("yyyyMMdd-HHmmss");
+  int suffix = 2;
+  QString base_name = dir_name;
+  while (QFileInfo::exists(QDir(dest_parent).filePath(dir_name))) {
+    dir_name = base_name + QString("-%1").arg(suffix++);
+  }
+  const QString dest = QDir(dest_parent).filePath(dir_name);
 
   QString input_name;
   if (current_template_.valid) {
@@ -794,14 +980,44 @@ void MoosePanel::on_export_snapshot() {
     }
   }
 
-  const SnapshotExportResult result = export_job_snapshot(
-      dest, input_editor_->toPlainText(), input_name, current_template_);
+  SnapshotExportConfig cfg;
+  cfg.case_name = current_template_.valid
+                      ? current_template_.key
+                      : QFileInfo(input_name).completeBaseName();
+  cfg.case_id = dir_name;
+  cfg.input_mode = input_mode_;
+  cfg.generator_version = QStringLiteral("gmp-ise 2026.09");
+  cfg.project_path = project_path_;
+  if (!project_path_.isEmpty() && QFileInfo::exists(project_path_)) {
+    bool hash_ok = false;
+    cfg.project_sha256 = sha256_file_hex(project_path_, &hash_ok);
+  }
+  cfg.profile = profile;
+  const QVariantMap factors =
+      unit_contract_map_.value("display_to_solver_factors").toMap();
+  for (auto it = factors.begin(); it != factors.end(); ++it) {
+    cfg.unit_factors.insert(it.key(), it.value().toDouble());
+  }
+  cfg.file_roles = file_roles;
+  cfg.file_sources = file_sources;
+  // 快照内清单使用包内相对网格路径（网格文件以 basename 复制入包），
+  // 满足 v2 合同对相对路径的约束；项目内记录的清单仍保留绝对路径。
+  PhysicalGroupManifest packaged_manifest = physical_group_manifest_;
+  packaged_manifest.mesh_path =
+      QFileInfo(packaged_manifest.mesh_path).fileName();
+  cfg.physical_groups = packaged_manifest;
+
+  const SnapshotExportResult result = export_job_snapshot_v2(
+      dest, input_text, input_name, current_template_, cfg);
   if (!result.ok) {
     append_log("Snapshot export failed: " + result.error);
     return;
   }
   last_snapshot_dir_ = result.dir;
-  append_log("Job snapshot exported to: " + result.dir);
+  append_log("Job snapshot (contract v2) exported to: " + result.dir);
+  append_log("  case_id: " + dir_name + " input_mode: " + input_mode_);
+  append_log("  profile: " + profile.id + " mapping: " +
+             profile.mapping_version);
   append_log("  input: " + result.input_file +
              " sha256=" + result.input_sha256);
   for (const auto& name : result.mesh_files) {
@@ -810,8 +1026,10 @@ void MoosePanel::on_export_snapshot() {
   for (const auto& name : result.extra_files) {
     append_log("  extra: " + name);
   }
-  for (const auto& ref : result.missing_files) {
-    append_log("  WARNING: referenced file not found, not exported: " + ref);
+  const QString recommended =
+      result.manifest.value("recommended_command").toString();
+  if (!recommended.isEmpty()) {
+    append_log("  recommended_command: " + recommended);
   }
   append_log("  manifest: " + result.manifest_path);
   if (current_template_.valid && current_template_.status == "prototype") {
@@ -1224,7 +1442,6 @@ QString MoosePanel::template_generated_mesh() const {
   [./v]
     family = LAGRANGE
     order = FIRST
-  []
   [../]
 []
 
@@ -1442,7 +1659,6 @@ QString MoosePanel::template_file_mesh(const QString& mesh_path) const {
   [./v]
     family = LAGRANGE
     order = FIRST
-  []
   [../]
 []
 

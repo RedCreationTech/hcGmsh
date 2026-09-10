@@ -28,6 +28,10 @@ class PropertyEditor : public QWidget {
   void set_item(QTreeWidgetItem* item);
   void set_boundary_groups(const QStringList& names);
   void set_volume_groups(const QStringList& names);
+  // W-03a：显示→求解单位换算因子（decision 7），键为量纲（pressure 等），
+  // 满足 solver = display * factor；来自活动档案 unit_contract 的
+  // display_to_solver_factors，缺省时 CDP 应力字段按 1e6（MPa→Pa）换算。
+  void set_display_unit_factors(const QMap<QString, double>& factors);
   void refresh_form_options();
   bool validate_current(QStringList* issues = nullptr);
   const QStringList& boundary_groups() const { return boundary_groups_; }
@@ -69,6 +73,8 @@ class PropertyEditor : public QWidget {
                                   const QString& type) const;
   void apply_template_values(const QVariantMap& values, bool overwrite);
   QStringList collect_model_names(const QString& root_name) const;
+  // W-03a：CDP 应力类字段显示↔存储换算用的比例因子。
+  double display_unit_factor(const QString& quantity, double fallback) const;
 
   QTreeWidgetItem* current_item_ = nullptr;
   QLabel* header_label_ = nullptr;
@@ -121,6 +127,7 @@ class PropertyEditor : public QWidget {
   bool form_updating_ = false;
   QStringList boundary_groups_;
   QStringList volume_groups_;
+  QMap<QString, double> display_unit_factors_;
 };
 
 }  // namespace gmp

@@ -44,6 +44,9 @@ class GmshPanel : public QWidget {
   void mesh_generation_started();
   void mesh_generation_finished(bool success, const QString& message);
   void mesh_written(const QString& path);
+  // W-00b：网格写出后回读物理组清单 + 网格摘要 + 文件 SHA-256，
+  // 供 MainWindow 填充 mesh_snapshot_ 与 Mesh 树节点摘要。
+  void mesh_manifest(const QVariantMap& manifest);
   void boundary_groups(const QStringList& names);
   void volume_groups(const QStringList& names);
   void physical_group_selected(int dim, int tag);

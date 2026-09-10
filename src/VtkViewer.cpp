@@ -36,6 +36,7 @@
 #include <vtkCellData.h>
 #include <vtkCompositeDataGeometryFilter.h>
 #include <vtkCompositeDataIterator.h>
+#include <vtkCompositeDataSet.h>
 #include <vtkDataArray.h>
 #include <vtkDataObject.h>
 #include <vtkDataSet.h>
@@ -1890,6 +1891,75 @@ void VtkViewer::set_exodus_history(const QStringList& paths) {
   if (!paths.isEmpty()) {
     output_combo_->setCurrentIndex(0);
   }
+}
+
+QStringList VtkViewer::read_exodus_side_set_names(const QString& path) const {
+  QStringList names;
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (path.isEmpty() || !QFileInfo::exists(path)) {
+    return names;
+  }
+  auto reader = vtkSmartPointer<vtkExodusIIReader>::New();
+  reader->SetFileName(path.toUtf8().constData());
+  reader->UpdateInformation();
+  // 信息数组完整的网格（含转换器直读场景）直接取 side set 对象数组名。
+  const int info_count =
+      reader->GetNumberOfObjectArrays(vtkExodusIIReader::SIDE_SET);
+  for (int i = 0; i < info_count; ++i) {
+    const char* name =
+        reader->GetObjectArrayName(vtkExodusIIReader::SIDE_SET, i);
+    if (name && *name) {
+      names << QString::fromUtf8(name);
+    }
+  }
+  if (names.isEmpty()) {
+    // 信息数组为空时（v01 网格即如此）：启用集合数组后按输出块元数据收集，
+    // Side Sets 为主、Node Sets 兜底（v01 的 top/bottom 以 node set 表达，
+    // 二者都是 MOOSE 可用的 boundary 名）。
+    reader->SetAllArrayStatus(vtkExodusIIReader::SIDE_SET, 1);
+    reader->SetAllArrayStatus(vtkExodusIIReader::NODE_SET, 1);
+    reader->SetAllArrayStatus(vtkExodusIIReader::ELEM_BLOCK, 1);
+    reader->Update();
+    auto* out = vtkMultiBlockDataSet::SafeDownCast(reader->GetOutput());
+    if (out) {
+      QStringList node_set_names;
+      for (int i = 0; i < out->GetNumberOfBlocks(); ++i) {
+        auto* block =
+            vtkMultiBlockDataSet::SafeDownCast(out->GetBlock(i));
+        if (!block) {
+          continue;
+        }
+        auto* meta = out->GetMetaData(i);
+        const QString title =
+            meta && meta->Has(vtkCompositeDataSet::NAME())
+                ? QString::fromUtf8(meta->Get(vtkCompositeDataSet::NAME()))
+                : QString();
+        const bool is_side =
+            title.compare("Side Sets", Qt::CaseInsensitive) == 0;
+        const bool is_node =
+            title.compare("Node Sets", Qt::CaseInsensitive) == 0;
+        if (!is_side && !is_node) {
+          continue;
+        }
+        for (int j = 0; j < block->GetNumberOfBlocks(); ++j) {
+          auto* child_meta = block->GetMetaData(j);
+          if (child_meta && child_meta->Has(vtkCompositeDataSet::NAME())) {
+            const QString child_name = QString::fromUtf8(
+                child_meta->Get(vtkCompositeDataSet::NAME()));
+            if (!child_name.isEmpty()) {
+              (is_side ? names : node_set_names) << child_name;
+            }
+          }
+        }
+      }
+      names.append(node_set_names);
+    }
+  }
+  names.removeDuplicates();
+#else
+  Q_UNUSED(path);
+#endif
+  return names;
 }
 
 bool VtkViewer::save_screenshot(const QString& path) {

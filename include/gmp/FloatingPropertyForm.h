@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QDialog>
+#include <QMap>
 #include <QStringList>
 
 class QDialogButtonBox;
@@ -25,6 +26,8 @@ class FloatingPropertyForm : public QDialog {
 
   QTreeWidgetItem* target_item() const { return target_item_; }
   void place_over_stage(QWidget* stage);
+  // W-03a：显示→求解单位换算因子转发给内部 PropertyEditor（决策 7）。
+  void set_display_unit_factors(const QMap<QString, double>& factors);
 
  signals:
   void committed(QTreeWidgetItem* item);

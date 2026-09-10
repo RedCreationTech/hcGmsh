@@ -527,6 +527,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   context_project_label_->setMaximumWidth(180);
   context_project_label_->setToolTip("Current project (read-only).");
 
+  auto* app_label = new QLabel("App:", module_bar);
+  app_profile_selector_ = new QComboBox(module_bar);
+  app_profile_selector_->setObjectName("workContextAppProfile");
+  app_profile_selector_->setMinimumWidth(150);
+  app_profile_selector_->setMaximumWidth(220);
+  app_profile_selector_->setToolTip(
+      "Select the active MOOSE application profile.");
+
   auto* object_label = new QLabel("Object:", module_bar);
   context_object_selector_ = new QComboBox(module_bar);
   context_object_selector_->setObjectName("workContextObject");
@@ -554,10 +562,22 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   module_bar_layout->addWidget(project_label);
   module_bar_layout->addWidget(context_project_label_);
   module_bar_layout->addSpacing(6);
+  module_bar_layout->addWidget(app_label);
+  module_bar_layout->addWidget(app_profile_selector_);
+  module_bar_layout->addSpacing(6);
   module_bar_layout->addWidget(object_label);
   module_bar_layout->addWidget(context_object_selector_);
   module_bar_layout->addWidget(module_toolbar, 1);
   main_layout->addWidget(module_bar);
+
+  // W-00a：用户切换“应用”选择器 → 写入 application_profile_ 并标记修改；
+  // 程序化刷新（refresh_app_profile_selector）不触发此信号。
+  connect(app_profile_selector_, &QComboBox::activated, this,
+          [this](int index) {
+            set_active_app_profile(
+                app_profile_selector_->itemData(index).toString(),
+                /*mark_dirty=*/true);
+          });
 
   auto module_tab_index = [this](const QString& label) {
     for (int i = 0; i < module_tabs_->count(); ++i) {
@@ -591,6 +611,28 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
           module_toolbar_actions[idx] = std::move(actions);
         }
       };
+
+  // W-03a：新建 AbaqusCDP 材料（v01 验收基线默认值，params 存 SI 求解值）。
+  auto create_cdp_material = [this]() {
+    if (auto* root = find_root_item("Materials")) {
+      const QVariantMap preset{
+          {"type", "AbaqusCDP"},
+          {"youngs_modulus", "29791500000"},
+          {"poissons_ratio", "0.2"},
+          {"dilation_angle", "36"},
+          {"eccentricity", "0.1"},
+          {"biaxial_to_uniaxial_compression_ratio", "1.16"},
+          {"tensile_meridian_ratio", "0.667"},
+          {"viscosity", "5e-4"},
+          {"tension_recovery", "0"},
+          {"compression_recovery", "1"},
+          {"maximum_substeps", "256"},
+          {"maximum_strain_increment", "2.5e-5"},
+          {"enable_performance_diagnostics", "true"},
+          {"unit_factor_stress", "1000000"}};
+      add_child_item(root, "cdp_material_1", "Materials", preset);
+    }
+  };
 
   auto make_module_page = [](const QString& title,
                             const QString& description,
@@ -1108,6 +1150,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* job_page = new MoosePanel(property_stack_);
   moose_panel_ = job_page;
   gmsh_panel_ = mesh_page;
+  // W-00c：首次注入档案/单位/清单/项目路径上下文（当前均为空态）。
+  push_context_to_moose_panel();
 
   auto* job_container = new QWidget(property_stack_);
   auto* job_layout = new QVBoxLayout(job_container);
@@ -1702,6 +1746,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                add_child_item(root, "material_1", "Materials", preset);
              }
            }},
+          {"New CDP Material", create_cdp_material},
           {"Open Property Editor", [this, module_tab_index]() {
              const int prop_tab = module_tab_index("Property");
              if (prop_tab >= 0) {
@@ -2680,6 +2725,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                                add_child_item(root, "material_1", "Materials", preset);
                              }
                            }},
+                           {"New CDP Material", create_cdp_material},
                        });
 
   assign_module_actions(section_tab,
@@ -2819,6 +2865,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                                model_tree_->setCurrentItem(root);
                                root->setExpanded(true);
                              }
+                           }},
+                           {"Import Exodus Mesh...", [this]() {
+                             on_import_exodus_mesh();
                            }},
                            {"Generate & Submit", [this]() {
                              if (gmsh_panel_) {
@@ -3389,6 +3438,84 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             upsert_mesh_item(path);
             statusBar()->showMessage("Mesh generated.", 2000);
           });
+  // W-00b：物理组清单生产者消费端。填充 mesh_snapshot_（项目 YAML 既有
+  // 序列化随之 round-trip），并把摘要写入 Mesh 树节点 params.summary。
+  // 清单不完整（如无物理组）不阻断生成，仅警告并把节点状态标为不完整。
+  connect(mesh_page, &GmshPanel::mesh_manifest, this,
+          [this](const QVariantMap& manifest_map) {
+            mesh_snapshot_ = PhysicalGroupManifest::from_variant_map(manifest_map);
+            const bool complete = !mesh_snapshot_.groups.isEmpty() &&
+                                  mesh_snapshot_.node_count > 0 &&
+                                  mesh_snapshot_.element_count > 0;
+            const bool chinese =
+                l10n::current_language() == l10n::Language::Chinese;
+            if (!complete) {
+              gmp::log_operation(
+                  "mesh", "Mesh manifest is incomplete (no physical groups or "
+                          "empty mesh): " +
+                              mesh_snapshot_.mesh_path);
+              statusBar()->showMessage(
+                  chinese ? QString::fromUtf8(
+                                "网格清单不完整：未找到物理组或网格为空。")
+                          : QString("Mesh manifest is incomplete: no physical "
+                                    "groups found or the mesh is empty."),
+                  5000);
+            }
+            auto* root = find_root_item("Mesh");
+            auto* item =
+                root ? find_child_by_param(root, "path",
+                                           mesh_snapshot_.mesh_path)
+                     : nullptr;
+            if (item) {
+              QVariantMap params =
+                  item->data(0, PropertyEditor::kParamsRole).toMap();
+              const QString quality_text =
+                  mesh_snapshot_.quality_summary.isEmpty()
+                      ? QString("-")
+                      : QString("%1~%2")
+                            .arg(mesh_snapshot_.quality_summary.value(
+                                     "quality_min"), 0, 'g', 4)
+                            .arg(mesh_snapshot_.quality_summary.value(
+                                     "quality_max"), 0, 'g', 4);
+              params.insert(
+                  "summary",
+                  chinese
+                      ? QString::fromUtf8(
+                            "%1D · 节点 %2 · 单元 %3 (%4) · 物理组 %5 · 质量 "
+                            "minSICN %6")
+                            .arg(mesh_snapshot_.mesh_dim)
+                            .arg(mesh_snapshot_.node_count)
+                            .arg(mesh_snapshot_.element_count)
+                            .arg(mesh_snapshot_.element_type.isEmpty()
+                                     ? QString("-")
+                                     : mesh_snapshot_.element_type)
+                            .arg(mesh_snapshot_.groups.size())
+                            .arg(quality_text)
+                      : QString("%1D · nodes %2 · elements %3 (%4) · physical "
+                                "groups %5 · quality minSICN %6")
+                            .arg(mesh_snapshot_.mesh_dim)
+                            .arg(mesh_snapshot_.node_count)
+                            .arg(mesh_snapshot_.element_count)
+                            .arg(mesh_snapshot_.element_type.isEmpty()
+                                     ? QString("-")
+                                     : mesh_snapshot_.element_type)
+                            .arg(mesh_snapshot_.groups.size())
+                            .arg(quality_text));
+              params.insert("physical_group_names",
+                            mesh_snapshot_.group_names());
+              if (!mesh_snapshot_.mesh_sha256.isEmpty()) {
+                params.insert("sha256", mesh_snapshot_.mesh_sha256);
+              }
+              item->setData(0, PropertyEditor::kParamsRole, params);
+              item->setData(0, PropertyEditor::kStatusRole,
+                            complete ? QString("Generated")
+                                     // “missing” 关键词让节点状态显示为不完整。
+                                     : QString("Missing physical groups"));
+              refresh_tree_statuses();
+            }
+            push_context_to_moose_panel();
+            set_project_dirty(true);
+          });
   connect(job_page, &MoosePanel::exodus_ready, viewer_,
           &VtkViewer::set_exodus_file);
   connect(job_page, &MoosePanel::exodus_history, viewer_,
@@ -3946,6 +4073,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             invalidate_downstream_from(
                 item->data(0, PropertyEditor::kKindRole).toString());
             set_project_dirty(true);
+            // W-03a：params 内 CSV 路径等改动即时反映到快照来源表。
+            push_context_to_moose_panel();
             refresh_module_pages();
             if (property_editor_) {
               property_editor_->refresh_form_options();
@@ -4075,10 +4204,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   dirty_status_label_ = new QLabel("Saved");
   active_context_status_label_ = new QLabel("Context: Part / Unselected");
   active_context_status_label_->setObjectName("activeContextStatus");
+  app_profile_status_label_ = new QLabel("App: Unselected");
+  app_profile_status_label_->setObjectName("appProfileStatus");
   statusBar()->addPermanentWidget(active_context_status_label_, 1);
+  statusBar()->addPermanentWidget(app_profile_status_label_);
   statusBar()->addPermanentWidget(project_status_label_);
   statusBar()->addPermanentWidget(dirty_status_label_);
   update_window_title();
+  // W-00a/W-00d：加载应用档案注册表并填充“应用”选择器；注册表可用时
+  // 默认选中生产档案（等价于新建项目的默认行为），并按档案声明加载
+  // mapping 注册表。
+  init_app_profile_support();
   sync_active_ui_context();
   update_command_availability();
   statusBar()->showMessage("Ready");
@@ -4597,6 +4733,9 @@ void MainWindow::build_menu() {
   mesh_menu->setObjectName("meshMenu");
   action_mesh_ = mesh_menu->addAction("Generate Mesh");
   action_preview_mesh_ = mesh_menu->addAction("Preview Mesh...");
+  // W-02b：显式导入 Exodus 网格（决策 6 例外路径，role=input_mesh）。
+  action_import_exodus_ = mesh_menu->addAction("Import Exodus Mesh...");
+  action_import_exodus_->setObjectName("importExodusMeshAction");
   action_mesh_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
   action_preview_mesh_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_M));
 
@@ -4656,6 +4795,7 @@ void MainWindow::build_menu() {
     refresh_tree_statuses();
     refresh_results_navigation();
     update_window_title();
+    update_app_profile_display();
   });
   connect(lang_zh, &QAction::triggered, this, [this]() {
     l10n::set_language(l10n::Language::Chinese);
@@ -4663,6 +4803,7 @@ void MainWindow::build_menu() {
     refresh_tree_statuses();
     refresh_results_navigation();
     update_window_title();
+    update_app_profile_display();
   });
 
   auto* help_menu = menuBar()->addMenu("&Help");
@@ -4675,20 +4816,159 @@ void MainWindow::build_menu() {
   });
 
   connect(action_new_, &QAction::triggered, this, [this]() {
-    project_path_.clear();
-    schema_version_ = project_schema::kCurrentVersion;
-    application_profile_.clear();
-    unit_contract_.clear();
-    mesh_snapshot_ = PhysicalGroupManifest();
-    input_snapshots_.clear();
-    clear_model_tree_children();
-    refresh_job_table();
-    property_editor_->set_item(nullptr);
-    refresh_module_pages();
-    gmp::log_operation("project", "New project created.");
-    statusBar()->showMessage("New project created.", 2000);
-    set_project_dirty(false);
-    update_project_status();
+    // 新建项目的清空逻辑（巡览模式保持静默直建，不弹任何对话框）。
+    auto create_fresh_project = [this]() {
+      project_path_.clear();
+      schema_version_ = project_schema::kCurrentVersion;
+      application_profile_.clear();
+      unit_contract_.clear();
+      mesh_snapshot_ = PhysicalGroupManifest();
+      input_snapshots_.clear();
+      clear_model_tree_children();
+      refresh_job_table();
+      property_editor_->set_item(nullptr);
+      refresh_module_pages();
+      // W-00a：注册表可用时新建项目默认选中生产档案（不标记修改）。
+      if (app_profile_registry_.is_loaded()) {
+        const ApplicationProfile fallback =
+            app_profile_registry_.default_production_profile();
+        if (fallback.valid) {
+          set_active_app_profile(fallback.id, /*mark_dirty=*/false);
+        }
+      }
+      refresh_app_profile_selector();
+      update_app_profile_display();
+      // W-00c：档案未默认选中时也把空态上下文注入面板（导出回到拒绝态）。
+      push_context_to_moose_panel();
+    };
+    // 巡览/自动化模式：维持既有静默行为，保证 89 步基线不依赖对话框。
+    if (qEnvironmentVariableIsSet("GMP_SCREENSHOT_DIR")) {
+      create_fresh_project();
+      gmp::log_operation("project", "New project created.");
+      statusBar()->showMessage("New project created.", 2000);
+      set_project_dirty(false);
+      update_project_status();
+      return;
+    }
+    const bool chinese =
+        l10n::current_language() == l10n::Language::Chinese;
+    // 当前项目有未保存修改时先提示，避免静默丢失编辑内容。
+    if (project_dirty_) {
+      const auto choice = QMessageBox::question(
+          this, chinese ? QString::fromUtf8("新建项目") : QString("New Project"),
+          chinese ? QString::fromUtf8(
+                        "当前项目有未保存的修改。是否先保存？")
+                  : QString("The current project has unsaved changes. Save "
+                            "before creating a new project?"),
+          QMessageBox::Save | QMessageBox::Discard | QMessageBox::Cancel,
+          QMessageBox::Save);
+      if (choice == QMessageBox::Cancel) {
+        return;
+      }
+      if (choice == QMessageBox::Save) {
+        if (project_path_.isEmpty()) {
+          const QString path = QFileDialog::getSaveFileName(
+              this, chinese ? QString::fromUtf8("保存项目") : QString("Save Project"),
+              project_path_, "GMP Project (*.gmp.yaml *.yaml)");
+          if (path.isEmpty()) {
+            return;
+          }
+          project_path_ = path;
+        }
+        if (!save_project(project_path_)) {
+          return;
+        }
+      }
+    }
+    // 新项目对话框：项目名称 + 存储目录（默认取上次项目目录）。
+    QSettings settings("gmp-ise", "gmp_ise");
+    const QString last_dir = settings.value("ui/last_project_dir").toString();
+    QDialog dialog(this);
+    dialog.setObjectName("newProjectDialog");
+    dialog.setWindowTitle(chinese ? QString::fromUtf8("新建项目")
+                                  : QString("New Project"));
+    auto* form = new QFormLayout(&dialog);
+    auto* name_edit = new QLineEdit(
+        chinese ? QString::fromUtf8("未命名") : QString("Untitled"), &dialog);
+    name_edit->setObjectName("newProjectNameEdit");
+    auto* dir_edit = new QLineEdit(
+        last_dir.isEmpty()
+            ? QStandardPaths::writableLocation(QStandardPaths::DocumentsLocation)
+            : last_dir,
+        &dialog);
+    dir_edit->setObjectName("newProjectDirEdit");
+    auto* browse_btn = new QPushButton(
+        chinese ? QString::fromUtf8("浏览...") : QString("Browse..."), &dialog);
+    auto* dir_row = new QWidget(&dialog);
+    auto* dir_layout = new QHBoxLayout(dir_row);
+    dir_layout->setContentsMargins(0, 0, 0, 0);
+    dir_layout->addWidget(dir_edit, 1);
+    dir_layout->addWidget(browse_btn);
+    form->addRow(chinese ? QString::fromUtf8("项目名称") : QString("Project name"),
+                 name_edit);
+    form->addRow(chinese ? QString::fromUtf8("存储目录") : QString("Location"),
+                 dir_row);
+    auto* buttons = new QDialogButtonBox(
+        QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    buttons->button(QDialogButtonBox::Ok)
+        ->setText(chinese ? QString::fromUtf8("创建") : QString("Create"));
+    buttons->button(QDialogButtonBox::Cancel)
+        ->setText(chinese ? QString::fromUtf8("取消") : QString("Cancel"));
+    form->addRow(buttons);
+    QObject::connect(browse_btn, &QPushButton::clicked, &dialog, [&]() {
+      const QString dir = QFileDialog::getExistingDirectory(
+          &dialog, chinese ? QString::fromUtf8("选择存储目录")
+                           : QString("Choose Location"),
+          dir_edit->text());
+      if (!dir.isEmpty()) {
+        dir_edit->setText(dir);
+      }
+    });
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog,
+                     &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog,
+                     &QDialog::reject);
+    if (dialog.exec() != QDialog::Accepted) {
+      return;
+    }
+    QString name = name_edit->text().trimmed();
+    if (name.isEmpty()) {
+      name = chinese ? QString::fromUtf8("未命名") : QString("Untitled");
+    }
+    // 文件名安全化：去掉路径分隔与特殊字符。
+    name.replace(QRegularExpression("[\\\\/:*?\"<>|]"), "_");
+    const QString dir = dir_edit->text().trimmed();
+    if (dir.isEmpty() || !QDir(dir).exists()) {
+      QMessageBox::warning(
+          this, chinese ? QString::fromUtf8("新建项目") : QString("New Project"),
+          chinese ? QString::fromUtf8("存储目录不存在：%1").arg(dir)
+                  : QString("Location does not exist: %1").arg(dir));
+      return;
+    }
+    const QString path = QDir(dir).filePath(name + ".gmp.yaml");
+    if (QFileInfo::exists(path)) {
+      const auto overwrite = QMessageBox::question(
+          this, chinese ? QString::fromUtf8("新建项目") : QString("New Project"),
+          chinese ? QString::fromUtf8("文件已存在，是否覆盖？\n%1").arg(path)
+                  : QString("File already exists. Overwrite?\n%1").arg(path));
+      if (overwrite != QMessageBox::Yes) {
+        return;
+      }
+    }
+    create_fresh_project();
+    project_path_ = path;
+    settings.setValue("ui/last_project_dir", dir);
+    if (save_project(project_path_)) {
+      gmp::log_operation("project", "New project created: " + project_path_);
+      statusBar()->showMessage(
+          chinese ? QString::fromUtf8("新项目已创建：%1").arg(project_path_)
+                  : QString("New project created: %1").arg(project_path_),
+          4000);
+      add_recent_project(project_path_);
+      set_project_dirty(false);
+      update_project_status();
+      update_window_title();
+    }
   });
   connect(action_open_, &QAction::triggered, this, [this]() {
     const QString path = QFileDialog::getOpenFileName(
@@ -4718,6 +4998,7 @@ void MainWindow::build_menu() {
       statusBar()->showMessage("Project saved.", 2000);
       add_recent_project(project_path_);
       set_project_dirty(false);
+      push_context_to_moose_panel();
     }
   });
   connect(action_save_as_, &QAction::triggered, this, [this]() {
@@ -4734,6 +5015,7 @@ void MainWindow::build_menu() {
       add_recent_project(project_path_);
       set_project_dirty(false);
       update_project_status();
+      push_context_to_moose_panel();
     }
   });
   if (action_export_bundle_) {
@@ -4784,6 +5066,8 @@ void MainWindow::build_menu() {
       statusBar()->showMessage("Mesh loaded.", 2000);
     }
   });
+  connect(action_import_exodus_, &QAction::triggered, this,
+          [this]() { on_import_exodus_mesh(); });
   connect(action_run_, &QAction::triggered, this, [this]() {
     if (moose_panel_) {
       moose_panel_->run_job();
@@ -4916,6 +5200,10 @@ void MainWindow::build_toolbar() {
   if (action_preview_mesh_) {
     action_preview_mesh_->setIcon(MakeIcon(IconGlyph::OpenFolder));
     mesh_toolbar->addAction(action_preview_mesh_);
+  }
+  if (action_import_exodus_) {
+    action_import_exodus_->setIcon(MakeIcon(IconGlyph::OpenFolder));
+    mesh_toolbar->addAction(action_import_exodus_);
   }
   if (action_run_) {
     action_run_->setIcon(MakeIcon(IconGlyph::Run));
@@ -5566,6 +5854,7 @@ void MainWindow::open_property_form(QTreeWidgetItem* item) {
       property_editor_ ? property_editor_->volume_groups() : QStringList();
   auto* form = new FloatingPropertyForm(item, boundaries, volumes, this);
   floating_property_form_ = form;
+  form->set_display_unit_factors(display_unit_factors());
   l10n::apply(form);
   connect(form, &FloatingPropertyForm::committed, this,
           [this](QTreeWidgetItem* committed_item) {
@@ -5575,6 +5864,8 @@ void MainWindow::open_property_form(QTreeWidgetItem* item) {
                       .toString());
             }
             set_project_dirty(true);
+            // W-03a：材料 CSV 来源/单位因子随提交刷新到 MoosePanel 与表单。
+            push_context_to_moose_panel();
             if (model_tree_ && committed_item) {
               model_tree_->setCurrentItem(committed_item);
             }
@@ -6163,6 +6454,213 @@ void MainWindow::refresh_work_context() {
       root ? QString("Current %1 object; selecting an entry locates it in the model tree.")
                  .arg(root_name)
            : QString("No object selector is available in this context."));
+}
+
+void MainWindow::init_app_profile_support() {
+  app_profile_registry_.reload();
+  if (!app_profile_registry_.is_loaded()) {
+    gmp::log_operation("profile",
+                       "Application profile registry unavailable: " +
+                           app_profile_registry_.last_error());
+  }
+  refresh_app_profile_selector();
+  if (app_profile_registry_.is_loaded() &&
+      application_profile_.value("id").toString().isEmpty()) {
+    const ApplicationProfile fallback =
+        app_profile_registry_.default_production_profile();
+    if (fallback.valid) {
+      set_active_app_profile(fallback.id, /*mark_dirty=*/false);
+    }
+  }
+  update_app_profile_display();
+}
+
+void MainWindow::refresh_app_profile_selector() {
+  if (!app_profile_selector_) {
+    return;
+  }
+  const bool chinese =
+      l10n::current_language() == l10n::Language::Chinese;
+  const QSignalBlocker blocker(app_profile_selector_);
+  app_profile_selector_->clear();
+  if (!app_profile_registry_.is_loaded()) {
+    app_profile_selector_->addItem(
+        chinese ? QString::fromUtf8("未配置") : QString("Not configured"),
+        QString());
+    app_profile_selector_->setEnabled(false);
+    app_profile_selector_->setToolTip(
+        "No application profile directory was found.");
+    return;
+  }
+  app_profile_selector_->setEnabled(true);
+  app_profile_selector_->setToolTip(
+      "Select the active MOOSE application profile.");
+  app_profile_selector_->addItem(
+      chinese ? QString::fromUtf8("未选择") : QString("Unselected"), QString());
+  for (const ApplicationProfile& profile : app_profile_registry_.profiles()) {
+    QString text = profile.id;
+    if (profile.status == QStringLiteral("prototype")) {
+      text += " [prototype]";
+    } else if (profile.status == QStringLiteral("unsupported")) {
+      text += " [unsupported]";
+    }
+    app_profile_selector_->addItem(text, profile.id);
+    const int row = app_profile_selector_->count() - 1;
+    app_profile_selector_->setItemData(
+        row,
+        profile.status_note.isEmpty()
+            ? profile.display_name
+            : QString("%1 — %2").arg(profile.display_name, profile.status_note),
+        Qt::ToolTipRole);
+  }
+  const QString active_id = application_profile_.value("id").toString();
+  const int combo_index =
+      active_id.isEmpty() ? 0 : app_profile_selector_->findData(active_id);
+  app_profile_selector_->setCurrentIndex(combo_index >= 0 ? combo_index : 0);
+}
+
+void MainWindow::set_active_app_profile(const QString& profile_id,
+                                        bool mark_dirty) {
+  const bool chinese =
+      l10n::current_language() == l10n::Language::Chinese;
+  const QString previous_id = application_profile_.value("id").toString();
+  if (profile_id.isEmpty()) {
+    application_profile_.clear();
+    unit_contract_.clear();
+  } else {
+    const ApplicationProfile profile =
+        app_profile_registry_.profile(profile_id);
+    if (!profile.valid) {
+      statusBar()->showMessage(
+          chinese ? QString::fromUtf8("未知应用档案：%1").arg(profile_id)
+                  : QString("Unknown application profile: %1").arg(profile_id),
+          4000);
+      return;
+    }
+    QVariantMap map;
+    map.insert("id", profile.id);
+    map.insert("version", profile.version);
+    map.insert("status", profile.status);
+    map.insert("support_level", profile.support_level);
+    map.insert("mapping_version", profile.mapping_version);
+    map.insert("solver_program", profile.solver_program);
+    application_profile_ = map;
+    QVariantMap units;
+    for (auto it = profile.unit_contract.cbegin();
+         it != profile.unit_contract.cend(); ++it) {
+      units.insert(it.key(), it.value());
+    }
+    unit_contract_ = units;
+    if (profile.status == QStringLiteral("prototype")) {
+      statusBar()->showMessage(
+          chinese ? QString::fromUtf8(
+                        "原型档案 %1，不建议用于正式提交。").arg(profile.id)
+                  : QString("Prototype profile %1; not recommended for "
+                            "production submission.")
+                        .arg(profile.id),
+          6000);
+    }
+  }
+  if (application_profile_.value("id").toString() == previous_id) {
+    return;
+  }
+  reload_mapping_registry();
+  refresh_app_profile_selector();
+  update_app_profile_display();
+  push_context_to_moose_panel();
+  if (mark_dirty) {
+    set_project_dirty(true);
+  }
+}
+
+void MainWindow::update_app_profile_display() {
+  if (!app_profile_status_label_) {
+    return;
+  }
+  const bool chinese =
+      l10n::current_language() == l10n::Language::Chinese;
+  const QString id = application_profile_.value("id").toString();
+  const QString display =
+      id.isEmpty() ? (chinese ? QString::fromUtf8("未选择")
+                              : QString("Unselected"))
+                   : id;
+  app_profile_status_label_->setText(
+      chinese ? QString::fromUtf8("应用：%1").arg(display)
+              : QString("App: %1").arg(display));
+  const QString version = application_profile_.value("version").toString();
+  const QString mapping_version =
+      application_profile_.value("mapping_version").toString();
+  app_profile_status_label_->setToolTip(
+      id.isEmpty()
+          ? QString("No application profile is selected.")
+          : QString("Application profile: %1\nVersion: %2\nMapping registry: "
+                    "%3 (%4)")
+                .arg(id, version,
+                     mapping_registry_.is_loaded()
+                         ? mapping_registry_.version()
+                         : QString("not loaded"),
+                     mapping_version));
+}
+
+void MainWindow::push_context_to_moose_panel() {
+  if (!moose_panel_) {
+    return;
+  }
+  moose_panel_->set_application_profile(application_profile_);
+  moose_panel_->set_unit_contract(unit_contract_);
+  moose_panel_->set_physical_group_manifest(mesh_snapshot_);
+  moose_panel_->set_project_context(project_path_);
+  // W-03a：材料 CSV 显式来源表（快照 v2 file_sources 生产者）。
+  moose_panel_->set_extra_file_sources(collect_material_file_sources());
+  // 决策 7：单位换算因子同步给属性表单（MPa 显示 ↔ SI 存储）。
+  if (property_editor_) {
+    property_editor_->set_display_unit_factors(display_unit_factors());
+  }
+}
+
+void MainWindow::reload_mapping_registry() {
+  const bool chinese =
+      l10n::current_language() == l10n::Language::Chinese;
+  const QString id = application_profile_.value("id").toString();
+  mapping_registry_ = MooseMappingRegistry();
+  if (id.isEmpty() || !app_profile_registry_.is_loaded()) {
+    return;
+  }
+  const ApplicationProfile profile = app_profile_registry_.profile(id);
+  if (!profile.valid) {
+    return;
+  }
+  const QString mapping_path =
+      QFileInfo(QDir(app_profile_registry_.root_dir())
+                    .filePath(profile.mapping_registry_path))
+          .absoluteFilePath();
+  MooseMappingRegistry registry;
+  if (!registry.load(mapping_path)) {
+    gmp::log_operation("profile", "Mapping registry load failed: " +
+                                      registry.last_error());
+    statusBar()->showMessage(
+        chinese ? QString::fromUtf8("映射注册表加载失败：%1")
+                      .arg(registry.last_error())
+                : QString("Mapping registry load failed: %1")
+                      .arg(registry.last_error()),
+        6000);
+    return;
+  }
+  mapping_registry_ = registry;
+  if (mapping_registry_.version() != profile.mapping_version) {
+    gmp::log_operation(
+        "profile",
+        QString("Mapping registry version mismatch: profile declares %1, "
+                "loaded %2")
+            .arg(profile.mapping_version, mapping_registry_.version()));
+    statusBar()->showMessage(
+        chinese ? QString::fromUtf8("映射注册表版本不一致：档案声明 %1，实际 %2")
+                      .arg(profile.mapping_version, mapping_registry_.version())
+                : QString("Mapping registry version mismatch: profile declares "
+                          "%1, loaded %2")
+                      .arg(profile.mapping_version, mapping_registry_.version()),
+        6000);
+  }
 }
 
 int MainWindow::child_count(const QString& root_name) const {
@@ -7172,6 +7670,104 @@ void MainWindow::upsert_mesh_item(const QString& path) {
   set_project_dirty(true);
 }
 
+void MainWindow::on_import_exodus_mesh() {
+  // 巡览/自动化环境无文件对话框：GMP_TOUR_EXODUS_IMPORT 直接指定路径。
+  QString path = qEnvironmentVariable("GMP_TOUR_EXODUS_IMPORT").trimmed();
+  if (path.isEmpty()) {
+    path = QFileDialog::getOpenFileName(
+        this, "Import Exodus Mesh", QDir::homePath(),
+        "Exodus Mesh (*.e *.exo *.exodus);;All Files (*)");
+  }
+  if (path.isEmpty()) {
+    return;
+  }
+  import_exodus_mesh(path);
+}
+
+bool MainWindow::import_exodus_mesh(const QString& path) {
+  if (path.isEmpty() || !QFileInfo::exists(path)) {
+    statusBar()->showMessage("Exodus mesh file is unavailable: " + path,
+                             4000);
+    return false;
+  }
+  const QString ext = QFileInfo(path).suffix().toLower();
+  if (ext != "e" && ext != "exo" && ext != "exodus") {
+    statusBar()->showMessage("Not an Exodus file: " + path, 4000);
+    return false;
+  }
+  auto* root = find_root_item("Mesh");
+  if (!root) {
+    return false;
+  }
+  const QString abs = QFileInfo(path).absoluteFilePath();
+  // 侧集/节点集名提取（W-02b）；失败不阻断导入，仅警告。
+  const QStringList boundary_names =
+      viewer_ ? viewer_->read_exodus_side_set_names(abs) : QStringList();
+
+  QVariantMap params;
+  params.insert("path", abs);
+  params.insert("source", "exodus_import");
+  params.insert("role", "input_mesh");
+  if (!boundary_names.isEmpty()) {
+    params.insert("boundary_names", boundary_names.join(" "));
+  }
+  auto* item = find_child_by_param(root, "path", abs);
+  const QString base = QFileInfo(abs).baseName();
+  if (!item) {
+    item = add_child_item(root, base.isEmpty() ? QString("exodus_mesh") : base,
+                          "Mesh", params);
+  } else {
+    QVariantMap merged = item->data(0, PropertyEditor::kParamsRole).toMap();
+    for (auto it = params.begin(); it != params.end(); ++it) {
+      merged.insert(it.key(), it.value());
+    }
+    item->setData(0, PropertyEditor::kParamsRole, merged);
+  }
+  if (item) {
+    item->setData(0, PropertyEditor::kStatusRole, "Generated");
+  }
+  // 决策 6：只有这个显式入口把 .e 当输入网格载入舞台；普通结果 .e
+  // 仍走 import_result_file 登记 Results，不触碰 Mesh 节点。
+  if (viewer_) {
+    viewer_->set_exodus_file(abs);
+  }
+  // 输入网格路径进 MoosePanel：快照归一化据此把该 .e 标记为
+  // role=input_mesh（其余 .e 引用一律拒绝导出）。
+  if (moose_panel_) {
+    moose_panel_->set_mesh_path(abs);
+  }
+  if (boundary_names.isEmpty()) {
+    if (console_) {
+      console_->appendPlainText(
+          "Warning: no side/node set names could be extracted from " + abs +
+          "; boundary pickers stay unchanged.");
+    }
+    statusBar()->showMessage(
+        "Exodus mesh imported (no boundary names extracted): " +
+            QFileInfo(abs).fileName(),
+        5000);
+  } else {
+    // boundary 名清单喂给组 chips 通道（与 GmshPanel::boundary_groups 同路）。
+    if (property_editor_) {
+      property_editor_->set_boundary_groups(boundary_names);
+    }
+    if (moose_panel_) {
+      moose_panel_->set_boundary_groups(boundary_names);
+    }
+    statusBar()->showMessage(
+        "Exodus mesh imported: " + QFileInfo(abs).fileName(), 3000);
+  }
+  gmp::log_operation(
+      "mesh", QString("Exodus mesh imported as input mesh: %1 (boundaries: %2)")
+                  .arg(abs, boundary_names.isEmpty()
+                                ? QString("none")
+                                : boundary_names.join(", ")));
+  refresh_tree_statuses();
+  push_context_to_moose_panel();
+  set_project_dirty(true);
+  return true;
+}
+
 void MainWindow::upsert_result_item(const QString& path,
                                     const QString& job_name) {
   if (path.isEmpty()) {
@@ -7657,6 +8253,180 @@ QString MainWindow::build_block_from_root(QTreeWidgetItem* root,
   return out;
 }
 
+QString MainWindow::build_materials_block(QTreeWidgetItem* root) const {
+  if (!root || root->childCount() == 0) {
+    return QString();
+  }
+  bool has_cdp = false;
+  for (int i = 0; i < root->childCount(); ++i) {
+    auto* child = root->child(i);
+    if (child && child->data(0, PropertyEditor::kParamsRole)
+                      .toMap()
+                      .value("type")
+                      .toString() == "AbaqusCDP") {
+      has_cdp = true;
+      break;
+    }
+  }
+  if (!has_cdp) {
+    // 无 CDP 子项时完全沿用原通用生成路径（demo 流程不受影响）。
+    return build_block_from_root(root, "Materials", "GenericConstantMaterial",
+                                 {});
+  }
+
+  // W-03a：type=AbaqusCDP 子项生成 v01 式三对象；其余子项保持通用生成。
+  const QStringList cdp_scalars = {"maximum_substeps",
+                                   "maximum_strain_increment",
+                                   "enable_performance_diagnostics",
+                                   "youngs_modulus",
+                                   "poissons_ratio",
+                                   "dilation_angle",
+                                   "eccentricity",
+                                   "biaxial_to_uniaxial_compression_ratio",
+                                   "tensile_meridian_ratio",
+                                   "viscosity",
+                                   "tension_recovery",
+                                   "compression_recovery"};
+  const QStringList cdp_files = {"compression_hardening_file",
+                                 "compression_damage_file",
+                                 "tension_stiffening_file",
+                                 "tension_damage_file"};
+  const QStringList skip_keys = {"type",   "block",  "section",
+                                 "status", "state",  "unit_factor_stress"};
+  QString out;
+  out += "[Materials]\n";
+  for (int i = 0; i < root->childCount(); ++i) {
+    auto* child = root->child(i);
+    if (!child) {
+      continue;
+    }
+    const QString name = child->text(0);
+    const QVariantMap params =
+        child->data(0, PropertyEditor::kParamsRole).toMap();
+    const QString type = params.value("type").toString();
+    if (type != "AbaqusCDP") {
+      out += QString("  [%1]\n").arg(name);
+      out += QString("    type = %1\n")
+                 .arg(type.isEmpty() ? QString("GenericConstantMaterial")
+                                     : type);
+      for (auto it = params.begin(); it != params.end(); ++it) {
+        if (it.key() == "type") {
+          continue;
+        }
+        out += QString("    %1 = %2\n")
+                   .arg(it.key())
+                   .arg(it.value().toString());
+      }
+      out += "  []\n";
+      continue;
+    }
+
+    // block 取子项的 block/section 指派参数（Section 指派语义见 W-01b）；
+    // 无指派时留空字符串并警告。
+    QString block = params.value("block").toString().trimmed();
+    if (block.isEmpty()) {
+      block = params.value("section").toString().trimmed();
+    }
+    if (block.isEmpty() && console_) {
+      console_->appendPlainText(
+          QString("Warning: CDP material '%1' has no block/section "
+                  "assignment; emitting an empty block parameter (assign a "
+                  "section/physical volume before running).")
+              .arg(name));
+    }
+    const QString stress_update = name + "_cdp_stress_update";
+    out += QString("  [%1_elasticity]\n").arg(name);
+    out += "    type = ComputeIsotropicElasticityTensor\n";
+    out += QString("    block = '%1'\n").arg(block);
+    out += QString("    youngs_modulus = %1\n")
+               .arg(params.value("youngs_modulus").toString());
+    out += QString("    poissons_ratio = %1\n")
+               .arg(params.value("poissons_ratio").toString());
+    out += "  []\n";
+    out += QString("  [%1_stress]\n").arg(name);
+    out += "    type = ComputeMultipleInelasticStress\n";
+    out += QString("    block = '%1'\n").arg(block);
+    out += QString("    inelastic_models = %1\n").arg(stress_update);
+    out += "    perform_finite_strain_rotations = false\n";
+    out += "  []\n";
+    out += QString("  [%1]\n").arg(stress_update);
+    out += "    type = AbaqusCDPStressUpdate\n";
+    out += QString("    block = '%1'\n").arg(block);
+    for (const auto& key : cdp_scalars) {
+      const QString value = params.value(key).toString();
+      if (!value.isEmpty()) {
+        out += QString("    %1 = %2\n").arg(key).arg(value);
+      }
+    }
+    for (const auto& key : cdp_files) {
+      const QString value = params.value(key).toString().trimmed();
+      if (!value.isEmpty()) {
+        // CSV 以 basename 相对引用；绝对来源经 file_sources 通道打包。
+        out += QString("    %1 = %2\n")
+                   .arg(key)
+                   .arg(QFileInfo(value).fileName());
+      }
+    }
+    // 透传其余非空自定义键（高级参数），跳过表单/元数据键。
+    const QStringList consumed = cdp_scalars + cdp_files + skip_keys;
+    for (auto it = params.begin(); it != params.end(); ++it) {
+      if (consumed.contains(it.key())) {
+        continue;
+      }
+      const QString value = it.value().toString();
+      if (value.isEmpty()) {
+        continue;
+      }
+      out += QString("    %1 = %2\n").arg(it.key()).arg(value);
+    }
+    out += "  []\n";
+  }
+  out += "[]\n";
+  return out;
+}
+
+QMap<QString, QString> MainWindow::collect_material_file_sources() const {
+  QMap<QString, QString> sources;
+  auto* root = find_root_item("Materials");
+  if (!root) {
+    return sources;
+  }
+  for (int i = 0; i < root->childCount(); ++i) {
+    auto* child = root->child(i);
+    if (!child) {
+      continue;
+    }
+    const QVariantMap params =
+        child->data(0, PropertyEditor::kParamsRole).toMap();
+    for (auto it = params.begin(); it != params.end(); ++it) {
+      if (!it.key().endsWith(QLatin1String("_file"))) {
+        continue;
+      }
+      const QString path = it.value().toString().trimmed();
+      if (path.isEmpty() || !QFileInfo(path).isAbsolute()) {
+        continue;
+      }
+      sources.insert(QFileInfo(path).fileName(),
+                     QFileInfo(path).absoluteFilePath());
+    }
+  }
+  return sources;
+}
+
+QMap<QString, double> MainWindow::display_unit_factors() const {
+  QMap<QString, double> factors;
+  const QVariantMap raw =
+      unit_contract_.value("display_to_solver_factors").toMap();
+  for (auto it = raw.begin(); it != raw.end(); ++it) {
+    bool ok = false;
+    const double value = it.value().toDouble(&ok);
+    if (ok && value > 0.0) {
+      factors.insert(it.key(), value);
+    }
+  }
+  return factors;
+}
+
 QString MainWindow::build_variables_block(QTreeWidgetItem* root) const {
   if (!root || root->childCount() == 0) {
     return QString();
@@ -7732,9 +8502,7 @@ void MainWindow::sync_model_to_input() {
       build_block_from_root(find_root_item("Functions"), "Functions",
                             "ParsedFunction", {});
   const QString variables = build_variables_block(find_root_item("Variables"));
-  const QString materials =
-      build_block_from_root(find_root_item("Materials"), "Materials",
-                            "GenericConstantMaterial", {});
+  const QString materials = build_materials_block(find_root_item("Materials"));
   const QString bcs = build_block_from_root(find_root_item("BC"), "BCs",
                                             "DirichletBC", {});
   const QString kernels =
@@ -7774,6 +8542,18 @@ void MainWindow::sync_model_to_input() {
   }
   refresh_workflow_status();
   gmp::log_operation("model", "Model tree synced to MOOSE input.");
+  // W-00a：无活动档案时生成入口保持可用，仅状态栏轻提示（硬阻断属 W-04/W-05）。
+  if (application_profile_.value("id").toString().isEmpty()) {
+    const bool chinese =
+        l10n::current_language() == l10n::Language::Chinese;
+    statusBar()->showMessage(
+        chinese
+            ? QString::fromUtf8("模型已同步到 MOOSE 输入（未选择应用档案）。")
+            : QString("Model synced to MOOSE input (no application profile "
+                      "selected)."),
+        4000);
+    return;
+  }
   statusBar()->showMessage("Model synced to MOOSE input.", 2000);
 }
 
@@ -8667,6 +9447,13 @@ bool MainWindow::load_project(const QString& path) {
     unit_contract_ = loaded_unit_contract;
     mesh_snapshot_ = loaded_mesh_snapshot;
     suppress_dirty_ = false;
+    // W-00a/W-00d：档案字段恢复后刷新选择器并按档案重载 mapping 注册表；
+    // 旧项目无档案字段时保持“未选择”，允许用户补选，不阻断加载。
+    reload_mapping_registry();
+    refresh_app_profile_selector();
+    update_app_profile_display();
+    // W-00c：档案/单位/清单/项目路径恢复后同步注入 MoosePanel。
+    push_context_to_moose_panel();
     refresh_job_table();
     refresh_results_panel();
     refresh_module_pages();
@@ -10728,6 +11515,300 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                 },
                 mesh_work_window_});
 #endif
+  steps.append({"app_profile_selector_contract",
+                [this]() {
+                  // W-00a/W-00d：上下文条“应用”选择器合同。选择档案后
+                  // application_profile_ 写入、状态栏/上下文显示档案 id，
+                  // 并按档案声明加载 mapping 注册表。
+                  if (!app_profile_selector_ || !app_profile_status_label_) {
+                    throw std::runtime_error("W-00a app profile selector fixture is missing");
+                  }
+                  if (!app_profile_registry_.is_loaded()) {
+                    throw std::runtime_error("W-00a application profile registry is not loaded");
+                  }
+                  const int combo_index =
+                      app_profile_selector_->findText("DamSafetyApp-opt");
+                  if (combo_index < 0) {
+                    throw std::runtime_error("W-00a DamSafetyApp-opt is missing from app profile selector");
+                  }
+                  const QVariantMap saved_profile = application_profile_;
+                  const bool saved_dirty = project_dirty_;
+                  // 走与人工操作相同的 activated 信号路径。
+                  app_profile_selector_->setCurrentIndex(combo_index);
+                  QMetaObject::invokeMethod(app_profile_selector_, "activated",
+                                            Qt::DirectConnection,
+                                            Q_ARG(int, combo_index));
+                  if (application_profile_.value("id").toString() !=
+                          "DamSafetyApp-opt" ||
+                      application_profile_.value("mapping_version")
+                              .toString()
+                              .isEmpty() ||
+                      application_profile_.value("version")
+                              .toString()
+                              .isEmpty() ||
+                      !app_profile_status_label_->text().contains(
+                          "DamSafetyApp-opt")) {
+                    throw std::runtime_error("W-00a app profile selection did not update project state and status display");
+                  }
+                  if (!mapping_registry_.is_loaded() ||
+                      !mapping_registry_.has_block("Materials")) {
+                    throw std::runtime_error("W-00d mapping registry was not loaded for the active profile");
+                  }
+                  // 原型档案：写入状态可识别并给出状态栏提示。
+                  const int proto_index =
+                      app_profile_selector_->findData("combined-opt");
+                  if (proto_index >= 0) {
+                    app_profile_selector_->setCurrentIndex(proto_index);
+                    QMetaObject::invokeMethod(app_profile_selector_,
+                                              "activated",
+                                              Qt::DirectConnection,
+                                              Q_ARG(int, proto_index));
+                    if (application_profile_.value("status").toString() !=
+                            "prototype" ||
+                        !app_profile_selector_->currentText().contains(
+                            "[prototype]")) {
+                      throw std::runtime_error("W-00a prototype profile annotation contract failed");
+                    }
+                  }
+                  // 恢复进入本步骤前的档案与修改态，避免影响后续步骤。
+                  set_active_app_profile(
+                      saved_profile.value("id").toString(),
+                      /*mark_dirty=*/false);
+                  set_project_dirty(saved_dirty);
+                },
+                this});
+#ifdef GMP_ENABLE_GMSH_GUI
+  steps.append({"mesh_manifest_summary",
+                [this]() {
+                  // W-00b：i04_geo_import_feedback 已生成带 Physical Volume
+                  // ("solid") 的网格；mesh_snapshot_ 与 Mesh 节点摘要必须
+                  // 已由 mesh_manifest 信号填充。
+                  auto* mesh_root = find_root_item("Mesh");
+                  if (!mesh_root) {
+                    throw std::runtime_error("W-00b mesh manifest fixture is missing");
+                  }
+                  if (mesh_snapshot_.mesh_path.isEmpty() ||
+                      mesh_snapshot_.node_count <= 0 ||
+                      mesh_snapshot_.element_count <= 0 ||
+                      mesh_snapshot_.mesh_sha256.size() != 64 ||
+                      !mesh_snapshot_.has_group("solid", 3)) {
+                    throw std::runtime_error("W-00b mesh snapshot was not filled after mesh generation");
+                  }
+                  auto* item = find_child_by_param(mesh_root, "path",
+                                                   mesh_snapshot_.mesh_path);
+                  const QVariantMap params =
+                      item ? item->data(0, PropertyEditor::kParamsRole).toMap()
+                           : QVariantMap();
+                  if (!item || params.value("summary").toString().isEmpty() ||
+                      params.value("sha256").toString() !=
+                          mesh_snapshot_.mesh_sha256) {
+                    throw std::runtime_error("W-00b Mesh tree node summary contract failed");
+                  }
+                },
+                this});
+#endif
+  // W-03a/W-02b：v01 基线 fixture（4 CSV + Exodus 网格）目录解析，
+  // 候选顺序与 MooseMappingRegistry::default_path 一致。
+  auto resolve_tour_fixture = [](const QString& relative) -> QString {
+    const QString app_dir = QCoreApplication::applicationDirPath();
+    const QStringList candidates = {
+        app_dir + "/tests/fixtures/" + relative,
+        app_dir + "/../tests/fixtures/" + relative,
+        app_dir + "/../../tests/fixtures/" + relative,
+        QDir::currentPath() + "/tests/fixtures/" + relative};
+    for (const auto& candidate : candidates) {
+      if (QFileInfo::exists(candidate)) {
+        return QFileInfo(candidate).absoluteFilePath();
+      }
+    }
+    return QString();
+  };
+  steps.append({"cdp_material_form_contract",
+                [this, resolve_tour_fixture]() {
+                  // W-03a：CDP 材料表单合同。新建 type=AbaqusCDP 材料 →
+                  // 快捷字段存在 → 填入 v01 参数（E 以 MPa 输入）→
+                  // params 存 SI（Pa）→ sync_model_to_input 生成三件套 +
+                  // inelastic_models 连线 + CSV basename 引用。
+                  auto* root = find_root_item("Materials");
+                  if (!root || !property_editor_ || !moose_panel_) {
+                    throw std::runtime_error(
+                        "W-03a CDP material fixture is missing");
+                  }
+                  const QString fixture_dir =
+                      resolve_tour_fixture("cdp-v01");
+                  if (fixture_dir.isEmpty()) {
+                    throw std::runtime_error(
+                        "W-03a CDP fixture directory is missing");
+                  }
+                  const QStringList csv_names = {
+                      "compression_hardening.csv", "compression_damage.csv",
+                      "tension_stiffening.csv", "tension_damage.csv"};
+                  auto* item = add_child_item(root, "tour_cdp", "Materials",
+                                              {{"type", "AbaqusCDP"}});
+                  if (!item) {
+                    throw std::runtime_error(
+                        "W-03a CDP material node was not created");
+                  }
+                  property_editor_->set_item(item);
+                  auto require_edit =
+                      [this](const char* object_name) -> QLineEdit* {
+                    auto* edit =
+                        property_editor_->findChild<QLineEdit*>(object_name);
+                    if (!edit) {
+                      throw std::runtime_error(
+                          QString("W-03a CDP form field is missing: %1")
+                              .arg(object_name)
+                              .toStdString());
+                    }
+                    return edit;
+                  };
+                  // 走真实 textChanged 路径填表，验证 MPa→Pa 换算与字段存在。
+                  // 填表期间屏蔽树 itemChanged：每次 setData 都会触发表单
+                  // 重建（既有行为），逐字段重建会让已取到的控件指针悬垂。
+                  {
+                    const QSignalBlocker tree_blocker(model_tree_);
+                    require_edit("cdpYoungsModulusMpa")->setText("29791.5");
+                    require_edit("cdpPoissonsRatio")->setText("0.2");
+                    require_edit("cdpDilationAngle")->setText("36");
+                    require_edit("cdpEccentricity")->setText("0.1");
+                    require_edit("cdpBiaxialRatio")->setText("1.16");
+                    require_edit("cdpTensileMeridianRatio")->setText("0.667");
+                    require_edit("cdpViscosity")->setText("5e-4");
+                    require_edit("cdpTensionRecovery")->setText("0");
+                    require_edit("cdpCompressionRecovery")->setText("1");
+                    require_edit("cdpMaximumSubsteps")->setText("256");
+                    require_edit("cdpCompressionHardeningFile")
+                        ->setText(fixture_dir + "/compression_hardening.csv");
+                    require_edit("cdpCompressionDamageFile")
+                        ->setText(fixture_dir + "/compression_damage.csv");
+                    require_edit("cdpTensionStiffeningFile")
+                        ->setText(fixture_dir + "/tension_stiffening.csv");
+                    require_edit("cdpTensionDamageFile")
+                        ->setText(fixture_dir + "/tension_damage.csv");
+                  }
+                  // 重建表单：params 中的 SI 存储值必须按 MPa 回显。
+                  property_editor_->set_item(item);
+                  if (require_edit("cdpYoungsModulusMpa")->text() !=
+                      "29791.5") {
+                    throw std::runtime_error(
+                        "W-03a CDP MPa display round-trip contract failed");
+                  }
+                  const QVariantMap params =
+                      item->data(0, PropertyEditor::kParamsRole).toMap();
+                  bool e_ok = false;
+                  const double e_si = params.value("youngs_modulus")
+                                          .toString()
+                                          .toDouble(&e_ok);
+                  if (!e_ok || qAbs(e_si - 2.97915e10) > 1.0 ||
+                      params.value("unit_factor_stress")
+                              .toString()
+                              .toDouble() != 1e6) {
+                    throw std::runtime_error(
+                        "W-03a CDP unit conversion contract failed (params "
+                        "must store SI Pa)");
+                  }
+                  // CSV 来源通道：basename -> 绝对路径必须齐全。
+                  const auto sources = collect_material_file_sources();
+                  for (const auto& csv : csv_names) {
+                    if (sources.value(csv) != fixture_dir + "/" + csv) {
+                      throw std::runtime_error(
+                          "W-03a CDP file_sources channel contract failed");
+                    }
+                  }
+                  sync_model_to_input();
+                  const QString input = moose_panel_->input_text();
+                  if (!input.contains(
+                          "type = ComputeIsotropicElasticityTensor") ||
+                      !input.contains(
+                          "type = ComputeMultipleInelasticStress") ||
+                      !input.contains("type = AbaqusCDPStressUpdate") ||
+                      !input.contains(
+                          "inelastic_models = tour_cdp_cdp_stress_update") ||
+                      !input.contains("youngs_modulus = 29791500000") ||
+                      !input.contains("compression_hardening_file = "
+                                      "compression_hardening.csv") ||
+                      !input.contains(
+                          "tension_damage_file = tension_damage.csv")) {
+                    throw std::runtime_error(
+                        "W-03a CDP three-object generation contract failed");
+                  }
+                  if (input.contains(fixture_dir)) {
+                    throw std::runtime_error(
+                        "W-03a CDP generation leaked an absolute CSV path");
+                  }
+                  // 还原：移除节点与表单选择，编辑器生成文本留给后续步骤
+                  // （无下游断言依赖其内容）。
+                  property_editor_->set_item(nullptr);
+                  delete root->takeChild(root->indexOfChild(item));
+                  refresh_module_pages();
+                },
+                this});
+  steps.append({"exodus_import_contract",
+                [this, resolve_tour_fixture]() {
+                  // W-02b：.e 显式导入合同（决策 6 例外路径）。程序化直调
+                  // 入口函数（巡览环境无文件对话框；GUI 入口经
+                  // GMP_TOUR_EXODUS_IMPORT 覆盖路径同达此函数）。
+                  auto* root = find_root_item("Mesh");
+                  if (!root || !viewer_ || !moose_panel_ ||
+                      !property_editor_) {
+                    throw std::runtime_error(
+                        "W-02b exodus import fixture is missing");
+                  }
+                  const QString mesh = resolve_tour_fixture(
+                      "cdp-v01/uniaxial_compression_mesh.e");
+                  if (mesh.isEmpty()) {
+                    throw std::runtime_error(
+                        "W-02b exodus fixture is missing");
+                  }
+                  const QString saved_mesh_path = moose_panel_->moose_settings()
+                                                    .value("mesh_path")
+                                                    .toString();
+                  const QStringList saved_boundaries =
+                      property_editor_->boundary_groups();
+                  if (!import_exodus_mesh(mesh)) {
+                    throw std::runtime_error(
+                        "W-02b exodus import entry returned false");
+                  }
+                  auto* item = find_child_by_param(root, "path", mesh);
+                  const QVariantMap params =
+                      item ? item->data(0, PropertyEditor::kParamsRole).toMap()
+                           : QVariantMap();
+                  if (!item ||
+                      params.value("role").toString() != "input_mesh" ||
+                      params.value("source").toString() != "exodus_import" ||
+                      item->data(0, PropertyEditor::kStatusRole).toString() !=
+                          "Generated") {
+                    throw std::runtime_error(
+                        "W-02b Mesh node registration contract failed");
+                  }
+                  if (viewer_->current_file() != mesh) {
+                    throw std::runtime_error(
+                        "W-02b stage did not load the imported exodus mesh");
+                  }
+#ifdef GMP_ENABLE_VTK_VIEWER
+                  const QStringList names =
+                      params.value("boundary_names")
+                          .toString()
+                          .split(QRegularExpression("\\s+"),
+                                 Qt::SkipEmptyParts);
+                  if (!names.contains("top") || !names.contains("bottom") ||
+                      !property_editor_->boundary_groups().contains("top") ||
+                      !property_editor_->boundary_groups().contains(
+                          "bottom")) {
+                    throw std::runtime_error(
+                        "W-02b boundary name extraction contract failed");
+                  }
+#endif
+                  // 还原：移除节点、恢复网格路径与组清单，避免污染后续步骤。
+                  delete root->takeChild(root->indexOfChild(item));
+                  if (!saved_mesh_path.isEmpty()) {
+                    moose_panel_->set_mesh_path(saved_mesh_path);
+                  }
+                  property_editor_->set_boundary_groups(saved_boundaries);
+                  moose_panel_->set_boundary_groups(saved_boundaries);
+                  refresh_module_pages();
+                },
+                mesh_work_window_});
   steps.append({"operation_log_smoke",
                 [this]() {
                   // 操作日志链路：埋点写入后文件必须存在且包含对应条目。

@@ -20,8 +20,10 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QDialog>
+#include <QFileDialog>
 #include <QPlainTextEdit>
 #include <QFont>
+#include <QSignalBlocker>
 #include <QTimer>
 
 #include "gmp/ComboPopupFix.h"
@@ -254,6 +256,17 @@ void PropertyEditor::set_volume_groups(const QStringList& names) {
   const QString kind =
       current_item_ ? current_item_->data(0, kKindRole).toString() : QString();
   update_group_widget_for_kind(kind);
+}
+
+void PropertyEditor::set_display_unit_factors(
+    const QMap<QString, double>& factors) {
+  display_unit_factors_ = factors;
+}
+
+double PropertyEditor::display_unit_factor(const QString& quantity,
+                                           double fallback) const {
+  const double factor = display_unit_factors_.value(quantity, 0.0);
+  return factor > 0.0 ? factor : fallback;
 }
 
 void PropertyEditor::refresh_form_options() {
@@ -512,8 +525,17 @@ void PropertyEditor::on_param_changed(int row, int column) {
       const QString key = key_item->text().trimmed();
       if (form_widgets_.contains(key)) {
         form_updating_ = true;
-        const QString value = val_item->text();
+        QString value = val_item->text();
         if (auto* edit = qobject_cast<QLineEdit*>(form_widgets_[key])) {
+          if (edit->objectName() == "cdpYoungsModulusMpa") {
+            // 高级表写回的是 SI 存储值（Pa），显示字段需要换回 MPa。
+            bool stored_ok = false;
+            const double stored = value.trimmed().toDouble(&stored_ok);
+            if (stored_ok) {
+              value = QString::number(
+                  stored / display_unit_factor("pressure", 1e6), 'g', 17);
+            }
+          }
           edit->setText(value);
         } else if (auto* combo = qobject_cast<QComboBox*>(form_widgets_[key])) {
           const int idx = combo->findText(value);
@@ -522,6 +544,11 @@ void PropertyEditor::on_param_changed(int row, int column) {
           } else if (!value.isEmpty()) {
             combo->addItem(value);
             combo->setCurrentText(value);
+          }
+        } else if (form_widgets_[key]) {
+          if (auto* edit =
+                  form_widgets_[key]->findChild<QLineEdit*>()) {
+            edit->setText(value);
           }
         }
         form_updating_ = false;
@@ -845,6 +872,23 @@ QStringList PropertyEditor::validate_params(const QString& kind,
     } else if (type == "ComputeThermalExpansionEigenstrain") {
       require_key("thermal_expansion_coeff");
       require_key("temperature");
+    } else if (type == "AbaqusCDP") {
+      // W-03a：CDP 三件套表单合同（v01 验收基线）。youngs_modulus 在
+      // params 中为 SI 求解值（Pa），表单以 MPa 显示。
+      require_key("youngs_modulus");
+      require_key("poissons_ratio");
+      require_key("dilation_angle");
+      require_key("eccentricity");
+      require_key("biaxial_to_uniaxial_compression_ratio");
+      require_key("tensile_meridian_ratio");
+      require_key("viscosity");
+      require_key("tension_recovery");
+      require_key("compression_recovery");
+      require_key("maximum_substeps");
+      require_key("compression_hardening_file");
+      require_key("compression_damage_file");
+      require_key("tension_stiffening_file");
+      require_key("tension_damage_file");
     }
   } else if (kind == "Sections") {
     require_key("type");
@@ -956,6 +1000,26 @@ QVariantMap PropertyEditor::build_type_template(const QString& kind,
       t.insert("temperature", "T");
       t.insert("stress_free_temperature", "300");
       t.insert("eigenstrain_name", "eigenstrain");
+    } else if (type == "AbaqusCDP") {
+      // W-03a：v01 验收基线默认值（params 存 SI 求解值，E 为 Pa；
+      // unit_factor_stress 记录表单显示→存储换算比例，MPa→Pa = 1e6）。
+      t.insert("youngs_modulus", "29791500000");
+      t.insert("poissons_ratio", "0.2");
+      t.insert("dilation_angle", "36");
+      t.insert("eccentricity", "0.1");
+      t.insert("biaxial_to_uniaxial_compression_ratio", "1.16");
+      t.insert("tensile_meridian_ratio", "0.667");
+      t.insert("viscosity", "5e-4");
+      t.insert("tension_recovery", "0");
+      t.insert("compression_recovery", "1");
+      t.insert("maximum_substeps", "256");
+      t.insert("maximum_strain_increment", "2.5e-5");
+      t.insert("enable_performance_diagnostics", "true");
+      t.insert("unit_factor_stress", "1000000");
+      t.insert("compression_hardening_file", "");
+      t.insert("compression_damage_file", "");
+      t.insert("tension_stiffening_file", "");
+      t.insert("tension_damage_file", "");
     }
   } else if (kind == "Sections") {
     t.insert("type", type.isEmpty() ? "SolidSection" : type);
@@ -1209,14 +1273,48 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
   template_presets_.clear();
   template_descriptions_.clear();
 
-  auto add_line = [this](const QString& label, const QString& key) {
+  auto add_line = [this](const QString& label, const QString& key,
+                         const QString& object_name = QString()) {
     auto* edit = new QLineEdit(form_box_);
+    if (!object_name.isEmpty()) {
+      edit->setObjectName(object_name);
+    }
     form_layout_->addRow(label, edit);
     form_widgets_.insert(key, edit);
     connect(edit, &QLineEdit::textChanged, this,
             [this, key](const QString& value) {
               set_param_value(key, value);
             });
+  };
+
+  // W-03a：文件选择行（编辑框 + Browse 按钮），params 存绝对路径；
+  // 生成 .i 时由 MainWindow 归一化为 basename 相对引用。
+  auto add_file_row = [this](const QString& label, const QString& key,
+                             const QString& object_name) {
+    auto* row = new QWidget(form_box_);
+    auto* row_layout = new QHBoxLayout(row);
+    row_layout->setContentsMargins(0, 0, 0, 0);
+    row_layout->setSpacing(6);
+    auto* edit = new QLineEdit(row);
+    edit->setObjectName(object_name);
+    auto* browse = new QPushButton("Browse...", row);
+    browse->setObjectName(object_name + "Browse");
+    row_layout->addWidget(edit, 1);
+    row_layout->addWidget(browse);
+    form_layout_->addRow(label, row);
+    form_widgets_.insert(key, row);
+    connect(edit, &QLineEdit::textChanged, this,
+            [this, key](const QString& value) {
+              set_param_value(key, value);
+            });
+    connect(browse, &QPushButton::clicked, this, [this, edit]() {
+      const QString path = QFileDialog::getOpenFileName(
+          this, "Select CSV file", edit->text(),
+          "CSV Files (*.csv);;All Files (*)");
+      if (!path.isEmpty()) {
+        edit->setText(path);
+      }
+    });
   };
 
   auto add_combo = [this](const QString& label, const QString& key,
@@ -1238,7 +1336,7 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
               {"GenericConstantMaterial", "ParsedMaterial",
                "ComputeElasticityTensor", "ComputeSmallStrain",
                "ComputeLinearElasticStress",
-               "ComputeThermalExpansionEigenstrain"});
+               "ComputeThermalExpansionEigenstrain", "AbaqusCDP"});
     add_line("Prop Names", "prop_names");
     add_line("Prop Values", "prop_values");
     add_line("Expression", "expression");
@@ -1251,6 +1349,54 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     add_line("stress_free_temperature", "stress_free_temperature");
     add_line("eigenstrain_name", "eigenstrain_name");
     add_line("displacements", "displacements");
+    // ---- W-03a：AbaqusCDP 专用快捷字段（v01 三件套）----
+    // E 在表单按 MPa 显示、params 存 SI（Pa）；其余标量原样存储。
+    {
+      auto* young = new QLineEdit(form_box_);
+      young->setObjectName("cdpYoungsModulusMpa");
+      young->setToolTip(
+          "Displayed in MPa; stored as SI (Pa) in node parameters.");
+      form_layout_->addRow("Young's Modulus (MPa)", young);
+      form_widgets_.insert("youngs_modulus", young);
+      connect(young, &QLineEdit::textChanged, this,
+              [this](const QString& value) {
+                if (form_updating_) {
+                  return;
+                }
+                const double factor = display_unit_factor("pressure", 1e6);
+                bool ok = false;
+                const double display = value.trimmed().toDouble(&ok);
+                if (!value.trimmed().isEmpty() && ok) {
+                  set_param_value("youngs_modulus",
+                                  QString::number(display * factor, 'g', 17));
+                } else {
+                  // 非数值输入原样写入，由校验如实提示。
+                  set_param_value("youngs_modulus", value);
+                }
+                set_param_value("unit_factor_stress",
+                                QString::number(factor, 'g', 17));
+              });
+    }
+    add_line("Poisson's Ratio", "poissons_ratio", "cdpPoissonsRatio");
+    add_line("Dilation Angle (deg)", "dilation_angle", "cdpDilationAngle");
+    add_line("Eccentricity", "eccentricity", "cdpEccentricity");
+    add_line("fb0/fc0 Ratio", "biaxial_to_uniaxial_compression_ratio",
+             "cdpBiaxialRatio");
+    add_line("Tensile Meridian Ratio", "tensile_meridian_ratio",
+             "cdpTensileMeridianRatio");
+    add_line("Viscosity", "viscosity", "cdpViscosity");
+    add_line("Tension Recovery", "tension_recovery", "cdpTensionRecovery");
+    add_line("Compression Recovery", "compression_recovery",
+             "cdpCompressionRecovery");
+    add_line("Max Substeps", "maximum_substeps", "cdpMaximumSubsteps");
+    add_file_row("Compression Hardening CSV", "compression_hardening_file",
+                 "cdpCompressionHardeningFile");
+    add_file_row("Compression Damage CSV", "compression_damage_file",
+                 "cdpCompressionDamageFile");
+    add_file_row("Tension Stiffening CSV", "tension_stiffening_file",
+                 "cdpTensionStiffeningFile");
+    add_file_row("Tension Damage CSV", "tension_damage_file",
+                 "cdpTensionDamageFile");
   } else if (kind == "Sections") {
     add_combo("Type", "type", {"SolidSection"});
     add_combo("Material", "material", materials);
@@ -1328,6 +1474,27 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     template_descriptions_.insert(
         "Thermal Expansion",
         "Thermal expansion eigenstrain with reference temperature 300.");
+    template_presets_.insert(
+        "CDP Concrete (Abaqus)",
+        {{"type", "AbaqusCDP"},
+         {"youngs_modulus", "29791500000"},
+         {"poissons_ratio", "0.2"},
+         {"dilation_angle", "36"},
+         {"eccentricity", "0.1"},
+         {"biaxial_to_uniaxial_compression_ratio", "1.16"},
+         {"tensile_meridian_ratio", "0.667"},
+         {"viscosity", "5e-4"},
+         {"tension_recovery", "0"},
+         {"compression_recovery", "1"},
+         {"maximum_substeps", "256"},
+         {"maximum_strain_increment", "2.5e-5"},
+         {"enable_performance_diagnostics", "true"},
+         {"unit_factor_stress", "1000000"}});
+    template_descriptions_.insert(
+        "CDP Concrete (Abaqus)",
+        "Abaqus CDP concrete: generates ComputeIsotropicElasticityTensor + "
+        "ComputeMultipleInelasticStress + AbaqusCDPStressUpdate; E is "
+        "entered in MPa and stored as SI (Pa); pick the 4 CSV curves.");
   } else if (kind == "BC") {
     template_presets_.insert(
         "Fixed (Dirichlet 0)",
@@ -1470,7 +1637,33 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
       set_row_visible("stress_free_temperature", false);
       set_row_visible("eigenstrain_name", false);
       set_row_visible("displacements", false);
-      if (type == "GenericConstantMaterial") {
+      // W-03a：CDP 快捷字段仅对 type=AbaqusCDP 显示。
+      const QStringList cdp_keys = {
+          "youngs_modulus",
+          "poissons_ratio",
+          "dilation_angle",
+          "eccentricity",
+          "biaxial_to_uniaxial_compression_ratio",
+          "tensile_meridian_ratio",
+          "viscosity",
+          "tension_recovery",
+          "compression_recovery",
+          "maximum_substeps",
+          "compression_hardening_file",
+          "compression_damage_file",
+          "tension_stiffening_file",
+          "tension_damage_file"};
+      const bool is_cdp = (type == "AbaqusCDP");
+      for (const auto& cdp_key : cdp_keys) {
+        set_row_visible(cdp_key, is_cdp);
+      }
+      if (is_cdp) {
+        set_row_visible("prop_names", false);
+        set_row_visible("prop_values", false);
+        set_row_visible("expression", false);
+        set_row_visible("property_name", false);
+        set_row_visible("coupled_variables", false);
+      } else if (type == "GenericConstantMaterial") {
         set_row_visible("expression", false);
         set_row_visible("property_name", false);
         set_row_visible("coupled_variables", false);
@@ -1531,7 +1724,24 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
   form_updating_ = true;
   for (auto it = form_widgets_.begin(); it != form_widgets_.end(); ++it) {
     const QString key = it.key();
-    const QString value = params.value(key).toString();
+    QString value = params.value(key).toString();
+    if (key == "youngs_modulus" && kind == "Materials" &&
+        params.value("type").toString() == "AbaqusCDP") {
+      // 存储值（SI，Pa）→ 表单显示值（MPa）；换算比例优先取 params 记录的
+      // unit_factor_stress，缺省回落到当前档案单位合同/1e6。
+      bool stored_ok = false;
+      const double stored = value.trimmed().toDouble(&stored_ok);
+      if (stored_ok) {
+        bool factor_ok = false;
+        double factor = params.value("unit_factor_stress")
+                            .toString()
+                            .toDouble(&factor_ok);
+        if (!factor_ok || factor <= 0.0) {
+          factor = display_unit_factor("pressure", 1e6);
+        }
+        value = QString::number(stored / factor, 'g', 17);
+      }
+    }
     if (auto* edit = qobject_cast<QLineEdit*>(it.value())) {
       edit->setText(value);
     } else if (auto* combo = qobject_cast<QComboBox*>(it.value())) {
@@ -1543,6 +1753,11 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
         combo->setCurrentText(value);
       } else {
         combo->setCurrentIndex(0);
+      }
+    } else if (it.value()) {
+      // 文件选择行：容器内第一个 QLineEdit 承载参数值。
+      if (auto* edit = it.value()->findChild<QLineEdit*>()) {
+        edit->setText(value);
       }
     }
   }

@@ -113,6 +113,10 @@ class VtkViewer : public QWidget {
   void refresh_sketch();
   void set_exodus_file(const QString& path);
   void set_exodus_history(const QStringList& paths);
+  // W-02b：轻量读取 Exodus 文件的可作为 MOOSE boundary 的集合名
+  // （side set 为主；本类网格常以 node set 表达边界，故一并收录 node set）。
+  // 读取失败返回空清单，不抛异常、不影响舞台当前状态。
+  QStringList read_exodus_side_set_names(const QString& path) const;
   // 清空当前 3D 网格/结果管线与所有附属 actor；草图会话不受影响。
   void clear_stage_data();
   QString current_file() const { return current_file_; }

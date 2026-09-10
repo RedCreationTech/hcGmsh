@@ -3,10 +3,13 @@
 #include <QMainWindow>
 #include <QHash>
 #include <QList>
+#include <QMap>
 #include <QPair>
 #include <QStringList>
 #include <QVariantMap>
 
+#include "gmp/ApplicationProfile.h"
+#include "gmp/MooseMappingRegistry.h"
 #include "gmp/PhysicalGroupManifest.h"
 
 class QPlainTextEdit;
@@ -160,6 +163,22 @@ class MainWindow : public QMainWindow {
                                 const QString& block_name,
                                 const QString& default_type,
                                 const QStringList& skip_keys) const;
+  // W-03a：Materials 生成。type=AbaqusCDP 子项生成 v01 式三对象
+  // （elasticity/stress/cdp_stress_update），其余子项按原通用路径生成。
+  QString build_materials_block(QTreeWidgetItem* root) const;
+  // W-03a：收集 Materials 子项 params 中的 *_file 绝对引用，返回
+  // basename -> 绝对路径，作为快照 v2 file_sources 的显式来源表。
+  QMap<QString, QString> collect_material_file_sources() const;
+  // 决策 7：unit_contract 的 display_to_solver_factors（缺省为空，
+  // 表单/生成按各自回退因子处理）。
+  QMap<QString, double> display_unit_factors() const;
+  // W-02b：显式导入 Exodus 网格为输入网格（决策 6 例外路径）：
+  // 登记 Mesh 节点（role=input_mesh）→ 载入舞台 → 提取 boundary 名
+  // 写入节点 params 并喂给组 chips 通道。返回 false = 未导入。
+  bool import_exodus_mesh(const QString& path);
+  // 菜单/快捷按钮入口：文件对话框选 .e/.exo 后调用 import_exodus_mesh；
+  // 巡览可用 GMP_TOUR_EXODUS_IMPORT 环境变量覆盖路径（绕过对话框）。
+  void on_import_exodus_mesh();
   QString build_variables_block(QTreeWidgetItem* root) const;
   QString build_executioner_block(QTreeWidgetItem* root) const;
   void sync_model_to_input();
@@ -171,6 +190,16 @@ class MainWindow : public QMainWindow {
                                const QString& empty_text) const;
   void refresh_module_pages();
   void refresh_work_context();
+  // W-00a：活动应用档案。注册表加载、上下文条选择器刷新、档案应用与显示。
+  void init_app_profile_support();
+  void refresh_app_profile_selector();
+  void set_active_app_profile(const QString& profile_id, bool mark_dirty);
+  void update_app_profile_display();
+  // W-00d：按活动档案声明加载 mapping 注册表；失败仅状态栏报错，不崩溃。
+  void reload_mapping_registry();
+  // W-00c：把活动档案/单位合同/PG 清单/项目路径注入 MoosePanel，
+  // 供快照 v2 导出与远程提交使用。上下文任一变化后调用。
+  void push_context_to_moose_panel();
   // Module Workspace 复用内容容器，但不同内容使用独立尺寸/位置配置。
   // Sketch Editor 使用紧凑 profile，不继承 Part/Material 等通用大窗尺寸。
   void apply_module_workspace_profile(bool sketch_editor);
@@ -193,6 +222,8 @@ class MainWindow : public QMainWindow {
   QComboBox* module_selector_ = nullptr;
   QLabel* context_project_label_ = nullptr;
   QComboBox* context_object_selector_ = nullptr;
+  QComboBox* app_profile_selector_ = nullptr;
+  QLabel* app_profile_status_label_ = nullptr;
   QSplitter* main_split_ = nullptr;
   QSplitter* vertical_split_ = nullptr;
   QDockWidget* module_work_window_ = nullptr;
@@ -290,6 +321,7 @@ class MainWindow : public QMainWindow {
   QAction* action_screenshot_ = nullptr;
   QAction* action_mesh_ = nullptr;
   QAction* action_preview_mesh_ = nullptr;
+  QAction* action_import_exodus_ = nullptr;
   QAction* action_run_ = nullptr;
   QAction* action_check_ = nullptr;
   QAction* action_stop_ = nullptr;
@@ -326,6 +358,9 @@ class MainWindow : public QMainWindow {
   QVariantMap unit_contract_;
   PhysicalGroupManifest mesh_snapshot_;
   QStringList input_snapshots_;
+  // W-00a/W-00d：应用档案注册表与当前 mapping 注册表句柄（供 W-03/W-04 消费）。
+  ApplicationProfileRegistry app_profile_registry_;
+  MooseMappingRegistry mapping_registry_;
 };
 
 }  // namespace gmp

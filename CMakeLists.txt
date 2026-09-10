@@ -167,7 +167,7 @@ if(GMP_ENABLE_VTK_VIEWER)
   endif()
 endif()
 
-# Phase 0 自测程序：验证 ApplicationProfile、MooseMappingRegistry、PhysicalGroupManifest、Snapshot v2
+# Phase 0 自测程序：验证 ApplicationProfile、MooseMappingRegistry、PhysicalGroupManifest、Snapshot v2、提交清单
 add_executable(gmp_ise_phase0_test tests/test_phase0.cpp
   src/ApplicationProfile.cpp include/gmp/ApplicationProfile.h
   src/MooseMappingRegistry.cpp include/gmp/MooseMappingRegistry.h
@@ -175,6 +175,7 @@ add_executable(gmp_ise_phase0_test tests/test_phase0.cpp
   src/MooseTemplates.cpp include/gmp/MooseTemplates.h
   src/PhysicalGroupManifest.cpp include/gmp/PhysicalGroupManifest.h
   src/ProjectSchema.cpp include/gmp/ProjectSchema.h
+  src/SimClient.cpp include/gmp/SimClient.h
   src/SketchDocument.cpp include/gmp/SketchDocument.h
   src/Env.cpp include/gmp/Env.h
 )

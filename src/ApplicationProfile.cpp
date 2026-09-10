@@ -54,6 +54,10 @@ void ApplicationProfileRegistry::set_root(const QString& root_dir) {
   root_dir_ = QDir(root_dir).absolutePath();
 }
 
+QString ApplicationProfileRegistry::root_dir() const {
+  return root_dir_;
+}
+
 bool ApplicationProfileRegistry::reload() {
   profiles_.clear();
   last_error_.clear();
@@ -122,6 +126,7 @@ bool ApplicationProfileRegistry::reload() {
           physics.supported_blocks.append(bv.toString());
         }
       }
+      physics.extra = pobj.value("extra").toObject();
       profile.physics.append(physics);
     }
 

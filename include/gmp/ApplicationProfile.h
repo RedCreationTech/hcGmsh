@@ -45,6 +45,7 @@ class ApplicationProfileRegistry {
   explicit ApplicationProfileRegistry(const QString& root_dir);
 
   void set_root(const QString& root_dir);
+  QString root_dir() const;
   bool reload();
   bool is_loaded() const;
 

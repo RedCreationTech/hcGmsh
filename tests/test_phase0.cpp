@@ -12,6 +12,7 @@
 #include "gmp/MooseSnapshot.h"
 #include "gmp/PhysicalGroupManifest.h"
 #include "gmp/ProjectSchema.h"
+#include "gmp/SimClient.h"
 #include "gmp/SketchDocument.h"
 
 namespace {
@@ -387,6 +388,97 @@ void test_snapshot_v2(TestContext& test) {
               "Exodus input with explicit initial_state role is accepted");
 }
 
+void test_submission_manifest(TestContext& test) {
+  QJsonObject mesh_entry;
+  mesh_entry.insert("name", "mesh/case.msh");
+  mesh_entry.insert("sha256", QString(64, 'b'));
+  mesh_entry.insert("role", "input_mesh");
+  QJsonObject snap;
+  snap.insert("input_file", "case.i");
+  snap.insert("input_sha256", QString(64, 'a'));
+  snap.insert("mesh_files", QJsonArray{mesh_entry});
+  snap.insert("extra_files", QJsonArray{});
+
+  // v2 快照 manifest（含 application_profile）：solver 经 command 传达；
+  // 服务端按严格 schema 校验（additionalProperties=false），提交清单
+  // 只允许 7 个合同键，不得附带 solver_program/profile_* 等额外键。
+  QJsonObject profile;
+  profile.insert("profile_id", "DamSafetyApp-opt");
+  profile.insert("profile_version", "1.0.0");
+  profile.insert("mapping_version", "1.0.0");
+  profile.insert("solver_program", "DamSafetyApp-opt");
+  QJsonObject manifest;
+  manifest.insert("case_name", "demo");
+  manifest.insert("input_snapshot", snap);
+  manifest.insert("application_profile", profile);
+
+  QString error;
+  const QJsonObject sub = gmp::SimClient::build_submission_manifest(
+      manifest, "proj-1", "DamSafetyApp-opt", &error);
+  test.expect(!sub.isEmpty() && error.isEmpty(),
+              "submission manifest builds from a v2 snapshot");
+  test.expect(sub.value("command") == "DamSafetyApp-opt -i case.i",
+              "submission command uses the profile solver program");
+  const QStringList allowed_keys = {"project_id",  "case_name", "input_file",
+                                    "input_sha256", "mesh_files", "extra_files",
+                                    "command"};
+  bool only_allowed = sub.size() == allowed_keys.size();
+  for (auto it = sub.begin(); it != sub.end(); ++it) {
+    only_allowed = only_allowed && allowed_keys.contains(it.key());
+  }
+  test.expect(only_allowed,
+              "submission manifest contains only the 7 server contract keys");
+  // 文件条目同样裁剪为服务端合同允许的 {name, sha256}（快照里的 role
+  // 等溯源字段不进提交报文）。
+  const QJsonArray sub_mesh = sub.value("mesh_files").toArray();
+  bool mesh_entries_slim = sub_mesh.size() == 1;
+  for (const auto& value : sub_mesh) {
+    const QJsonObject entry = value.toObject();
+    mesh_entries_slim = mesh_entries_slim && entry.size() == 2 &&
+                        entry.contains("name") && entry.contains("sha256") &&
+                        !entry.contains("role");
+  }
+  test.expect(mesh_entries_slim,
+              "submission file entries are trimmed to name/sha256 only");
+
+  // v1 旧快照 manifest（无 application_profile）：仍可提交，
+  // command 用缺省 solver，键集合同样只有 7 个合同键。
+  QJsonObject legacy;
+  legacy.insert("case_name", "legacy");
+  legacy.insert("input_snapshot", snap);
+  error.clear();
+  const QJsonObject legacy_sub = gmp::SimClient::build_submission_manifest(
+      legacy, "proj-1", "DamSafetyApp-opt", &error);
+  test.expect(!legacy_sub.isEmpty() && error.isEmpty(),
+              "v1 snapshot manifest still builds a submission");
+  bool legacy_only_allowed = legacy_sub.size() == allowed_keys.size();
+  for (auto it = legacy_sub.begin(); it != legacy_sub.end(); ++it) {
+    legacy_only_allowed =
+        legacy_only_allowed && allowed_keys.contains(it.key());
+  }
+  test.expect(legacy_only_allowed &&
+                  legacy_sub.value("command") == "DamSafetyApp-opt -i case.i",
+              "v1 fallback submits with default solver in command only");
+
+  // 校验失败路径：非法 input_sha256 拒绝并给出可读错误。
+  QJsonObject bad_snap = snap;
+  bad_snap.insert("input_sha256", "not-a-sha");
+  QJsonObject bad;
+  bad.insert("input_snapshot", bad_snap);
+  error.clear();
+  const QJsonObject rejected = gmp::SimClient::build_submission_manifest(
+      bad, "proj-1", "DamSafetyApp-opt", &error);
+  test.expect(rejected.isEmpty() && !error.isEmpty(),
+              "invalid input sha256 is rejected with a readable error");
+
+  // solver 白名单：不允许路径分量。
+  error.clear();
+  const QJsonObject bad_solver = gmp::SimClient::build_submission_manifest(
+      manifest, "proj-1", "../evil/solver", &error);
+  test.expect(bad_solver.isEmpty() && !error.isEmpty(),
+              "solver program with path components is rejected");
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -397,6 +489,7 @@ int main(int argc, char* argv[]) {
   test_profiles_and_mapping(test);
   test_physical_groups(test);
   test_snapshot_v2(test);
+  test_submission_manifest(test);
   if (test.failures == 0) {
     qInfo("Phase 0 contract tests PASSED");
   } else {

@@ -1,5 +1,6 @@
 #include "gmp/SimClient.h"
 
+#include <QDebug>
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
@@ -86,8 +87,26 @@ QJsonObject SimClient::build_submission_manifest(
   sub.insert("case_name", case_name);
   sub.insert("input_file", input_file);
   sub.insert("input_sha256", input_sha);
-  sub.insert("mesh_files", snap.value("mesh_files").toArray());
-  sub.insert("extra_files", snap.value("extra_files").toArray());
+  // 服务端对文件条目同样严格校验：v2 快照条目带 role 等溯源字段，
+  // 提交时裁剪为服务端合同允许的 {name, sha256}（role 留在快照
+  // manifest.json 中，不进提交报文）。
+  const auto sanitize_files = [](const QJsonValue& files) {
+    QJsonArray out;
+    for (const auto& value : files.toArray()) {
+      const QJsonObject entry = value.toObject();
+      QJsonObject slim;
+      slim.insert("name", entry.value("name").toString());
+      slim.insert("sha256", entry.value("sha256").toString());
+      out.append(slim);
+    }
+    return out;
+  };
+  sub.insert("mesh_files", sanitize_files(snap.value("mesh_files")));
+  sub.insert("extra_files", sanitize_files(snap.value("extra_files")));
+  // solver 程序名经 command 字段传达（W-00c 起从活动档案读取）。
+  // 服务端按严格 schema 校验提交清单（additionalProperties=false），
+  // 不得附加 solver_program/profile_* 等额外键——档案溯源信息保留在
+  // 快照自带的 manifest.json 中，提交清单只放服务端合同允许的 7 个键。
   sub.insert("command", solver_program + " -i " + input_file);
   return sub;
 }
@@ -127,9 +146,23 @@ void SimClient::submit_snapshot(const QString& snapshot_dir,
                          "快照 manifest 不是合法 JSON: " + manifest_path);
     return;
   }
+  // W-00c：solver 程序名优先读快照 manifest 的 application_profile
+  // （v2 合同）；v1 旧快照缺该字段时回落到缺省 profile 并打日志说明。
+  QString solver_program = doc.object()
+                               .value(QStringLiteral("application_profile"))
+                               .toObject()
+                               .value(QStringLiteral("solver_program"))
+                               .toString()
+                               .trimmed();
+  if (solver_program.isEmpty()) {
+    solver_program = QStringLiteral("DamSafetyApp-opt");
+    qWarning() << "SimClient: snapshot manifest has no"
+                  " application_profile.solver_program; falling back to"
+                  " default solver" << solver_program;
+  }
   QString error;
-  const QJsonObject sub = build_submission_manifest(
-      doc.object(), project_id, QStringLiteral("DamSafetyApp-opt"), &error);
+  const QJsonObject sub = build_submission_manifest(doc.object(), project_id,
+                                                    solver_program, &error);
   if (sub.isEmpty()) {
     emit submit_finished(false, doc.object(), error);
     return;

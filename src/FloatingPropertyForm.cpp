@@ -131,6 +131,13 @@ QString FloatingPropertyForm::settings_key() const {
   return QString("ui/property_form/v2/%1/size").arg(kind);
 }
 
+void FloatingPropertyForm::set_display_unit_factors(
+    const QMap<QString, double>& factors) {
+  if (editor_) {
+    editor_->set_display_unit_factors(factors);
+  }
+}
+
 void FloatingPropertyForm::place_over_stage(QWidget* stage) {
   if (!stage) {
     return;

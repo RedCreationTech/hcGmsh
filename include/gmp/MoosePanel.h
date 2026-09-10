@@ -11,6 +11,7 @@
 #include "gmp/Runner.h"
 #include "gmp/RunnerFactory.h"
 #include "gmp/MooseTemplates.h"
+#include "gmp/PhysicalGroupManifest.h"
 
 #include <QJsonObject>
 
@@ -25,6 +26,7 @@ class QSpinBox;
 namespace gmp {
 
 class SimClient;
+struct ApplicationProfile;
 
 class MoosePanel : public QWidget {
   Q_OBJECT
@@ -80,6 +82,25 @@ class MoosePanel : public QWidget {
   void download_remote_file(const QString& job_id, const QString& file_path,
                             const QString& dest_path);
 
+  // ---- W-00c：快照合同 v2 上下文注入（由 MainWindow 接线）----
+  // 活动应用档案（项目 YAML application_profile 的 QVariantMap 形态；
+  // 兼容原始 profile JSON 的嵌套 mapping_registry 结构）。
+  void set_application_profile(const QVariantMap& profile);
+  // 单位合同（项目 YAML unit_contract；读取其中 display_to_solver_factors）。
+  void set_unit_contract(const QVariantMap& unit_contract);
+  // Physical Groups 清单（W-00b 生产者填充 mesh_snapshot_ 后注入）。
+  void set_physical_group_manifest(const PhysicalGroupManifest& manifest);
+  // 项目文件路径（traceability.project_path/project_version 来源）。
+  void set_project_context(const QString& project_path);
+  // 快照 input_mode：structured | expert | manual；非法值拒绝并保留原值。
+  void set_input_mode(const QString& input_mode);
+  // W-03a：材料 CSV 等显式文件来源表（basename -> 绝对路径，MainWindow 收集
+  // Materials 节点 params 中的 *_file 引用后注入）。快照导出时并入
+  // SnapshotExportConfig.file_sources，让相对引用按显式来源表解析打包。
+  void set_extra_file_sources(const QMap<QString, QString>& sources);
+  // 当前输入编辑器文本（巡览/装配断言用）。
+  QString input_text() const;
+
  private slots:
   void on_pick_exec();
   void on_pick_input();
@@ -127,6 +148,14 @@ class MoosePanel : public QWidget {
                        const QString& block_text) const;
   QString resolve_exodus_path(const QString& token) const;
   void maybe_emit_exodus(const QString& path);
+  // W-00c：由注入的 application_profile_map_ 组装档案；单位合同缺省时回落
+  // unit_contract_map_ 的标量键。
+  ApplicationProfile snapshot_profile() const;
+  // W-00c：把 .i 中的绝对文件引用归一化为快照相对名（返回空串=成功；
+  // file_sources 记录 相对名->来源绝对路径，file_roles 记录显式 .e 角色）。
+  QString normalize_snapshot_refs(QString* input_text,
+                                  QMap<QString, QString>* file_sources,
+                                  QMap<QString, QString>* file_roles) const;
   void load_settings();
   void save_settings() const;
   void update_exec_history(const QString& path);
@@ -162,6 +191,14 @@ class MoosePanel : public QWidget {
   SimClient* sim_client_ = nullptr;
   QString last_snapshot_dir_;
   QString last_job_id_;
+  // W-00c：快照 v2 导出上下文（缺省为空 => 导出被拒绝并给出可读原因）。
+  QVariantMap application_profile_map_;
+  QVariantMap unit_contract_map_;
+  PhysicalGroupManifest physical_group_manifest_;
+  QString project_path_;
+  QString input_mode_ = QStringLiteral("structured");
+  // W-03a：显式文件来源表（材料 CSV 等），见 set_extra_file_sources。
+  QMap<QString, QString> extra_file_sources_;
   // 监控请求归属：日志/下载请求对应的 job_id（响应异步返回时回填）。
   QString log_job_id_;
   QString download_job_id_;

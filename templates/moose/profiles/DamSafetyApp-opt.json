@@ -16,6 +16,23 @@
         "BCs", "Functions", "Constraints", "Contact", "Executioner",
         "Preconditioning", "Postprocessors", "VectorPostprocessors", "Outputs"
       ]
+    },
+    {
+      "id": "concrete_damage_plasticity",
+      "display_name": "混凝土损伤塑性（CDP）",
+      "dimensions": [3],
+      "supported_blocks": [
+        "Mesh", "GlobalParams", "Variables", "Kernels", "Materials",
+        "BCs", "Functions", "Executioner", "Preconditioning",
+        "Postprocessors", "Outputs",
+        "Physics/SolidMechanics/QuasiStatic",
+        "Materials/AbaqusCDPStressUpdate"
+      ],
+      "extra": {
+        "physics_action": "Physics/SolidMechanics/QuasiStatic",
+        "stress_update_materials": ["AbaqusCDPStressUpdate"],
+        "aux_property_naming": "cdp_*"
+      }
     }
   ],
   "mapping_registry": {
