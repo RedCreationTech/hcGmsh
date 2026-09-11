@@ -34,6 +34,10 @@ class GmshPanel : public QWidget {
   void select_physical_group(int dim, int tag);
   void apply_entity_pick(int dim, int tag);
   bool import_geometry(const QString& path, bool auto_mesh);
+  // 外部通道（部件特征/装配等）把几何导入 Gmsh 模型后调用：
+  // 同步面板状态（视为已加载、取消示例盒、刷新实体/物理组列表），
+  // 否则“生成网格”会按空模型处理——清空模型改画示例盒。
+  void note_external_model_loaded(const QString& label);
   // 最近一次几何导入的失败原因；成功或尚未导入时为空。
   QString last_import_error() const { return last_import_error_; }
 
@@ -91,6 +95,11 @@ class GmshPanel : public QWidget {
                                const QString& current_text);
   std::vector<int> resolve_entity_tags(int dim_filter,
                                        const QString& text) const;
+  // W-02a：PG 创建/更新前置校验（名称非空、同维度唯一、实体非空、维度一致）。
+  // exclude_tag 用于 Update 时豁免组自身（允许名称不变）；校验失败填充
+  // error（按当前语言中/英），调用方不得再触碰 gmsh 状态。
+  bool validate_physical_group_input(int dim, int exclude_tag,
+                                     QString* error) const;
   void populate_transform_entity_templates(int dim_filter);
   void populate_boolean_entity_templates(int dim_filter);
   void refresh_occ_entity_template_lists();
@@ -112,6 +121,9 @@ class GmshPanel : public QWidget {
   void append_log(const QString& text);
   void set_mesh_generation_running(bool running);
   QString last_import_error_;
+  // 部件/装配通道交给网格面板的模型身份。文件预览和生成结果回读都会
+  // 临时切换 Gmsh current model，正式生成前后必须按名称恢复。
+  QString external_model_name_;
 
   QLineEdit* geo_path_ = nullptr;
   QLabel* entity_summary_ = nullptr;
@@ -195,7 +207,7 @@ class GmshPanel : public QWidget {
 
   QComboBox* algo2d_ = nullptr;
   QComboBox* algo3d_ = nullptr;
-  QCheckBox* recombine_ = nullptr;
+  QComboBox* mesh_topology_mode_ = nullptr;
   QSpinBox* smoothing_ = nullptr;
 
   QLineEdit* output_path_ = nullptr;

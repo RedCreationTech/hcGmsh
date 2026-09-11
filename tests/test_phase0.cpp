@@ -316,7 +316,7 @@ void test_snapshot_v2(TestContext& test) {
   cfg.physical_groups = valid_physical_groups(gmp::sha256_hex(mesh_data));
 
   const QString input_text =
-      "[Mesh]\n  type = FileMesh\n  file = 'mesh/case.msh'\n[]\n"
+      "[Mesh/file]\n  type = FileMeshGenerator\n  file = 'mesh/case.msh'\n[]\n"
       "[Materials]\n  data_file = 'extra/material.csv'\n[]\n";
   const QString dest = workspace.filePath("snapshot-v1");
   const auto result =

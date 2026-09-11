@@ -32,8 +32,14 @@ class PropertyEditor : public QWidget {
   // 满足 solver = display * factor；来自活动档案 unit_contract 的
   // display_to_solver_factors，缺省时 CDP 应力字段按 1e6（MPa→Pa）换算。
   void set_display_unit_factors(const QMap<QString, double>& factors);
+  // W-03b：Physics action 下拉候选（QuasiStatic 恒定；CDPQuasiStatic 仅当
+  // 活动档案 extra.physics_action 声明时由 MainWindow 注入）。
+  void set_physics_action_options(const QStringList& options);
   void refresh_form_options();
   bool validate_current(QStringList* issues = nullptr);
+  // 参数级校验（纯查询）：返回缺失/异常项列表，供表单与巡览合同复用。
+  QStringList validate_params(const QString& kind,
+                              const QVariantMap& params) const;
   const QStringList& boundary_groups() const { return boundary_groups_; }
   const QStringList& volume_groups() const { return volume_groups_; }
 
@@ -65,8 +71,6 @@ class PropertyEditor : public QWidget {
   void clear_form();
   void update_group_summary();
   void update_advanced_visibility();
-  QStringList validate_params(const QString& kind,
-                              const QVariantMap& params) const;
   void refresh_validation_summary();
   void select_validation_row(int row);
   QVariantMap build_type_template(const QString& kind,
@@ -128,6 +132,7 @@ class PropertyEditor : public QWidget {
   QStringList boundary_groups_;
   QStringList volume_groups_;
   QMap<QString, double> display_unit_factors_;
+  QStringList physics_action_options_ = {"QuasiStatic"};
 };
 
 }  // namespace gmp

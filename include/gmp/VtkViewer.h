@@ -123,8 +123,12 @@ class VtkViewer : public QWidget {
   bool has_stage_data() const { return !current_file_.isEmpty(); }
   bool stage_data_visible() const;
   int visible_mesh_entity_count(int dim) const;
+  int current_mesh_dimension() const;
   bool save_screenshot(const QString& path);
   void set_mesh_file(const QString& path);
+  // 网格由当前 Gmsh model 刚生成时直接取内存数据，避免为预览重新打开
+  // .msh 并扰动仍需继续编辑/剖分的 OCC model。
+  void set_mesh_file_from_current_model(const QString& path);
   void set_mesh_group_filter(int dim, int tag);
   void set_mesh_entity_filter(int dim, int tag);
   QVariantMap viewer_settings() const;
@@ -189,6 +193,7 @@ signals:
   void schedule_reload();
   void load_file(const QString& path);
   void update_nodes_visibility();
+  void set_mesh_file_impl(const QString& path, bool use_current_gmsh_model);
   void update_mesh_pipeline();
   void update_mesh_controls();
   void apply_mesh_visuals();

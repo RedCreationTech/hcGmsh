@@ -11,7 +11,7 @@ cmake --build build -j4
 # 单元测试
 ctest --test-dir build --output-on-failure
 
-# 全量真实点击 GUI 巡览（当前基线 89 步）
+# 全量真实点击 GUI 巡览（当前基线 95 步）
 mkdir -p /tmp/gmp-ui-tour
 GMP_TOUR_REAL_CLICKS=1 GMP_SCREENSHOT_DIR=/tmp/gmp-ui-tour ./build/gmp_ise
 
@@ -25,7 +25,7 @@ GMP_TOUR_REAL_CLICKS=1 GMP_TOUR_STEP_FILTER=<步骤名片段> \
 1. **日常修改**：每次代码修改后，只运行与本次修改直接相关的 1~2 个测试用例：
    - 优先用 `GMP_TOUR_STEP_FILTER` 定向运行对应巡览步骤；
    - 涉及数据合同/schema 时运行 `ctest`。
-2. **全量巡检**（89 步真实点击巡览 + CTest）只在以下时机执行：
+2. **全量巡检**（95 步真实点击巡览 + CTest）只在以下时机执行：
    - `git commit` 之前；
    - 用户明确要求全量验证时。
 3. 全量巡览基线只增不减：新增用例在既有基线上递增，不得删减既有断言换取通过。
@@ -44,3 +44,9 @@ GMP_TOUR_REAL_CLICKS=1 GMP_TOUR_STEP_FILTER=<步骤名片段> \
 | 网格清单摘要（需先生成网格，含 fixture） | `mesh_manifest_summary`（单独跑缺 fixture 会失败，用全量） |
 | CDP 材料表单 | `cdp_material_form` |
 | Exodus 网格导入 | `exodus_import` |
+| Section 指派语义（W-01b） | `section_assignment_contract` |
+| 物理组新建选择集（W-01c） | `selection_from_group_contract` |
+| BC/Function 类型扩展（W-03c） | `bc_function_dirichlet_contract` |
+| Step→Executioner 映射（W-03e） | `step_executioner_contract` |
+| Physics action 生成（W-03b） | `physics_action_contract` |
+| 场/历史输出套餐（W-03d） | `outputs_package_contract` |

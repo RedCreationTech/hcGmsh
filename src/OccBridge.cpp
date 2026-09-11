@@ -1,5 +1,7 @@
 #include "gmp/OccBridge.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <chrono>
 #include <filesystem>
@@ -48,6 +50,7 @@ namespace gmp {
 namespace {
 
 constexpr double kTwoPi = 2.0 * 3.14159265358979323846;
+std::atomic<unsigned long long> feature_model_sequence{0};
 
 // 确保 gmsh 已初始化 (与 occ_direct_call_smoke 相同模式)
 void ensure_gmsh() {
@@ -281,7 +284,17 @@ TopoDS_Shape combine_shapes(const std::vector<TopoDS_Shape>& shapes) {
 bool finalize_feature(const TopoDS_Shape& shape, const QString& brep_out_path,
                       FeatureResult* res) {
   ensure_gmsh();
-  gmsh::model::add("gmp_feature");
+  const auto stamp =
+      std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto sequence =
+      feature_model_sequence.fetch_add(1, std::memory_order_relaxed);
+  const std::string model_name = "gmp_feature_" + std::to_string(stamp) +
+                                 "_" + std::to_string(sequence);
+  // Gmsh 的 current model 只能按名称恢复；重名时 setCurrent() 会命中
+  // 第一个同名模型，导致舞台临时读网格后回到旧特征甚至离散模型。
+  gmsh::model::add(model_name);
+  gmsh::model::setCurrent(model_name);
+  res->gmsh_model_name = QString::fromStdString(model_name);
 
   // 用户指定路径落盘失败不致命: 仅不回显 brep_path
   if (!brep_out_path.isEmpty() &&
@@ -290,10 +303,9 @@ bool finalize_feature(const TopoDS_Shape& shape, const QString& brep_out_path,
   }
 
   namespace fs = std::filesystem;
-  const auto stamp =
-      std::chrono::steady_clock::now().time_since_epoch().count();
   const fs::path tmp = fs::temp_directory_path() /
-                       ("gmp_ws3_feature_" + std::to_string(stamp) + ".brep");
+                       ("gmp_ws3_feature_" + std::to_string(stamp) + "_" +
+                        std::to_string(sequence) + ".brep");
   if (!BRepTools::Write(shape, tmp.string().c_str())) {
     res->error = "failed to serialize shape to brep";
     return false;

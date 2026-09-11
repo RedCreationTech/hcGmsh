@@ -16,6 +16,7 @@
 #include <QRegularExpression>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSet>
 #include <QSpinBox>
@@ -93,8 +94,21 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
 
   // 弹窗精简：MOOSE 运行日志统一外移到主窗口 Console（append_log 实时
   // 镜像），面板不再内嵌日志页签；log_ 保留为隐藏存储供日志对话框使用。
-  workspace_tabs->addTab(setup_page, "Case Setup");
-  workspace_tabs->addTab(execution_page, "Execution");
+  // 窗体高度统一处理：表单页签内容包一层滚动区（widgetResizable +
+  // NoFrame），空间不足时页内滚动，不再压扁控件。Input 页主体是自带
+  // 滚动的编辑器且吃拉伸吸收空间，不包（参照 GmshPanel 页签滚动模式）。
+  auto add_scrolled_tab = [workspace_tabs](QWidget* content,
+                                           const QString& title,
+                                           const QString& object_name) {
+    auto* scroll = new QScrollArea();
+    scroll->setObjectName(object_name);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setWidget(content);
+    workspace_tabs->addTab(scroll, title);
+  };
+  add_scrolled_tab(setup_page, "Case Setup", "mooseSetupPageScroll");
+  add_scrolled_tab(execution_page, "Execution", "mooseExecutionPageScroll");
   workspace_tabs->addTab(input_page, "Input");
 
   auto* paths_box = new QGroupBox("Paths");
@@ -2094,6 +2108,15 @@ QString MoosePanel::template_tm_file_mesh(const QString& mesh_path) const {
 
 QString MoosePanel::inject_mesh_block(const QString& input,
                                       const QString& mesh_path) const {
+  const QString block = QStringList({
+      "[Mesh/file]",
+      "  type = FileMeshGenerator",
+      QString("  file = %1").arg(mesh_path),
+      "[]",
+  }).join('\n');
+
+  // 旧式顶层 [Mesh] 块（含 FileMesh/GeneratedMesh 及其子块）整体升级替换，
+  // 不并存两个网格定义。
   QStringList lines = input.split('\n');
   int start = -1;
   int end = -1;
@@ -2109,17 +2132,20 @@ QString MoosePanel::inject_mesh_block(const QString& input,
       break;
     }
   }
-  const QString block = QStringList({
-      "[Mesh]",
-      "  type = FileMesh",
-      QString("  file = %1").arg(mesh_path),
-      "[]",
-  }).join('\n');
 
   if (start >= 0 && end >= start) {
     lines.erase(lines.begin() + start, lines.begin() + end + 1);
     lines.insert(start, block);
     return lines.join('\n');
+  }
+
+  // 已有 [Mesh/...] 子块（无顶层包装）时按 upsert 语义整体替换。
+  static const QRegularExpression subblock_re(
+      QStringLiteral(R"((?s)\[Mesh/[^\]\n]+\].*?(?=\n\[|\z))"));
+  if (subblock_re.match(input).hasMatch()) {
+    QString out = input;
+    out.replace(subblock_re, block);
+    return out;
   }
 
   // Prepend if not found.

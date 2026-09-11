@@ -508,8 +508,17 @@ const QHash<QString, QString>& zh_dict() {
       {"Select a node in the model tree.", "在模型树中选择一个节点。"},
       {"Apply selection to boundary.", "将所选应用到边界。"},
       {"Apply selection to block.", "将所选应用到块。"},
+      {"Apply selection to assigned volumes.", "将所选应用到指派的体。"},
       {"Boundary Groups", "边界分组"},
       {"Volume Groups", "体分组"},
+      {"Physical Volumes", "物理体"},
+      {"New Selection from Physical Group...", "从物理组新建选择集..."},
+      {"New Selection from Physical Group", "从物理组新建选择集"},
+      {"Physical Surface (2D)", "物理面 (2D)"},
+      {"Physical Volume (3D)", "物理体 (3D)"},
+      {"Dimension", "维度"},
+      {"No physical groups available; generate or import a mesh first.",
+       "没有可用的物理组；请先生成或导入网格。"},
       {"(none)", "(无)"},
       {"Applies defaults for the selected type.", "应用所选类型的默认值。"},
       {"No description.", "无说明。"},
@@ -546,6 +555,33 @@ const QHash<QString, QString>& zh_dict() {
        "Abaqus CDP 混凝土：生成 ComputeIsotropicElasticityTensor + "
        "ComputeMultipleInelasticStress + AbaqusCDPStressUpdate 三件套；"
        "E 以 MPa 输入、SI（Pa）存储；请选择 4 张 CSV 曲线。"},
+      // ===== W-03c 函数/BC 类型扩展 =====
+      {"X Values", "X 值"},
+      {"Y Values", "Y 值"},
+      // ===== W-03e Step→Executioner 表单分组 =====
+      {"Basic", "基本"},
+      {"Solve Control", "求解控制"},
+      {"Time Stepping", "时间步进"},
+      {"Preconditioning", "预处理"},
+      // ===== W-03b Physics action 表单 =====
+      {"Physics Action", "物理场作用"},
+      {"Block", "作用区域"},
+      {"Strain", "应变"},
+      // ===== W-03d 场/历史输出套餐表单 =====
+      {"Field Output", "场输出"},
+      {"Field Variables", "场输出变量"},
+      {"History Output", "历史输出"},
+      {"Reaction Force", "边界反力"},
+      {"Displacement Avg", "边界平均位移"},
+      {"Extremum", "场量极值"},
+      {"History Boundary", "历史输出面组"},
+      {"Disp Variable", "位移变量"},
+      {"Extremum Variables", "极值变量"},
+      {"Extremum Types", "极值类型"},
+      {"Times", "输出时间"},
+      {"Enable Times", "启用 Times"},
+      {"Times Name", "Times 名称"},
+      {"Output Files", "输出文件"},
       // ===== GmshPanel =====
       {"Summary", "摘要"},
       {"Stats", "统计"},
@@ -577,6 +613,26 @@ const QHash<QString, QString>& zh_dict() {
       {"DistMax", "最大距离"},
       {"SizeMin", "最小尺寸"},
       {"SizeMax", "最大尺寸"},
+      {"Element Topology", "单元拓扑策略"},
+      {"Automatic (structured when eligible)",
+       "自动（条件满足时结构化）"},
+      {"Triangles / Tetrahedra (general)",
+       "三角形/四面体（通用）"},
+      {"Structured Quads / Hexahedra (strict)",
+       "结构化四边形/六面体（严格）"},
+      {"Automatic may fall back to triangles/tetrahedra. Strict never falls "
+       "back and requires four-sided surfaces or six-faced mapped blocks with "
+       "compatible edge divisions. Extruded profiles with holes require "
+       "geometry partitioning or a dedicated swept all-quad source mesh.",
+       "自动模式可能回退为三角形/四面体。严格模式绝不回退，要求四边面或"
+       "对边分段兼容的六面映射块体。带孔拉伸轮廓需要先做几何分区，或使用"
+       "专用的全四边形源面扫掠网格。"},
+      {"Ignored in strict structured mode; mapped surface constraints select "
+       "the algorithm.",
+       "严格结构化模式下忽略；算法由映射面约束决定。"},
+      {"Ignored in strict structured mode; mapped volume constraints select "
+       "the algorithm.",
+       "严格结构化模式下忽略；算法由映射体约束决定。"},
       {"No geometry loaded", "未加载几何"},
       {"No model.", "无模型。"},
       {"No fields.", "无场。"},

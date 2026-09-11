@@ -3,6 +3,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QDir>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFileSystemWatcher>
@@ -11,12 +12,14 @@
 #include <QLabel>
 #include <QListWidget>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QSlider>
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QTimer>
+#include <QTemporaryDir>
 #include <QVBoxLayout>
 #include <QStringList>
 #include <QtCore/Qt>
@@ -24,6 +27,7 @@
 #include <cmath>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -441,16 +445,89 @@ QString ElementTypeLabel(int element_type) {
 }
 
 #ifdef GMP_ENABLE_GMSH_GUI
-vtkSmartPointer<vtkUnstructuredGrid> BuildGridFromGmsh(
-    const QString& path) {
-  try {
+// VtkViewer 与建模/网格面板共享同一个进程内 Gmsh 会话。读取预览文件时
+// 不能 gmsh::clear()：它会把当前 OCC 几何、物理组和网格场一并销毁。
+// 打开文件前先快照 current model；读取完成后优先切回仍存在的原 model，
+// 若该 Gmsh 版本的 open() 替换了原 model，则从快照恢复。
+class ScopedGmshFileModel {
+ public:
+  explicit ScopedGmshFileModel(const QString& path) {
     if (!gmsh::isInitialized()) {
       gmsh::initialize(0, nullptr, false, false);
     }
     gmsh::option::setNumber("General.Terminal", 0);
-    gmsh::clear();
-    gmsh::open(path.toStdString());
 
+    std::vector<std::string> names;
+    gmsh::model::list(names);
+    gmsh::model::getCurrent(previous_model_);
+    has_previous_model_ =
+        std::find(names.begin(), names.end(), previous_model_) != names.end();
+
+    if (has_previous_model_) {
+      restore_dir_ = std::make_unique<QTemporaryDir>(
+          QDir::tempPath() + "/gmp_vtk_model_restore_XXXXXX");
+      if (restore_dir_->isValid()) {
+        restore_path_ = restore_dir_->filePath("current_model.geo_unrolled");
+        try {
+          gmsh::write(restore_path_.toStdString());
+        } catch (...) {
+          restore_path_.clear();
+        }
+      }
+    }
+
+    try {
+      gmsh::open(path.toStdString());
+      file_model_opened_ = true;
+    } catch (...) {
+      restore();
+      throw;
+    }
+  }
+
+  ScopedGmshFileModel(const ScopedGmshFileModel&) = delete;
+  ScopedGmshFileModel& operator=(const ScopedGmshFileModel&) = delete;
+
+  ~ScopedGmshFileModel() { restore(); }
+
+ private:
+  void restore() noexcept {
+    if (file_model_opened_) {
+      try {
+        gmsh::model::remove();
+      } catch (...) {
+      }
+      file_model_opened_ = false;
+    }
+    if (has_previous_model_) {
+      try {
+        std::vector<std::string> names;
+        gmsh::model::list(names);
+        if (std::find(names.begin(), names.end(), previous_model_) !=
+            names.end()) {
+          gmsh::model::setCurrent(previous_model_);
+          return;
+        }
+      } catch (...) {
+      }
+    }
+    if (!restore_path_.isEmpty()) {
+      try {
+        gmsh::open(restore_path_.toStdString());
+      } catch (...) {
+      }
+    }
+  }
+
+  std::string previous_model_;
+  QString restore_path_;
+  std::unique_ptr<QTemporaryDir> restore_dir_;
+  bool has_previous_model_ = false;
+  bool file_model_opened_ = false;
+};
+
+vtkSmartPointer<vtkUnstructuredGrid> BuildGridFromCurrentGmshModel() {
+  try {
     std::vector<std::size_t> node_tags;
     std::vector<double> coords;
     std::vector<double> params;
@@ -718,9 +795,20 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
     auto* tab = new QWidget(control_stack_);
     // 页内容不参与撑宽堆叠区, 各页按边栏宽度显示, 宽内容自行内部滚动
     tab->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
-    auto* tab_layout = new QVBoxLayout(tab);
+    auto* tab_page_layout = new QVBoxLayout(tab);
+    tab_page_layout->setContentsMargins(0, 0, 0, 0);
+    tab_page_layout->setSpacing(0);
+    // 窗体高度统一处理：页内容包一层滚动区（widgetResizable + NoFrame），
+    // 空间不足时页内滚动，不再压扁控件；滚动只此一层。
+    auto* scroll = new QScrollArea(tab);
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    auto* content = new QWidget(scroll);
+    auto* tab_layout = new QVBoxLayout(content);
     tab_layout->setContentsMargins(0, 0, 0, 0);
     tab_layout->setSpacing(4);
+    scroll->setWidget(content);
+    tab_page_layout->addWidget(scroll);
     control_stack_->addWidget(tab);
     control_nav_->addItem(name);
     return tab_layout;
@@ -834,6 +922,7 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
     }
   });
   mesh_dim_ = new QComboBox();
+  mesh_dim_->setObjectName("meshDimensionCombo");
   mesh_dim_->addItem("All", -1);
   mesh_dim_->addItem("0", 0);
   mesh_dim_->addItem("1", 1);
@@ -1423,7 +1512,20 @@ int VtkViewer::visible_mesh_entity_count(int dim) const {
 #endif
 }
 
+int VtkViewer::current_mesh_dimension() const {
+  return mesh_dim_ ? mesh_dim_->currentData().toInt() : -1;
+}
+
 void VtkViewer::set_mesh_file(const QString& path) {
+  set_mesh_file_impl(path, false);
+}
+
+void VtkViewer::set_mesh_file_from_current_model(const QString& path) {
+  set_mesh_file_impl(path, true);
+}
+
+void VtkViewer::set_mesh_file_impl(const QString& path,
+                                   bool use_current_gmsh_model) {
   current_file_ = path;
   if (!file_label_) {
     return;
@@ -1456,13 +1558,18 @@ void VtkViewer::set_mesh_file(const QString& path) {
   mesh_groups_.clear();
   mesh_elem_types_.clear();
   mesh_entities_.clear();
-  mesh_grid_ = BuildGridFromGmsh(path);
-  if (!mesh_grid_) {
-    file_label_->setText("Failed to load mesh");
-    return;
-  }
-  mesh_grid_->GetBounds(mesh_bounds_);
   try {
+    std::unique_ptr<ScopedGmshFileModel> file_model;
+    if (!use_current_gmsh_model) {
+      file_model = std::make_unique<ScopedGmshFileModel>(path);
+    }
+    mesh_grid_ = BuildGridFromCurrentGmshModel();
+    if (!mesh_grid_) {
+      file_label_->setText("Failed to load mesh");
+      return;
+    }
+    mesh_grid_->GetBounds(mesh_bounds_);
+
     std::vector<std::pair<int, int>> groups;
     gmsh::model::getPhysicalGroups(groups);
     for (const auto& pg : groups) {
@@ -1489,10 +1596,12 @@ void VtkViewer::set_mesh_file(const QString& path) {
       mesh_entities_.push_back({ent.first, ent.second});
     }
   } catch (...) {
-    // Ignore physical group name errors.
+    file_label_->setText("Failed to load mesh");
+    return;
   }
   mesh_geom_->SetInputData(mesh_grid_);
 #else
+  Q_UNUSED(use_current_gmsh_model);
   file_label_->setText("Mesh preview requires libgmsh");
   return;
 #endif
@@ -1522,6 +1631,7 @@ void VtkViewer::set_mesh_file(const QString& path) {
   update_nodes_visibility();
 #else
   Q_UNUSED(path);
+  Q_UNUSED(use_current_gmsh_model);
 #endif
 }
 
@@ -3332,8 +3442,13 @@ void VtkViewer::update_mesh_controls() {
   }
 
   if (mesh_dim_) {
+    int highest_dim = -1;
+    for (const auto& ent : mesh_entities_) {
+      highest_dim = std::max(highest_dim, ent.dim);
+    }
     mesh_dim_->blockSignals(true);
-    mesh_dim_->setCurrentIndex(0);
+    const int highest_index = mesh_dim_->findData(highest_dim);
+    mesh_dim_->setCurrentIndex(highest_index >= 0 ? highest_index : 0);
     mesh_dim_->blockSignals(false);
   }
 

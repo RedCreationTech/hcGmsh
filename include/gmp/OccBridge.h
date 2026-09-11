@@ -30,6 +30,7 @@ struct FeatureResult {
   QString error;             // 失败原因 (面向用户)
   int gmsh_volume_tag = 0;   // importShapes 后主体积 tag, 0 表示未知/未导入
   std::vector<int> gmsh_volume_tags;  // 同一特征产生的全部体积 tag
+  QString gmsh_model_name;   // 本次特征所属 Gmsh 模型，供调用方显式恢复
   QString brep_path;         // brep_out_path 非空且写盘成功时回显
 };
 

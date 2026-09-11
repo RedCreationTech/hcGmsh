@@ -10,6 +10,7 @@
 #include <QDialogButtonBox>
 #include "gmp/ComboPopupFix.h"
 #include <QEvent>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QFileDialog>
 #include <QCryptographicHash>
@@ -23,13 +24,17 @@
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QPlainTextEdit>
+#include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QScrollArea>
 #include <QSet>
 #include <QSpinBox>
+#include <QStandardPaths>
 #include <QTableWidget>
 #include <QTabWidget>
+#include <QTemporaryDir>
 #include <QHeaderView>
 #include <QAbstractItemView>
 #include <QApplication>
@@ -37,9 +42,15 @@
 #include <QModelIndex>
 #include <QObject>
 #include <QMessageBox>
+#include <QProgressDialog>
 #include <QString>
+#include <QTimer>
 #include <QVBoxLayout>
+#include <atomic>
 #include <algorithm>
+#include <cmath>
+#include <map>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
@@ -63,6 +74,211 @@ void tune_gmsh_combo(QComboBox* combo, int min_width = 80, int view_min_width = 
   }
   gmp::install_combo_popup_fix(combo);
 }
+
+#ifdef GMP_ENABLE_GMSH_GUI
+std::atomic<unsigned long long> generated_mesh_model_sequence{0};
+
+struct StructuredMeshEligibility {
+  bool eligible = false;
+  QString reason;
+  std::map<int, int> curve_nodes;
+  std::set<int> surface_tags;
+  std::set<int> volume_tags;
+};
+
+// TransfiniteAutomatic only creates a genuine mapped quad/brick mesh for
+// quadrangular surfaces and six-sided volumes.  Do this topology check before
+// setting constraints: tetrahedron subdivision also reports "Hexahedron", but
+// produces the highly skewed honeycomb-like cells that users do not mean by a
+// structured brick mesh.
+StructuredMeshEligibility CheckStructuredMeshEligibility(
+    int dim, double target_size,
+    const std::vector<std::pair<int, int>>& top_entities) {
+  StructuredMeshEligibility result;
+  const bool chinese =
+      gmp::l10n::current_language() == gmp::l10n::Language::Chinese;
+  if (dim != 2 && dim != 3) {
+    result.reason = chinese
+                        ? QString::fromUtf8("结构化四边形/砖形网格仅适用于 2D/3D")
+                        : QString("structured quad/brick meshing is only "
+                                  "available in 2D/3D");
+    return result;
+  }
+  if (top_entities.empty()) {
+    result.reason = chinese ? QString::fromUtf8("模型没有最高维几何实体")
+                            : QString("the model has no top-dimensional entities");
+    return result;
+  }
+
+  for (const auto& entity : top_entities) {
+    if (dim == 3) {
+      result.volume_tags.insert(entity.second);
+    } else {
+      result.surface_tags.insert(entity.second);
+    }
+    std::vector<std::pair<int, int>> boundary;
+    gmsh::model::getBoundary({entity}, boundary, false, false, false);
+    const std::size_t expected = dim == 3 ? 6u : 4u;
+    if (boundary.size() != expected) {
+      if (chinese) {
+        result.reason =
+            dim == 3
+                ? QString::fromUtf8(
+                      "体 %1 有 %2 个面（映射砖形需要 6 个；带孔几何"
+                      "通常需要先分区）")
+                      .arg(entity.second)
+                      .arg(boundary.size())
+                : QString::fromUtf8(
+                      "面 %1 有 %2 条边界曲线（映射四边形需要 4 条）")
+                      .arg(entity.second)
+                      .arg(boundary.size());
+      } else {
+        result.reason =
+            dim == 3
+                ? QString("volume %1 has %2 faces (a mapped brick requires 6; "
+                          "holes usually require geometry partitioning first)")
+                      .arg(entity.second)
+                      .arg(boundary.size())
+                : QString("surface %1 has %2 boundary curves (a mapped quad "
+                          "requires 4)")
+                      .arg(entity.second)
+                      .arg(boundary.size());
+      }
+      return result;
+    }
+    if (dim == 3) {
+      for (const auto& face : boundary) {
+        result.surface_tags.insert(face.second);
+        std::vector<std::pair<int, int>> curves;
+        gmsh::model::getBoundary({face}, curves, false, false, false);
+        if (curves.size() != 4u) {
+          result.reason = chinese
+                              ? QString::fromUtf8(
+                                    "面 %1 有 %2 条边界曲线（映射砖形的每个面"
+                                    "需要 4 条）")
+                                    .arg(face.second)
+                                    .arg(curves.size())
+                              : QString("face %1 has %2 boundary curves (a "
+                                        "mapped brick face requires 4)")
+                                    .arg(face.second)
+                                    .arg(curves.size());
+          return result;
+        }
+        std::vector<int> face_node_counts;
+        for (const auto& curve : curves) {
+          double length = 0.0;
+          gmsh::model::occ::getMass(1, curve.second, length);
+          const int nodes =
+              std::max(2, static_cast<int>(std::ceil(length / target_size)) +
+                              1);
+          result.curve_nodes[curve.second] = nodes;
+          face_node_counts.push_back(nodes);
+        }
+        std::sort(face_node_counts.begin(), face_node_counts.end());
+        if (face_node_counts[0] != face_node_counts[1] ||
+            face_node_counts[2] != face_node_counts[3]) {
+          result.reason =
+              chinese
+                  ? QString::fromUtf8(
+                        "按当前网格尺寸计算后，面 %1 的对边分段数不兼容；"
+                        "请调整尺寸或对几何分区")
+                        .arg(face.second)
+                  : QString("face %1 has incompatible opposite-edge divisions "
+                            "at the requested size; partition or adjust the "
+                            "geometry")
+                        .arg(face.second);
+          return result;
+        }
+      }
+    } else {
+      std::vector<int> face_node_counts;
+      for (const auto& curve : boundary) {
+        double length = 0.0;
+        gmsh::model::occ::getMass(1, curve.second, length);
+        const int nodes =
+            std::max(2, static_cast<int>(std::ceil(length / target_size)) + 1);
+        result.curve_nodes[curve.second] = nodes;
+        face_node_counts.push_back(nodes);
+      }
+      std::sort(face_node_counts.begin(), face_node_counts.end());
+      if (face_node_counts[0] != face_node_counts[1] ||
+          face_node_counts[2] != face_node_counts[3]) {
+        result.reason = chinese
+                            ? QString::fromUtf8(
+                                  "按当前网格尺寸计算后，面 %1 的对边分段数"
+                                  "不兼容")
+                                  .arg(entity.second)
+                            : QString("surface %1 has incompatible opposite-"
+                                      "edge divisions at the requested size")
+                                  .arg(entity.second);
+        return result;
+      }
+    }
+  }
+  result.eligible = true;
+  return result;
+}
+
+// 在独立 model 中读取子进程生成的网格，收集舞台/质量/manifest 数据后
+// 恢复原 OCC model。建模状态与文件预览状态必须隔离。
+class ScopedGeneratedMeshModel {
+ public:
+  ScopedGeneratedMeshModel(const QString& path, const QString& restore_path)
+      : restore_path_(restore_path.toStdString()) {
+    try {
+      // Gmsh 的文件模型注册表及解析状态在长会话里会残留同名/空模型。
+      // 回读前重建干净会话，以保证 open() 读取的就是本轮离散网格；
+      // 析构时再重建会话并从未附加 worker 指令的快照恢复 OCC 几何。
+      reset_gmsh_session();
+      gmsh::open(path.toStdString());
+      select_opened_model(path);
+    } catch (...) {
+      restore();
+      throw;
+    }
+  }
+
+  ScopedGeneratedMeshModel(const ScopedGeneratedMeshModel&) = delete;
+  ScopedGeneratedMeshModel& operator=(const ScopedGeneratedMeshModel&) = delete;
+  ~ScopedGeneratedMeshModel() { restore(); }
+
+ private:
+  void restore() noexcept {
+    try {
+      reset_gmsh_session();
+      if (!restore_path_.empty()) {
+        gmsh::open(restore_path_);
+        select_opened_model(QString::fromStdString(restore_path_));
+      }
+    } catch (...) {
+    }
+  }
+
+  static void reset_gmsh_session() {
+    if (gmsh::isInitialized()) {
+      gmsh::finalize();
+    }
+    gmsh::initialize(0, nullptr, false, false);
+    gmsh::option::setNumber("General.Terminal", 0);
+  }
+
+  static void select_opened_model(const QString& path) {
+    std::vector<std::string> model_names;
+    gmsh::model::list(model_names);
+    if (model_names.empty()) {
+      throw std::runtime_error("Gmsh opened a file without creating a model.");
+    }
+    const std::string expected =
+        QFileInfo(path).completeBaseName().toStdString();
+    const auto match =
+        std::find(model_names.begin(), model_names.end(), expected);
+    gmsh::model::setCurrent(match != model_names.end() ? *match
+                                                       : model_names.back());
+  }
+
+  std::string restore_path_;
+};
+#endif
 
 }  // namespace
 
@@ -747,6 +963,7 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   mesh_form->addRow("MSH Version", msh_version_);
 
   algo2d_ = new QComboBox();
+  algo2d_->setObjectName("meshAlgorithm2dComboBox");
   algo2d_->addItem("Automatic", 2);
   algo2d_->addItem("MeshAdapt", 1);
   algo2d_->addItem("Delaunay", 5);
@@ -756,14 +973,44 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   mesh_form->addRow("Algorithm 2D", algo2d_);
 
   algo3d_ = new QComboBox();
+  algo3d_->setObjectName("meshAlgorithm3dComboBox");
   algo3d_->addItem("Delaunay", 1);
   algo3d_->addItem("Frontal", 4);
   algo3d_->addItem("HXT", 10);
   mesh_form->addRow("Algorithm 3D", algo3d_);
 
-  recombine_ = new QCheckBox("Recombine (quad/hex)");
-  recombine_->setChecked(false);
-  mesh_form->addRow("", recombine_);
+  mesh_topology_mode_ = new QComboBox();
+  mesh_topology_mode_->setObjectName("meshTopologyModeComboBox");
+  mesh_topology_mode_->addItem("Automatic (structured when eligible)", 0);
+  mesh_topology_mode_->addItem("Triangles / Tetrahedra (general)", 1);
+  mesh_topology_mode_->addItem("Structured Quads / Hexahedra (strict)", 2);
+  mesh_topology_mode_->setToolTip(
+      "Automatic may fall back to triangles/tetrahedra. Strict never falls "
+      "back and requires four-sided surfaces or six-faced mapped blocks with "
+      "compatible edge divisions. Extruded profiles with holes require "
+      "geometry partitioning or a dedicated swept all-quad source mesh.");
+  tune_gmsh_combo(mesh_topology_mode_, 220, 360);
+  connect(mesh_topology_mode_,
+          QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+          [this](int) {
+            const bool strict = mesh_topology_mode_ &&
+                                mesh_topology_mode_->currentData().toInt() == 2;
+            if (algo2d_) {
+              algo2d_->setEnabled(!strict);
+              algo2d_->setToolTip(
+                  strict ? "Ignored in strict structured mode; mapped surface "
+                           "constraints select the algorithm."
+                         : QString());
+            }
+            if (algo3d_) {
+              algo3d_->setEnabled(!strict);
+              algo3d_->setToolTip(
+                  strict ? "Ignored in strict structured mode; mapped volume "
+                           "constraints select the algorithm."
+                         : QString());
+            }
+          });
+  mesh_form->addRow("Element Topology", mesh_topology_mode_);
 
   smoothing_ = new QSpinBox();
   smoothing_->setRange(0, 100);
@@ -898,6 +1145,7 @@ bool GmshPanel::import_geometry(const QString& path, bool auto_mesh) {
     gmsh::option::setNumber("General.AbortOnError", 0);
     gmsh::logger::start();
     gmsh::clear();
+    external_model_name_.clear();
     gmsh::model::add("imported");
 
     const QString ext = QFileInfo(path).suffix().toLower();
@@ -1002,6 +1250,7 @@ bool GmshPanel::import_geometry(const QString& path, bool auto_mesh) {
     gmsh::clear();
   } catch (...) {
   }
+  external_model_name_.clear();
   model_loaded_ = false;
   if (geo_path_) {
     geo_path_->clear();
@@ -1013,6 +1262,32 @@ bool GmshPanel::import_geometry(const QString& path, bool auto_mesh) {
   refresh_occ_entity_template_lists();
   return false;
 #endif
+}
+
+void GmshPanel::note_external_model_loaded(const QString& label) {
+  // 部件特征等外部通道已把几何放进 Gmsh 模型；同步面板状态，
+  // 避免“生成网格”按空模型清空模型改画示例盒（on_generate 1469 守卫）。
+  model_loaded_ = true;
+#ifdef GMP_ENABLE_GMSH_GUI
+  try {
+    std::string model_name;
+    gmsh::model::getCurrent(model_name);
+    external_model_name_ = QString::fromStdString(model_name);
+  } catch (...) {
+    external_model_name_.clear();
+  }
+#endif
+  if (use_sample_box_ && use_sample_box_->isChecked()) {
+    use_sample_box_->setChecked(false);
+  }
+  if (geo_path_ && !label.isEmpty()) {
+    geo_path_->setText(label);
+  }
+  update_entity_summary();
+  update_entity_list();
+  update_physical_group_list();
+  update_field_list();
+  refresh_occ_entity_template_lists();
 }
 
 QVariantMap GmshPanel::gmsh_settings() const {
@@ -1036,7 +1311,12 @@ QVariantMap GmshPanel::gmsh_settings() const {
              high_order_opt_ ? high_order_opt_->currentData().toInt() : 0);
   map.insert("algo2d", algo2d_ ? algo2d_->currentData().toInt() : 2);
   map.insert("algo3d", algo3d_ ? algo3d_->currentData().toInt() : 1);
-  map.insert("recombine", recombine_ && recombine_->isChecked());
+  const int topology_mode = mesh_topology_mode_
+                                ? mesh_topology_mode_->currentData().toInt()
+                                : 0;
+  map.insert("mesh_topology_mode", topology_mode);
+  // Legacy compatibility: old projects only know the boolean recombine key.
+  map.insert("recombine", topology_mode != 1);
   map.insert("smoothing", smoothing_ ? smoothing_->value() : 10);
   map.insert("output_path", output_path_ ? output_path_->text() : "");
   const QString geo_path = geo_path_ ? geo_path_->text() : "";
@@ -1142,9 +1422,14 @@ void GmshPanel::apply_gmsh_settings(const QVariantMap& settings) {
                    settings.value("algo3d", algo3d_->currentData().toInt())
                        .toInt());
   }
-  if (recombine_) {
-    recombine_->setChecked(
-        settings.value("recombine", recombine_->isChecked()).toBool());
+  if (mesh_topology_mode_) {
+    int topology_mode = 0;
+    if (settings.contains("mesh_topology_mode")) {
+      topology_mode = settings.value("mesh_topology_mode").toInt();
+    } else if (settings.contains("recombine")) {
+      topology_mode = settings.value("recombine").toBool() ? 0 : 1;
+    }
+    set_combo_data(mesh_topology_mode_, topology_mode);
   }
   if (smoothing_) {
     smoothing_->setValue(
@@ -1302,6 +1587,7 @@ void GmshPanel::on_clear_model() {
 #else
   ensure_gmsh();
   gmsh::clear();
+  external_model_name_.clear();
   model_loaded_ = false;
   geo_path_->clear();
   update_entity_summary();
@@ -1413,8 +1699,8 @@ void GmshPanel::on_generate() {
   }
   set_mesh_generation_running(true);
   emit mesh_generation_started();
-  // Gmsh 当前在 GUI 线程同步执行；排除用户输入地刷新一次界面，确保运行态
-  // 在耗时计算开始前可见，同时不开放重复点击的重入窗口。
+  // 先刷新运行态；实际耗时剖分会在独立 Gmsh 子进程执行，主线程通过嵌套事件
+  // 循环维持进度窗和窗口重绘，同时应用模态窗阻止其他 Gmsh 操作并发进入。
   QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
 #ifndef GMP_ENABLE_GMSH_GUI
   append_log("Gmsh is not enabled in this build.");
@@ -1423,12 +1709,31 @@ void GmshPanel::on_generate() {
   return;
 #else
   bool success = false;
+  bool logger_started = false;
+  bool size_guard_rejected = false;
+  bool structured_mode_rejected = false;
   QString completion_message;
+  QString structured_fallback_reason;
   try {
     ensure_gmsh();
 
+    // 舞台文件读取和前一次生成结果回读可能暂时改变 current model；
+    // 外部部件已明确登记时，以登记的模型为网格输入源。
+    if (!external_model_name_.isEmpty()) {
+      std::vector<std::string> model_names;
+      gmsh::model::list(model_names);
+      const std::string expected = external_model_name_.toStdString();
+      if (std::find(model_names.begin(), model_names.end(), expected) !=
+          model_names.end()) {
+        gmsh::model::setCurrent(expected);
+      } else {
+        external_model_name_.clear();
+      }
+    }
+
     gmsh::option::setNumber("General.Terminal", 0);
     gmsh::logger::start();
+    logger_started = true;
 
     const double dx = size_x_->value();
     const double dy = size_y_->value();
@@ -1456,18 +1761,31 @@ void GmshPanel::on_generate() {
       gmsh::option::setNumber("Mesh.Algorithm3D",
                               algo3d_->currentData().toInt());
     }
-    if (recombine_) {
-      gmsh::option::setNumber("Mesh.RecombineAll",
-                              recombine_->isChecked() ? 1 : 0);
-    }
+    // 禁用全局重组和四面体细分。后者虽会在文件中报告 Hexahedron，
+    // 却会生成继承四面体方向的扭曲蜂窝单元，不是用户所指的砖形网格。
+    gmsh::option::setNumber("Mesh.RecombineAll", 0);
+    gmsh::option::setNumber("Mesh.SubdivisionAlgorithm", 0);
     if (smoothing_) {
       gmsh::option::setNumber("Mesh.Smoothing", smoothing_->value());
     }
     gmsh::option::setNumber("Mesh.Optimize", optimize_->isChecked() ? 1 : 0);
     gmsh::option::setNumber("Mesh.MshFileVersion", msh_version == 2 ? 2.2 : 4.1);
 
-    if (!model_loaded_ || (use_sample_box_ && use_sample_box_->isChecked())) {
+    // 是否用示例盒兜底只取决于“当前模型是否真的没有几何实体”，
+    // 不看 model_loaded_ 标志或示例盒勾选状态——部件特征等外部通道
+    // 导入的几何绝不允许被清空换盒（历史缺陷：勾选框/面板状态把用户
+    // 的部件几何误清，产出 12 节点的退化网格）。
+    std::vector<std::pair<int, int>> existing_entities;
+    gmsh::model::getEntities(existing_entities, -1);
+    const bool model_empty = existing_entities.empty();
+    if (model_empty) {
+      if (!use_sample_box_ || !use_sample_box_->isChecked()) {
+        throw std::runtime_error(
+            "No geometry in the current model. Import geometry, create a "
+            "part feature, or enable the sample box before generating.");
+      }
       gmsh::clear();
+      external_model_name_.clear();
       gmsh::model::add("box_model");
       const int box = gmsh::model::occ::addBox(0, 0, 0, dx, dy, dz);
       gmsh::model::occ::synchronize();
@@ -1487,7 +1805,6 @@ void GmshPanel::on_generate() {
       }
       model_loaded_ = true;
       geo_path_->setText("sample: box");
-      use_sample_box_->setChecked(true);
     } else {
       gmsh::model::mesh::clear();
     }
@@ -1506,7 +1823,428 @@ void GmshPanel::on_generate() {
         }
       }
     }
-    gmsh::model::mesh::generate(dim);
+    const int topology_mode = mesh_topology_mode_
+                                  ? mesh_topology_mode_->currentData().toInt()
+                                  : 0;
+    const bool prefer_structured = topology_mode != 1;
+    const bool require_structured = topology_mode == 2;
+    // 规模预检：草图/OCC 使用模型坐标原值（通常为 mm）。沿用面向单位盒的
+    // 默认 lc=0.2 到百毫米级实体时，单元数会按 lc^-dim 爆炸，表现为应用
+    // “卡死”。优先用 OCC 的真实长度/面积/体积，其他内核回退到包围盒估算。
+    std::vector<std::pair<int, int>> top_entities;
+    gmsh::model::getEntities(top_entities, dim);
+    const StructuredMeshEligibility structured =
+        prefer_structured
+            ? CheckStructuredMeshEligibility(dim, lc, top_entities)
+            : StructuredMeshEligibility{};
+    const bool use_structured_mesh = prefer_structured && structured.eligible;
+    if (require_structured && !structured.eligible) {
+      structured_mode_rejected = true;
+      completion_message =
+          gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+              ? QString::fromUtf8(
+                    "严格结构化网格未生成：%1。该模式不会回退为四面体；请先"
+                    "将几何划分为可映射/可扫掠块体，或改选“自动”或“通用"
+                    "四面体”。")
+                    .arg(structured.reason)
+              : QString("Strict structured mesh was not generated: %1. This "
+                        "mode never falls back; partition the geometry into "
+                        "mapped/sweepable blocks, or select Automatic or the "
+                        "general simplex mode.")
+                    .arg(structured.reason);
+      throw std::runtime_error(completion_message.toStdString());
+    }
+    if (use_structured_mesh) {
+      append_log(dim == 3
+                     ? "Structured brick mesh enabled: mapped constraints "
+                       "applied to eligible six-faced volume(s)."
+                     : "Structured quadrilateral mesh enabled: mapped "
+                       "constraints applied to four-sided surface(s).");
+    } else if (prefer_structured) {
+      structured_fallback_reason = structured.reason;
+      append_log(QString("Structured mesh unavailable: %1. Falling back to "
+                         "%2; partition the geometry into sweepable blocks "
+                         "to obtain a conforming structured mesh.")
+                     .arg(structured.reason)
+                     .arg(dim == 3 ? "tetrahedra" : "triangles"));
+    }
+    double occ_measure = 0.0;
+    bool has_occ_measure = false;
+    double bbox_measure = 0.0;
+    for (const auto& entity : top_entities) {
+      try {
+        double mass = 0.0;
+        gmsh::model::occ::getMass(dim, entity.second, mass);
+        if (std::isfinite(mass) && mass > 0.0) {
+          occ_measure += mass;
+          has_occ_measure = true;
+        }
+      } catch (...) {
+      }
+
+      try {
+        double xmin = 0.0;
+        double ymin = 0.0;
+        double zmin = 0.0;
+        double xmax = 0.0;
+        double ymax = 0.0;
+        double zmax = 0.0;
+        gmsh::model::getBoundingBox(dim, entity.second, xmin, ymin, zmin,
+                                    xmax, ymax, zmax);
+        std::vector<double> spans = {std::max(0.0, xmax - xmin),
+                                     std::max(0.0, ymax - ymin),
+                                     std::max(0.0, zmax - zmin)};
+        std::sort(spans.begin(), spans.end(), std::greater<double>());
+        if (dim == 3) {
+          bbox_measure += spans[0] * spans[1] * spans[2];
+        } else if (dim == 2) {
+          bbox_measure += spans[0] * spans[1];
+        } else if (dim == 1) {
+          bbox_measure += spans[0];
+        }
+      } catch (...) {
+      }
+    }
+    const double measure = has_occ_measure ? occ_measure : bbox_measure;
+    const double simplex_factor = dim == 3 ? 6.0 : (dim == 2 ? 2.0 : 1.0);
+    // 映射砖形网格约为 measure/lc^dim；保留 1.5 的保守余量。
+    // 回退时按单纯形网格估算，不再为已删除的自动细分乘 3/4 倍。
+    const double element_factor = use_structured_mesh ? 1.5 : simplex_factor;
+    const double estimated_elements =
+        (lc > 0.0 && measure > 0.0)
+            ? element_factor * measure / std::pow(lc, dim)
+            : 0.0;
+    bool max_ok = false;
+    const qlonglong configured_max =
+        qEnvironmentVariable("GMP_MESH_MAX_ESTIMATED_ELEMENTS")
+            .toLongLong(&max_ok);
+    const double max_estimated_elements =
+        max_ok && configured_max > 0 ? static_cast<double>(configured_max)
+                                     : 2000000.0;
+    if (estimated_elements > max_estimated_elements) {
+      const double recommended_lc =
+          1.1 * std::pow(element_factor * measure / max_estimated_elements,
+                         1.0 / static_cast<double>(dim));
+      const bool chinese =
+          gmp::l10n::current_language() == gmp::l10n::Language::Chinese;
+      const double estimated_millions = estimated_elements / 1000000.0;
+      const double limit_millions = max_estimated_elements / 1000000.0;
+      completion_message =
+          chinese
+              ? QString::fromUtf8(
+                    "网格尺寸过细：预计约 %1 百万个 %2D 单元，超过交互式生成"
+                    "上限 %3 百万个。请将全局网格尺寸调至至少 %4（建议从 %5 "
+                    "开始），再重新生成。")
+                    .arg(estimated_millions, 0, 'f', 1)
+                    .arg(dim)
+                    .arg(limit_millions, 0, 'f', 1)
+                    .arg(recommended_lc, 0, 'g', 4)
+                    .arg(std::max(recommended_lc, lc * 2.0), 0, 'g', 4)
+              : QString(
+                    "Mesh size is too fine: about %1 million %2D elements are "
+                    "estimated, above the interactive limit of %3 million. "
+                    "Increase Global Mesh Size to at least %4 (start with %5) "
+                    "and generate again.")
+                    .arg(estimated_millions, 0, 'f', 1)
+                    .arg(dim)
+                    .arg(limit_millions, 0, 'f', 1)
+                    .arg(recommended_lc, 0, 'g', 4)
+                    .arg(std::max(recommended_lc, lc * 2.0), 0, 'g', 4);
+      size_guard_rejected = true;
+      throw std::runtime_error(completion_message.toStdString());
+    }
+    append_log(QString("Mesh size preflight: estimated %1 top-dimensional "
+                       "elements (limit %2, lc=%3).")
+                   .arg(estimated_elements, 0, 'g', 6)
+                   .arg(max_estimated_elements, 0, 'g', 6)
+                   .arg(lc, 0, 'g', 6));
+
+    // libgmsh 是进程级全局状态，不能安全地从 Qt 后台线程调用。把当前
+    // model 序列化后交给独立 gmsh 进程：GUI 可响应、stdout 提供真实阶段/
+    // 百分比，取消也只终止子进程，不会损坏应用内 OCC model。
+    QString gmsh_executable = QStandardPaths::findExecutable("gmsh");
+#ifdef Q_OS_MACOS
+    if (gmsh_executable.isEmpty()) {
+      const QString app_executable =
+          "/Applications/Gmsh.app/Contents/MacOS/gmsh";
+      if (QFileInfo::exists(app_executable)) {
+        gmsh_executable = app_executable;
+      }
+    }
+#endif
+    if (gmsh_executable.isEmpty()) {
+      throw std::runtime_error(
+          "The gmsh executable was not found; background mesh generation "
+          "requires the Gmsh CLI on PATH.");
+    }
+    QTemporaryDir mesh_temp_dir(
+        QDir::tempPath() + "/gmp_mesh_generation_XXXXXX");
+    if (!mesh_temp_dir.isValid()) {
+      throw std::runtime_error(
+          "Could not create a temporary directory for mesh generation.");
+    }
+    const QString source_path =
+        mesh_temp_dir.filePath("current_model.geo_unrolled");
+    const QString restore_path =
+        mesh_temp_dir.filePath("current_model_restore.geo_unrolled");
+    const auto generated_sequence = generated_mesh_model_sequence.fetch_add(
+        1, std::memory_order_relaxed);
+    const QString generated_path = mesh_temp_dir.filePath(
+        QString("generated_%1.msh").arg(generated_sequence));
+    gmsh::write(source_path.toStdString());
+    if (!QFile::copy(source_path, restore_path)) {
+      throw std::runtime_error(
+          "Could not snapshot the current OCC model for restoration.");
+    }
+    QStringList worker_directives;
+    auto tag_list = [](const auto& tags) {
+      QStringList values;
+      for (const auto tag : tags) {
+        values << QString::number(tag);
+      }
+      return values.join(", ");
+    };
+
+    // Gmsh writes only entities covered by physical groups as soon as any
+    // physical group exists. A newly created Part can therefore disappear if
+    // older groups are present but do not yet cover the new top-dimensional
+    // entity. Add a worker-only group for uncovered entities; the in-memory
+    // OCC model and all existing user groups stay untouched.
+    std::vector<std::pair<int, int>> top_physical_groups;
+    gmsh::model::getPhysicalGroups(top_physical_groups, dim);
+    std::set<int> grouped_top_entities;
+    int next_physical_tag = 1;
+    for (const auto& group : top_physical_groups) {
+      next_physical_tag = std::max(next_physical_tag, group.second + 1);
+      std::vector<int> entity_tags;
+      gmsh::model::getEntitiesForPhysicalGroup(dim, group.second, entity_tags);
+      grouped_top_entities.insert(entity_tags.begin(), entity_tags.end());
+    }
+    std::vector<int> ungrouped_top_entities;
+    for (const auto& entity : top_entities) {
+      if (!grouped_top_entities.count(entity.second)) {
+        ungrouped_top_entities.push_back(entity.second);
+      }
+    }
+    if (!ungrouped_top_entities.empty()) {
+      const QString physical_kind =
+          dim == 3 ? "Volume" : (dim == 2 ? "Surface" : "Curve");
+      worker_directives
+          << QString("Physical %1(\"unassigned_%2d\", %3) = {%4};")
+                 .arg(physical_kind)
+                 .arg(dim)
+                 .arg(next_physical_tag)
+                 .arg(tag_list(ungrouped_top_entities));
+      append_log(QString("Worker mesh group added for %1 unassigned %2D "
+                         "entity/entities.")
+                     .arg(ungrouped_top_entities.size())
+                     .arg(dim));
+    }
+    if (use_structured_mesh) {
+      // OCC models are written as a .geo_unrolled file that only Merge-s an
+      // accompanying XAO file; mesh attributes set through the API are not
+      // serialized. Append explicit mapped-mesh directives for the worker.
+      for (const auto& [curve_tag, node_count] : structured.curve_nodes) {
+        worker_directives
+            << QString("Transfinite Curve {%1} = %2 Using Progression 1;")
+                   .arg(curve_tag)
+                   .arg(node_count);
+      }
+      if (!structured.surface_tags.empty()) {
+        const QString surfaces = tag_list(structured.surface_tags);
+        worker_directives
+            << QString("Transfinite Surface {%1};").arg(surfaces)
+            << QString("Recombine Surface {%1};").arg(surfaces);
+      }
+      if (!structured.volume_tags.empty()) {
+        worker_directives
+            << QString("Transfinite Volume {%1};")
+                   .arg(tag_list(structured.volume_tags));
+      }
+    }
+    if (!worker_directives.empty()) {
+      QFile source_file(source_path);
+      if (!source_file.open(QIODevice::Append | QIODevice::Text) ||
+          source_file.write(
+              ("\n" + worker_directives.join("\n") + "\n").toUtf8()) < 0) {
+        throw std::runtime_error(
+            "Could not serialize worker mesh constraints.");
+      }
+    }
+
+    if (logger_started) {
+      std::vector<std::string> setup_log;
+      gmsh::logger::get(setup_log);
+      gmsh::logger::stop();
+      logger_started = false;
+      for (const auto& line : setup_log) {
+        append_log(QString::fromStdString(line));
+      }
+    }
+
+    QStringList process_args;
+    process_args << source_path << QString("-%1").arg(dim) << "-nopopup"
+                 << "-v" << "4" << "-o" << generated_path << "-format"
+                 << (msh_version == 2 ? "msh2" : "msh4") << "-clmin"
+                 << QString::number(lc, 'g', 16) << "-clmax"
+                 << QString::number(lc, 'g', 16) << "-order"
+                 << QString::number(order) << "-setnumber" << "Mesh.Algorithm"
+                 << QString::number(algo2d_ ? algo2d_->currentData().toInt() : 2)
+                 << "-setnumber" << "Mesh.Algorithm3D"
+                 << QString::number(algo3d_ ? algo3d_->currentData().toInt() : 1)
+                 << "-setnumber" << "Mesh.RecombineAll"
+                 << "0"
+                 << "-setnumber" << "Mesh.SubdivisionAlgorithm"
+                 << "0"
+                 << "-setnumber" << "Mesh.Smoothing"
+                 << QString::number(smoothing_ ? smoothing_->value() : 0)
+                 << "-setnumber" << "Mesh.HighOrderOptimize"
+                 << QString::number(high_order_opt_
+                                        ? high_order_opt_->currentData().toInt()
+                                        : 0)
+                 << "-setnumber" << "Mesh.Optimize"
+                 << QString::number(optimize_ && optimize_->isChecked() ? 1
+                                                                        : 0);
+
+    QEventLoop wait_loop;
+    QElapsedTimer elapsed;
+    elapsed.start();
+    const bool automated_tour =
+        qEnvironmentVariableIsSet("GMP_SCREENSHOT_DIR");
+    std::unique_ptr<QProgressDialog> progress;
+    if (!automated_tour) {
+      progress = std::make_unique<QProgressDialog>(this);
+      progress->setObjectName("meshGenerationProgressDialog");
+      progress->setWindowTitle(
+          gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+              ? QString::fromUtf8("正在生成网格")
+              : QString("Generating Mesh"));
+      progress->setLabelText(
+          gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+              ? QString::fromUtf8("正在生成 %1D 网格…").arg(dim)
+              : QString("Generating %1D mesh...").arg(dim));
+      progress->setRange(0, 0);
+      progress->setCancelButtonText(
+          gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+              ? QString::fromUtf8("取消")
+              : QString("Cancel"));
+      progress->setMinimumDuration(0);
+      progress->setAutoClose(false);
+      progress->setWindowModality(Qt::ApplicationModal);
+      progress->show();
+    }
+
+    QProcess mesh_process;
+    mesh_process.setProcessChannelMode(QProcess::MergedChannels);
+    QString process_output;
+    int reported_percent = -1;
+    QString reported_phase =
+        gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+            ? QString::fromUtf8("准备几何")
+            : QString("Preparing geometry");
+    const QRegularExpression percent_pattern("\\[\\s*(\\d+)%\\]");
+    auto consume_process_output = [&]() {
+      process_output += QString::fromLocal8Bit(mesh_process.readAll());
+      int newline = -1;
+      while ((newline = process_output.indexOf('\n')) >= 0) {
+        const QString line = process_output.left(newline).trimmed();
+        process_output.remove(0, newline + 1);
+        if (line.isEmpty()) {
+          continue;
+        }
+        append_log(line);
+        if (line.contains("Meshing 1D", Qt::CaseInsensitive)) {
+          reported_phase =
+              gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+                  ? QString::fromUtf8("生成 1D 边网格")
+                  : QString("Generating 1D edge mesh");
+        } else if (line.contains("Meshing 2D", Qt::CaseInsensitive)) {
+          reported_phase =
+              gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+                  ? QString::fromUtf8("生成 2D 面网格")
+                  : QString("Generating 2D surface mesh");
+        } else if (line.contains("Meshing 3D", Qt::CaseInsensitive)) {
+          reported_phase =
+              gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+                  ? QString::fromUtf8("生成 3D 体网格")
+                  : QString("Generating 3D volume mesh");
+        } else if (line.contains("Optimizing mesh", Qt::CaseInsensitive)) {
+          reported_phase =
+              gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+                  ? QString::fromUtf8("优化网格质量")
+                  : QString("Optimizing mesh quality");
+        }
+        const auto match = percent_pattern.match(line);
+        if (match.hasMatch()) {
+          reported_percent = match.captured(1).toInt();
+        }
+      }
+    };
+    connect(&mesh_process, &QProcess::readyReadStandardOutput, &wait_loop,
+            consume_process_output);
+    connect(&mesh_process, &QProcess::finished, &wait_loop,
+            [&wait_loop](int, QProcess::ExitStatus) { wait_loop.quit(); });
+    if (progress) {
+      connect(progress.get(), &QProgressDialog::canceled, &mesh_process,
+              [&mesh_process]() {
+                if (mesh_process.state() != QProcess::NotRunning) {
+                  mesh_process.kill();
+                }
+              });
+    }
+    QTimer progress_timer;
+    progress_timer.setInterval(250);
+    connect(&progress_timer, &QTimer::timeout, &wait_loop,
+            [&elapsed, &progress, &reported_phase, &reported_percent]() {
+              if (progress) {
+                const qint64 seconds = elapsed.elapsed() / 1000;
+                const bool chinese =
+                    gmp::l10n::current_language() ==
+                    gmp::l10n::Language::Chinese;
+                progress->setLabelText(
+                    chinese
+                        ? QString::fromUtf8("%1\n已用时 %2 秒")
+                              .arg(reported_phase)
+                              .arg(seconds)
+                        : QString("%1\nElapsed %2 s")
+                              .arg(reported_phase)
+                              .arg(seconds));
+                if (reported_percent >= 0) {
+                  progress->setRange(0, 100);
+                  progress->setValue(reported_percent);
+                }
+              }
+            });
+    progress_timer.start();
+    mesh_process.start(gmsh_executable, process_args);
+    if (!mesh_process.waitForStarted(3000)) {
+      throw std::runtime_error(
+          QString("Failed to start Gmsh: %1")
+              .arg(mesh_process.errorString())
+              .toStdString());
+    }
+    wait_loop.exec();
+    progress_timer.stop();
+    consume_process_output();
+    if (!process_output.trimmed().isEmpty()) {
+      append_log(process_output.trimmed());
+    }
+    const bool canceled =
+        progress && progress->wasCanceled();
+    progress.reset();
+    if (canceled) {
+      throw std::runtime_error("Mesh generation canceled by the user.");
+    }
+    if (mesh_process.exitStatus() != QProcess::NormalExit ||
+        mesh_process.exitCode() != 0 || !QFileInfo::exists(generated_path)) {
+      throw std::runtime_error(
+          QString("Gmsh process failed (exit code %1).")
+              .arg(mesh_process.exitCode())
+              .toStdString());
+    }
+
+    // 后处理暂时切到生成网格 model；作用域结束自动恢复原 OCC model。
+    ScopedGeneratedMeshModel generated_model(generated_path, restore_path);
     const int boundary_dim = std::max(0, dim - 1);
 
     // 空结果保护：生成不出任何节点时不得写文件或报告成功——空网格既无
@@ -1520,10 +2258,74 @@ void GmshPanel::on_generate() {
           "Mesh generation produced no nodes; refusing to write an empty "
           "mesh file.");
     }
+    if (use_structured_mesh) {
+      std::vector<int> generated_types;
+      std::vector<std::vector<std::size_t>> generated_tags;
+      std::vector<std::vector<std::size_t>> generated_nodes;
+      gmsh::model::mesh::getElements(generated_types, generated_tags,
+                                     generated_nodes, dim);
+      const QString expected = dim == 3 ? "Hexahedron" : "Quadrilateral";
+      for (const int element_type : generated_types) {
+        std::string type_name;
+        int type_dim = 0;
+        int type_order = 0;
+        int type_nodes = 0;
+        int type_primary_nodes = 0;
+        std::vector<double> local_coords;
+        gmsh::model::mesh::getElementProperties(
+            element_type, type_name, type_dim, type_order, type_nodes,
+            local_coords, type_primary_nodes);
+        if (!QString::fromStdString(type_name).contains(expected,
+                                                        Qt::CaseInsensitive)) {
+          throw std::runtime_error(
+              QString("Mapped mesh validation failed: expected only %1 "
+                      "cells, got %2. The previous output was preserved.")
+                  .arg(expected)
+                  .arg(QString::fromStdString(type_name))
+                  .toStdString());
+        }
+      }
+    }
 
     const QString out_path = output_path_->text();
     QDir().mkpath(QFileInfo(out_path).absolutePath());
-    gmsh::write(out_path.toStdString());
+    QFile generated_file(generated_path);
+    if (!generated_file.open(QIODevice::ReadOnly)) {
+      throw std::runtime_error(
+          QString("Could not read generated mesh: %1")
+              .arg(generated_file.errorString())
+              .toStdString());
+    }
+    QSaveFile output_file(out_path);
+    if (!output_file.open(QIODevice::WriteOnly)) {
+      throw std::runtime_error(
+          QString("Could not open mesh output: %1")
+              .arg(output_file.errorString())
+              .toStdString());
+    }
+    while (!generated_file.atEnd()) {
+      const QByteArray chunk = generated_file.read(1024 * 1024);
+      if (chunk.isEmpty() && generated_file.error() != QFile::NoError) {
+        output_file.cancelWriting();
+        throw std::runtime_error(
+            QString("Could not read generated mesh: %1")
+                .arg(generated_file.errorString())
+                .toStdString());
+      }
+      if (output_file.write(chunk) != chunk.size()) {
+        output_file.cancelWriting();
+        throw std::runtime_error(
+            QString("Could not write mesh output: %1")
+                .arg(output_file.errorString())
+                .toStdString());
+      }
+    }
+    if (!output_file.commit()) {
+      throw std::runtime_error(
+          QString("Could not commit mesh output: %1")
+              .arg(output_file.errorString())
+              .toStdString());
+    }
 
     std::vector<std::pair<int, int>> phys_groups;
     gmsh::model::getPhysicalGroups(phys_groups);
@@ -1554,13 +2356,6 @@ void GmshPanel::on_generate() {
     }
     emit volume_groups(volume_names);
 
-    std::vector<std::string> log;
-    gmsh::logger::get(log);
-    gmsh::logger::stop();
-    for (const auto& line : log) {
-      append_log(QString::fromStdString(line));
-    }
-
     append_log("Mesh written: " + out_path);
     emit mesh_written(out_path);
 
@@ -1569,10 +2364,8 @@ void GmshPanel::on_generate() {
     std::vector<std::vector<std::size_t>> element_nodes;
     gmsh::model::mesh::getElements(element_types, element_tags, element_nodes);
     std::size_t elem_count = 0;
-    std::vector<std::size_t> all_element_tags;
     for (const auto& tags : element_tags) {
       elem_count += tags.size();
-      all_element_tags.insert(all_element_tags.end(), tags.begin(), tags.end());
     }
 
     append_log(QString("Nodes: %1, Elements: %2").arg(node_tags.size()).arg(elem_count));
@@ -1585,11 +2378,46 @@ void GmshPanel::on_generate() {
     double quality_mean = 0.0;
     double quality_max = 0.0;
     bool has_quality = false;
-    if (!all_element_tags.empty()) {
+    // minSICN 只对最高维单元有意义。把点/线等低维单元混入查询会让
+    // Gmsh 抛出 "Unknown element type for ordered monomials: 1"，从而把
+    // 一个有效的 3D 网格误报成质量统计失败。
+    std::vector<int> quality_element_types;
+    std::vector<std::vector<std::size_t>> quality_element_tag_groups;
+    std::vector<std::vector<std::size_t>> quality_element_nodes;
+    gmsh::model::mesh::getElements(quality_element_types,
+                                   quality_element_tag_groups,
+                                   quality_element_nodes, dim);
+    std::vector<std::size_t> quality_element_tags;
+    QStringList top_element_composition;
+    for (const auto& tags : quality_element_tag_groups) {
+      quality_element_tags.insert(quality_element_tags.end(), tags.begin(),
+                                  tags.end());
+    }
+    for (std::size_t i = 0; i < quality_element_types.size(); ++i) {
+      std::string type_name;
+      int type_dim = 0;
+      int type_order = 0;
+      int type_nodes = 0;
+      int type_primary_nodes = 0;
+      std::vector<double> local_coords;
+      gmsh::model::mesh::getElementProperties(
+          quality_element_types[i], type_name, type_dim, type_order,
+          type_nodes, local_coords, type_primary_nodes);
+      const std::size_t count = i < quality_element_tag_groups.size()
+                                    ? quality_element_tag_groups[i].size()
+                                    : 0;
+      top_element_composition <<
+          QString("%1=%2").arg(QString::fromStdString(type_name)).arg(count);
+    }
+    if (!top_element_composition.isEmpty()) {
+      append_log("Top-dimensional element composition: " +
+                 top_element_composition.join(", "));
+    }
+    if (dim >= 2 && !quality_element_tags.empty()) {
       try {
         std::vector<double> qualities;
-        qualities.resize(all_element_tags.size());
-        gmsh::model::mesh::getElementQualities(all_element_tags, qualities,
+        qualities.resize(quality_element_tags.size());
+        gmsh::model::mesh::getElementQualities(quality_element_tags, qualities,
                                                "minSICN");
         double qmin = qualities.front();
         double qmax = qualities.front();
@@ -1695,9 +2523,10 @@ void GmshPanel::on_generate() {
       manifest.insert("element_count", static_cast<int>(elem_count));
       QString dominant_type;
       std::size_t dominant_count = 0;
-      for (std::size_t t = 0; t < element_types.size(); ++t) {
-        if (t < element_tags.size() && element_tags[t].size() > dominant_count) {
-          dominant_count = element_tags[t].size();
+      for (std::size_t t = 0; t < quality_element_types.size(); ++t) {
+        if (t < quality_element_tag_groups.size() &&
+            quality_element_tag_groups[t].size() > dominant_count) {
+          dominant_count = quality_element_tag_groups[t].size();
           std::string type_name;
           int etype_dim = 0;
           int etype_order = 0;
@@ -1705,7 +2534,8 @@ void GmshPanel::on_generate() {
           int num_primary_nodes = 0;
           std::vector<double> local_coords;
           gmsh::model::mesh::getElementProperties(
-              element_types[t], type_name, etype_dim, etype_order, num_nodes,
+              quality_element_types[t], type_name, etype_dim, etype_order,
+              num_nodes,
               local_coords, num_primary_nodes);
           dominant_type = QString::fromStdString(type_name);
         }
@@ -1723,10 +2553,72 @@ void GmshPanel::on_generate() {
           QString("Physical group manifest collection failed: %1").arg(ex.what()));
     }
     success = true;
-    completion_message = "Mesh generated.";
+    if (!structured_fallback_reason.isEmpty()) {
+      completion_message =
+          gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+              ? QString::fromUtf8(
+                    "网格已生成（已回退为%1）：%2。若要结构化砖形网格，请先将"
+                    "几何划分为可扫掠六面块。")
+                    .arg(dim == 3 ? QString::fromUtf8("四面体")
+                                  : QString::fromUtf8("三角形"))
+                    .arg(structured_fallback_reason)
+              : QString("Mesh generated with %1 fallback: %2. Partition the "
+                        "geometry into sweepable blocks for a structured mesh.")
+                    .arg(dim == 3 ? "tetrahedral" : "triangular")
+                    .arg(structured_fallback_reason);
+    } else {
+      completion_message = "Mesh generated.";
+    }
   } catch (const std::exception& ex) {
-    completion_message = QString("Gmsh error: %1").arg(ex.what());
+    if (logger_started) {
+      try {
+        std::vector<std::string> log;
+        gmsh::logger::get(log);
+        gmsh::logger::stop();
+        logger_started = false;
+        for (const auto& line : log) {
+          append_log(QString::fromStdString(line));
+        }
+      } catch (...) {
+      }
+    }
+    if (!size_guard_rejected && !structured_mode_rejected) {
+      completion_message = QString("Gmsh error: %1").arg(ex.what());
+    }
     append_log(completion_message);
+    if ((size_guard_rejected || structured_mode_rejected) &&
+        !qEnvironmentVariableIsSet("GMP_SCREENSHOT_DIR")) {
+      QMessageBox::warning(
+          this,
+          structured_mode_rejected
+              ? (gmp::l10n::current_language() ==
+                         gmp::l10n::Language::Chinese
+                     ? QString::fromUtf8("无法生成严格结构化网格")
+                     : QString("Strict Structured Mesh Unavailable"))
+              : (gmp::l10n::current_language() ==
+                         gmp::l10n::Language::Chinese
+                     ? QString::fromUtf8("网格尺寸过细")
+                     : QString("Mesh Size Too Fine")),
+          completion_message);
+    }
+  }
+  // ScopedGeneratedMeshModel 已销毁后再做一次显式恢复，确保同步的
+  // mesh_generation_finished 观察者看到的是部件 OCC 模型而非离散模型。
+  if (!external_model_name_.isEmpty()) {
+    try {
+      std::vector<std::string> model_names;
+      gmsh::model::list(model_names);
+      const std::string expected = external_model_name_.toStdString();
+      if (std::find(model_names.begin(), model_names.end(), expected) !=
+          model_names.end()) {
+        gmsh::model::setCurrent(expected);
+      } else {
+        std::string restored_model;
+        gmsh::model::getCurrent(restored_model);
+        external_model_name_ = QString::fromStdString(restored_model);
+      }
+    } catch (...) {
+    }
   }
   set_mesh_generation_running(false);
   emit mesh_generation_finished(success, completion_message);
@@ -2163,6 +3055,84 @@ void GmshPanel::apply_entity_pick(int dim, int tag) {
 #endif
 }
 
+bool GmshPanel::validate_physical_group_input(int dim, int exclude_tag,
+                                              QString* error) const {
+#ifdef GMP_ENABLE_GMSH_GUI
+  const bool zh =
+      gmp::l10n::current_language() == gmp::l10n::Language::Chinese;
+  auto fail = [error, zh](const QString& en, const QString& zh_msg) {
+    if (error) {
+      *error = zh ? zh_msg : en;
+    }
+    return false;
+  };
+  if (dim < 0 || dim > 3) {
+    return fail(QString("invalid dimension %1 (expected 0-3).").arg(dim),
+                QString::fromUtf8("维度 %1 非法（应为 0~3）。").arg(dim));
+  }
+  const QString name =
+      phys_group_name_ ? phys_group_name_->text().trimmed() : QString();
+  if (name.isEmpty()) {
+    return fail("name is empty; please enter a group name.",
+                QString::fromUtf8("名称为空，请输入物理组名称。"));
+  }
+  const QString entities_text =
+      phys_group_entities_ ? phys_group_entities_->text() : QString();
+  if (entities_text.trimmed().isEmpty()) {
+    return fail("no entities selected; pick at least one entity.",
+                QString::fromUtf8("未选择实体，请至少选择一个实体。"));
+  }
+  const auto tokens = parse_dim_tag_tokens(entities_text);
+  if (tokens.empty()) {
+    return fail("Entities contains no valid entity IDs.",
+                QString::fromUtf8("实体列表中没有合法的实体编号。"));
+  }
+  for (const auto& token : tokens) {
+    if (token.has_dim && token.dim != dim) {
+      return fail(QString("entity %1:%2 does not match group dimension %3.")
+                      .arg(token.dim)
+                      .arg(token.tag)
+                      .arg(dim),
+                  QString::fromUtf8("实体 %1:%2 的维度与物理组维度 %3 不一致。")
+                      .arg(token.dim)
+                      .arg(token.tag)
+                      .arg(dim));
+    }
+  }
+  if (resolve_entity_tags(dim, entities_text).empty()) {
+    return fail(
+        QString("selection has no existing entities of dimension %1.").arg(dim),
+        QString::fromUtf8("所选内容中没有维度 %1 的现存实体。").arg(dim));
+  }
+  std::vector<std::pair<int, int>> groups;
+  gmsh::model::getPhysicalGroups(groups, dim);
+  for (const auto& g : groups) {
+    if (g.second == exclude_tag) {
+      continue;
+    }
+    std::string existing;
+    gmsh::model::getPhysicalName(dim, g.second, existing);
+    if (QString::fromStdString(existing).trimmed() == name) {
+      return fail(QString("name \"%1\" is already used by physical group "
+                          "%2:%3.")
+                      .arg(name)
+                      .arg(dim)
+                      .arg(g.second),
+                  QString::fromUtf8("名称“%1”已被物理组 %2:%3 使用。")
+                      .arg(name)
+                      .arg(dim)
+                      .arg(g.second));
+    }
+  }
+  return true;
+#else
+  Q_UNUSED(dim);
+  Q_UNUSED(exclude_tag);
+  Q_UNUSED(error);
+  return false;
+#endif
+}
+
 void GmshPanel::on_physical_group_add() {
 #ifndef GMP_ENABLE_GMSH_GUI
   append_log("Gmsh is not enabled in this build.");
@@ -2171,16 +3141,15 @@ void GmshPanel::on_physical_group_add() {
   try {
     ensure_gmsh();
     const int dim = phys_group_dim_->currentData().toInt();
-    const auto tags = resolve_entity_tags(dim, phys_group_entities_->text());
-    if (tags.empty()) {
-      append_log("Physical group add: no valid entities.");
+    QString error;
+    if (!validate_physical_group_input(dim, -1, &error)) {
+      append_log(QString("Physical group add rejected: %1").arg(error));
       return;
     }
-    const std::string name = phys_group_name_->text().toStdString();
+    const auto tags = resolve_entity_tags(dim, phys_group_entities_->text());
+    const std::string name = phys_group_name_->text().trimmed().toStdString();
     const int group_tag = gmsh::model::addPhysicalGroup(dim, tags, -1, name);
-    if (!name.empty()) {
-      gmsh::model::setPhysicalName(dim, group_tag, name);
-    }
+    gmsh::model::setPhysicalName(dim, group_tag, name);
     update_physical_group_list();
     append_log(QString("Physical group added: %1:%2").arg(dim).arg(group_tag));
   } catch (const std::exception& ex) {
@@ -2210,17 +3179,16 @@ void GmshPanel::on_physical_group_update() {
       append_log("Update: invalid group selection.");
       return;
     }
-    const auto tags = resolve_entity_tags(dim, phys_group_entities_->text());
-    if (tags.empty()) {
-      append_log("Update: no valid entities.");
+    QString error;
+    if (!validate_physical_group_input(dim, tag, &error)) {
+      append_log(QString("Physical group update rejected: %1").arg(error));
       return;
     }
+    const auto tags = resolve_entity_tags(dim, phys_group_entities_->text());
     gmsh::model::removePhysicalGroups({{dim, tag}});
-    const std::string name = phys_group_name_->text().toStdString();
+    const std::string name = phys_group_name_->text().trimmed().toStdString();
     gmsh::model::addPhysicalGroup(dim, tags, tag, name);
-    if (!name.empty()) {
-      gmsh::model::setPhysicalName(dim, tag, name);
-    }
+    gmsh::model::setPhysicalName(dim, tag, name);
     update_physical_group_list();
     append_log(QString("Physical group updated: %1:%2").arg(dim).arg(tag));
   } catch (const std::exception& ex) {

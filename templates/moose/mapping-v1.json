@@ -33,8 +33,10 @@
       "objects": {
         "GlobalParams": {
           "required_params": [],
-          "optional_params": [],
-          "param_schema": {}
+          "optional_params": ["displacements"],
+          "param_schema": {
+            "displacements": { "type": "variable_list", "label": "位移变量" }
+          }
         }
       }
     },
@@ -100,6 +102,41 @@
             "displacements": { "type": "variable_list", "label": "位移变量" },
             "strain": { "type": "enum", "enum": ["SMALL", "FINITE"], "label": "应变模型" }
           }
+        },
+        "QuasiStatic": {
+          "block_path": "Physics/SolidMechanics/QuasiStatic",
+          "required_params": ["block", "strain"],
+          "optional_params": [
+            "volumetric_locking_correction", "add_variables", "incremental",
+            "generate_output", "save_in", "displacements"
+          ],
+          "param_schema": {
+            "block": { "type": "physical_group_list", "dim": 3, "label": "作用区域" },
+            "strain": { "type": "enum", "enum": ["SMALL", "FINITE"], "label": "应变模型" },
+            "volumetric_locking_correction": { "type": "bool", "label": "体积自锁修正" },
+            "add_variables": { "type": "bool", "label": "自动添加位移变量" },
+            "incremental": { "type": "bool", "label": "增量形式" },
+            "generate_output": { "type": "variable_list", "label": "场输出量" },
+            "save_in": { "type": "variable_list", "label": "残差保存变量" }
+          }
+        },
+        "CDPQuasiStatic": {
+          "block_path": "Physics/SolidMechanics/CDPQuasiStatic",
+          "required_params": ["block", "strain"],
+          "optional_params": [
+            "volumetric_locking_correction", "add_variables", "incremental",
+            "generate_output", "save_in", "displacements"
+          ],
+          "param_schema": {
+            "block": { "type": "physical_group_list", "dim": 3, "label": "作用区域" },
+            "strain": { "type": "enum", "enum": ["SMALL", "FINITE"], "label": "应变模型" },
+            "volumetric_locking_correction": { "type": "bool", "label": "体积自锁修正" },
+            "add_variables": { "type": "bool", "label": "自动添加位移变量" },
+            "incremental": { "type": "bool", "label": "增量形式" },
+            "generate_output": { "type": "variable_list", "label": "场输出量" },
+            "save_in": { "type": "variable_list", "label": "残差保存变量" }
+          },
+          "support_note": "仅当应用档案 extra.physics_action 声明时提供。"
         }
       }
     },
@@ -127,6 +164,21 @@
             "rank_two_tensor": { "type": "material_property_ref", "label": "二阶张量" },
             "index_i": { "type": "integer", "label": "指标 i" },
             "index_j": { "type": "integer", "label": "指标 j" }
+          }
+        },
+        "MaterialRealAux": {
+          "required_params": ["type", "variable", "property"],
+          "optional_params": ["block", "execute_on", "boundary"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "MaterialRealAux", "readonly": true },
+            "variable": { "type": "variable_ref", "label": "变量" },
+            "property": {
+              "type": "material_property_ref",
+              "label": "材料属性",
+              "naming_convention": "cdp_*（DamageC/DamageT 同名，其余 cdp_<名>）"
+            },
+            "block": { "type": "physical_group_list", "dim": 3, "label": "作用区域" },
+            "execute_on": { "type": "string", "label": "执行时机" }
           }
         }
       }
@@ -204,6 +256,16 @@
             "value": { "type": "scalar", "label": "边界值" }
           }
         },
+        "FunctionDirichletBC": {
+          "required_params": ["type", "variable", "boundary", "function"],
+          "optional_params": ["preset"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "FunctionDirichletBC", "readonly": true },
+            "variable": { "type": "variable_ref", "label": "变量" },
+            "boundary": { "type": "physical_group_list", "dim": 2, "label": "边界" },
+            "function": { "type": "function_ref", "label": "函数" }
+          }
+        },
         "NeumannBC": {
           "required_params": ["type", "variable", "boundary", "value"],
           "optional_params": ["function"],
@@ -224,6 +286,15 @@
           "param_schema": {
             "type": { "type": "enum", "value": "ParsedFunction", "readonly": true },
             "expression": { "type": "string", "label": "表达式" }
+          }
+        },
+        "PiecewiseLinear": {
+          "required_params": ["type", "x", "y"],
+          "optional_params": [],
+          "param_schema": {
+            "type": { "type": "enum", "value": "PiecewiseLinear", "readonly": true },
+            "x": { "type": "scalar_list", "unit": "time", "label": "横坐标数据点" },
+            "y": { "type": "scalar_list", "label": "纵坐标数据点" }
           }
         }
       }
@@ -265,12 +336,45 @@
       "objects": {
         "Transient": {
           "required_params": ["type", "end_time", "dt", "solve_type"],
-          "optional_params": ["dtmin", "dtmax", "num_steps", "l_max_its", "nl_max_its"],
+          "optional_params": [
+            "start_time", "dtmin", "dtmax", "num_steps",
+            "l_max_its", "nl_max_its", "nl_rel_tol", "nl_abs_tol",
+            "line_search", "automatic_scaling",
+            "petsc_options_iname", "petsc_options_value"
+          ],
           "param_schema": {
             "type": { "type": "enum", "value": "Transient", "readonly": true },
+            "start_time": { "type": "scalar", "unit": "time", "label": "起始时间" },
             "end_time": { "type": "scalar", "unit": "time", "label": "终止时间" },
             "dt": { "type": "scalar", "unit": "time", "label": "初始时间步" },
-            "solve_type": { "type": "enum", "enum": ["PJFNK", "NEWTON"], "label": "求解类型" }
+            "num_steps": { "type": "integer", "label": "最大步数" },
+            "solve_type": { "type": "enum", "enum": ["PJFNK", "NEWTON"], "label": "求解类型" },
+            "line_search": {
+              "type": "enum",
+              "enum": ["bt", "basic", "none", "cp", "l2", "shell", "default"],
+              "label": "线搜索"
+            },
+            "automatic_scaling": { "type": "bool", "label": "自动缩放" },
+            "nl_rel_tol": { "type": "scalar", "label": "非线性相对容差" },
+            "nl_abs_tol": { "type": "scalar", "label": "非线性绝对容差" },
+            "petsc_options_iname": { "type": "string", "label": "PETSc 选项名" },
+            "petsc_options_value": { "type": "string", "label": "PETSc 选项值" }
+          }
+        },
+        "IterationAdaptiveDT": {
+          "sub_block": "TimeStepper",
+          "required_params": ["type", "dt"],
+          "optional_params": [
+            "optimal_iterations", "iteration_window",
+            "growth_factor", "cutback_factor"
+          ],
+          "param_schema": {
+            "type": { "type": "enum", "value": "IterationAdaptiveDT", "readonly": true },
+            "dt": { "type": "scalar", "unit": "time", "label": "初始时间步" },
+            "optimal_iterations": { "type": "integer", "label": "最优迭代数" },
+            "iteration_window": { "type": "integer", "label": "迭代窗口" },
+            "growth_factor": { "type": "scalar", "label": "增长因子" },
+            "cutback_factor": { "type": "scalar", "label": "回退因子" }
           }
         },
         "Steady": {
@@ -290,7 +394,8 @@
           "required_params": ["type"],
           "optional_params": ["full", "pc_hypre", "petsc_options"],
           "param_schema": {
-            "type": { "type": "enum", "value": "SMP", "readonly": true }
+            "type": { "type": "enum", "value": "SMP", "readonly": true },
+            "full": { "type": "bool", "label": "完整矩阵" }
           }
         }
       }
@@ -305,6 +410,49 @@
             "type": { "type": "enum", "value": "NodalVariableValue", "readonly": true },
             "variable": { "type": "variable_ref", "label": "变量" },
             "nodeid": { "type": "integer", "label": "节点编号" }
+          }
+        },
+        "NodalSum": {
+          "required_params": ["type", "variable", "boundary"],
+          "optional_params": ["execute_on"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "NodalSum", "readonly": true },
+            "variable": { "type": "variable_ref", "label": "变量" },
+            "boundary": { "type": "physical_group_list", "dim": 2, "label": "边界" }
+          }
+        },
+        "AverageNodalVariableValue": {
+          "required_params": ["type", "variable", "boundary"],
+          "optional_params": ["execute_on"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "AverageNodalVariableValue", "readonly": true },
+            "variable": { "type": "variable_ref", "label": "变量" },
+            "boundary": { "type": "physical_group_list", "dim": 2, "label": "边界" }
+          }
+        },
+        "ElementExtremeValue": {
+          "required_params": ["type", "variable", "value_type"],
+          "optional_params": ["block", "execute_on"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "ElementExtremeValue", "readonly": true },
+            "variable": { "type": "variable_ref", "label": "变量" },
+            "value_type": { "type": "enum", "enum": ["min", "max"], "label": "极值类型" },
+            "block": { "type": "physical_group_list", "dim": 3, "label": "作用区域" }
+          }
+        }
+      }
+    },
+    "Times": {
+      "description": "输出时间序列",
+      "objects": {
+        "TimeIntervalTimes": {
+          "required_params": ["type", "time_interval"],
+          "optional_params": ["start_time", "end_time"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "TimeIntervalTimes", "readonly": true },
+            "start_time": { "type": "scalar", "unit": "time", "label": "起始时间" },
+            "end_time": { "type": "scalar", "unit": "time", "label": "终止时间" },
+            "time_interval": { "type": "scalar", "unit": "time", "label": "时间间隔" }
           }
         }
       }
@@ -328,17 +476,25 @@
       "objects": {
         "Exodus": {
           "required_params": ["type"],
-          "optional_params": ["interval", "sync_only", "sync_times", "file_base"],
+          "optional_params": ["interval", "sync_only", "sync_times", "sync_times_object", "execute_on", "file_base"],
           "param_schema": {
             "type": { "type": "enum", "value": "Exodus", "readonly": true },
-            "interval": { "type": "integer", "label": "输出间隔" }
+            "interval": { "type": "integer", "label": "输出间隔" },
+            "sync_only": { "type": "bool", "label": "仅按同步时间输出" },
+            "sync_times_object": { "type": "times_ref", "label": "同步时间对象" },
+            "execute_on": { "type": "string", "label": "执行时机" },
+            "file_base": { "type": "string", "label": "输出文件名前缀" }
           }
         },
         "CSV": {
           "required_params": ["type"],
-          "optional_params": ["interval", "sync_only"],
+          "optional_params": ["interval", "sync_only", "sync_times_object", "execute_on", "file_base"],
           "param_schema": {
-            "type": { "type": "enum", "value": "CSV", "readonly": true }
+            "type": { "type": "enum", "value": "CSV", "readonly": true },
+            "sync_only": { "type": "bool", "label": "仅按同步时间输出" },
+            "sync_times_object": { "type": "times_ref", "label": "同步时间对象" },
+            "execute_on": { "type": "string", "label": "执行时机" },
+            "file_base": { "type": "string", "label": "输出文件名前缀" }
           }
         },
         "Console": {
@@ -355,6 +511,6 @@
     "Mesh", "GlobalParams", "Variables", "ICs", "Kernels", "Physics",
     "AuxVariables", "AuxKernels", "Materials", "BCs", "Functions",
     "Constraints", "Contact", "Executioner", "Preconditioning",
-    "Postprocessors", "VectorPostprocessors", "Outputs"
+    "Postprocessors", "VectorPostprocessors", "Times", "Outputs"
   ]
 }

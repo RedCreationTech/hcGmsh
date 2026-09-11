@@ -19,6 +19,7 @@
 #include <QListWidget>
 #include <QRegularExpression>
 #include <QSet>
+#include <QScrollArea>
 #include <QDialog>
 #include <QFileDialog>
 #include <QPlainTextEdit>
@@ -29,6 +30,27 @@
 #include "gmp/ComboPopupFix.h"
 
 namespace gmp {
+
+namespace {
+
+// W-03d：场输出变量多选候选（v01 验收基线的 8 个 CDP 诊断量）。
+// AuxKernels 的 property 命名约定（DamageC/DamageT 同名、其余 cdp_<名>）
+// 由 MainWindow 生成侧实现，两处保持一致。
+const QStringList kCdpFieldOutputVariables = {
+    "DamageC",       "DamageT",           "kappa_c",
+    "kappa_t",       "local_iterations",  "accepted_substeps",
+    "jacobian_fallbacks", "integration_microseconds"};
+
+// W-03b：Physics generate_output 默认值（v01 验收基线 16 项；
+// 另有 max/mid/min_principal_strain 3 项候选可手补）。
+// 与 MainWindow.cpp default_params_for_kind("Physics") 的默认值保持一致。
+const char* kPhysicsGenerateOutputDefault =
+    "stress_xx stress_xy stress_xz stress_yy stress_yz stress_zz "
+    "strain_xx strain_xy strain_xz strain_yy strain_yz strain_zz "
+    "max_principal_stress mid_principal_stress min_principal_stress "
+    "vonmises_stress";
+
+}  // namespace
 
 PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   auto* layout = new QVBoxLayout(this);
@@ -62,12 +84,24 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   tabs_->addTab(general_tab_, "General");
 
   params_tab_ = new QWidget(this);
-  auto* params_layout = new QVBoxLayout(params_tab_);
+  // 参数页内容包一层滚动区：弹窗高度固定（记忆尺寸），内容超出时页内
+  // 滚动，不再撑高窗口；滚动只此一层（I-01 禁止外层整窗滚动）。
+  auto* params_page_layout = new QVBoxLayout(params_tab_);
+  params_page_layout->setContentsMargins(0, 0, 0, 0);
+  auto* params_scroll = new QScrollArea(params_tab_);
+  params_scroll->setObjectName("paramsTabScroll");
+  params_scroll->setWidgetResizable(true);
+  params_scroll->setFrameShape(QFrame::NoFrame);
+  auto* params_content = new QWidget(params_scroll);
+  auto* params_layout = new QVBoxLayout(params_content);
 
   form_box_ = new QGroupBox("Quick Parameters", params_tab_);
   form_layout_ = new QFormLayout(form_box_);
   form_layout_->setRowWrapPolicy(QFormLayout::DontWrapRows);
   form_layout_->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+  // 高级参数表格展开时，快捷表单不得被挤压到 sizeHint 以下（否则行重叠/
+  // 截断）；空间缺口由带滚动条的高级表格区吸收。
+  form_box_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
   params_layout->addWidget(form_box_);
 
   groups_box_ = new QGroupBox("Groups", params_tab_);
@@ -75,6 +109,7 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   groups_hint_ = new QLabel("Select physical groups to apply.", groups_box_);
   groups_hint_->setStyleSheet("color: #444;");
   groups_list_ = new QListWidget(groups_box_);
+  groups_list_->setObjectName("propertyGroupsList");
   groups_list_->setSelectionMode(QAbstractItemView::ExtendedSelection);
   groups_list_->setMaximumHeight(120);
   groups_summary_ = new QLabel("Selected:", groups_box_);
@@ -84,11 +119,13 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   groups_chips_layout_->setContentsMargins(0, 0, 0, 0);
   groups_chips_layout_->setSpacing(6);
   apply_groups_btn_ = new QPushButton("Apply Groups", groups_box_);
+  apply_groups_btn_->setObjectName("applyGroupsBtn");
   groups_layout->addWidget(groups_hint_);
   groups_layout->addWidget(groups_list_, 1);
   groups_layout->addWidget(groups_summary_);
   groups_layout->addWidget(groups_chips_container_);
   groups_layout->addWidget(apply_groups_btn_);
+  groups_box_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
   params_layout->addWidget(groups_box_);
 
   advanced_toggle_ = new QCheckBox("Advanced Parameters", params_tab_);
@@ -128,12 +165,16 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   buttons->addWidget(remove_param_btn_);
   buttons->addStretch(1);
   params_container_layout->addWidget(params_buttons_container_);
-  params_layout->addWidget(params_container_);
+  params_table_->setMinimumHeight(120);
+  // 高级表格区吃拉伸（也吸收空间不足），快捷表单/组区保持完整高度。
+  params_layout->addWidget(params_container_, 1);
 
   validation_label_ = new QLabel(params_tab_);
   validation_label_->setStyleSheet("color: #b00020;");
   validation_label_->setWordWrap(true);
   params_layout->addWidget(validation_label_);
+  params_scroll->setWidget(params_content);
+  params_page_layout->addWidget(params_scroll);
 
   auto* validation_tab = new QWidget(this);
   auto* validation_page_layout = new QVBoxLayout(validation_tab);
@@ -261,6 +302,20 @@ void PropertyEditor::set_volume_groups(const QStringList& names) {
 void PropertyEditor::set_display_unit_factors(
     const QMap<QString, double>& factors) {
   display_unit_factors_ = factors;
+}
+
+void PropertyEditor::set_physics_action_options(const QStringList& options) {
+  physics_action_options_ = options.isEmpty() ? QStringList{"QuasiStatic"}
+                                              : options;
+  if (current_item_) {
+    const QString kind =
+        current_item_->data(0, kKindRole).toString().isEmpty()
+            ? current_item_->text(0)
+            : current_item_->data(0, kKindRole).toString();
+    if (kind == "Physics") {
+      refresh_form_options();
+    }
+  }
 }
 
 double PropertyEditor::display_unit_factor(const QString& quantity,
@@ -588,7 +643,8 @@ void PropertyEditor::on_apply_groups() {
       current_item_->data(0, kKindRole).toString().isEmpty()
           ? current_item_->text(0)
           : current_item_->data(0, kKindRole).toString();
-  if (kind != "BC" && kind != "Loads") {
+  if (kind != "BC" && kind != "Loads" && kind != "Sections" &&
+      kind != "Physics" && kind != "Outputs") {
     return;
   }
   QStringList selected;
@@ -604,7 +660,11 @@ void PropertyEditor::on_apply_groups() {
   QVariantMap params = current_item_->data(0, kParamsRole).toMap();
   if (kind == "BC") {
     params.insert("boundary", selected.join(" "));
+  } else if (kind == "Outputs") {
+    // W-03d：历史输出套餐的面组（反力/平均位移共用）。
+    params.insert("hist_boundary", selected.join(" "));
   } else {
+    // Loads/Sections/Physics（W-03b）：体组写入 block。
     params.insert("block", selected.join(" "));
   }
   current_item_->setData(0, kParamsRole, params);
@@ -616,27 +676,36 @@ void PropertyEditor::update_group_widget_for_kind(const QString& kind) {
   if (!groups_box_ || !groups_list_) {
     return;
   }
-  if (kind != "BC" && kind != "Loads") {
+  if (kind != "BC" && kind != "Loads" && kind != "Sections" &&
+      kind != "Physics" && kind != "Outputs") {
     groups_box_->setVisible(false);
     return;
   }
   groups_box_->setVisible(true);
   groups_list_->clear();
-  QStringList source =
-      kind == "BC" ? boundary_groups_ : volume_groups_;
+  // W-03b：Physics block 用体组；W-03d：Outputs 历史输出面组用面组。
+  const bool use_boundary = (kind == "BC" || kind == "Outputs");
+  QStringList source = use_boundary ? boundary_groups_ : volume_groups_;
   groups_list_->addItems(source);
   if (groups_hint_) {
-    groups_hint_->setText(kind == "BC"
+    groups_hint_->setText(use_boundary
                               ? "Apply selection to boundary."
-                              : "Apply selection to block.");
+                              : (kind == "Sections"
+                                     ? "Apply selection to assigned volumes."
+                                     : "Apply selection to block."));
   }
   if (groups_box_) {
-    groups_box_->setTitle(kind == "BC" ? "Boundary Groups" : "Volume Groups");
+    groups_box_->setTitle(use_boundary ? "Boundary Groups"
+                                       : (kind == "Sections"
+                                              ? "Physical Volumes"
+                                              : "Volume Groups"));
   }
   const QVariantMap params =
       current_item_ ? current_item_->data(0, kParamsRole).toMap()
                     : QVariantMap();
-  const QString key = kind == "BC" ? "boundary" : "block";
+  const QString key = kind == "BC" ? "boundary"
+                                   : (kind == "Outputs" ? "hist_boundary"
+                                                        : "block");
   const QString current = params.value(key).toString().trimmed();
   const QStringList selected =
       current.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
@@ -893,6 +962,12 @@ QStringList PropertyEditor::validate_params(const QString& kind,
   } else if (kind == "Sections") {
     require_key("type");
     require_key("material");
+    // W-01b：材料被删除/重命名后引用悬空，Section 标为有问题。
+    const QString material = params.value("material").toString().trimmed();
+    if (!material.isEmpty() &&
+        !collect_model_names("Materials").contains(material)) {
+      missing << "material reference";
+    }
   } else if (kind == "Steps") {
     const QString type = params.value("type").toString();
     if (type.isEmpty()) {
@@ -911,6 +986,25 @@ QStringList PropertyEditor::validate_params(const QString& kind,
       if (ok_end && end_time <= 0.0) {
         missing << "end_time must be > 0";
       }
+    }
+  } else if (kind == "Functions") {
+    // W-03c：ParsedFunction 需 expression；PiecewiseLinear 需 x/y 数据对
+    // 且个数一致（复载曲线）。
+    const QString type = params.value("type").toString();
+    if (type == "PiecewiseLinear") {
+      require_key("x");
+      require_key("y");
+      const QStringList xs =
+          params.value("x").toString().split(QRegularExpression("\\s+"),
+                                             Qt::SkipEmptyParts);
+      const QStringList ys =
+          params.value("y").toString().split(QRegularExpression("\\s+"),
+                                             Qt::SkipEmptyParts);
+      if (!xs.isEmpty() && !ys.isEmpty() && xs.size() != ys.size()) {
+        missing << "x/y count mismatch";
+      }
+    } else {
+      require_key("expression");
     }
   } else if (kind == "BC") {
     const QString type = params.value("type").toString();
@@ -935,6 +1029,26 @@ QStringList PropertyEditor::validate_params(const QString& kind,
       require_key("diffusivity");
     } else if (type == "TensorMechanics") {
       require_key("displacements");
+    }
+  } else if (kind == "Physics") {
+    // W-03b：Physics action 合同（v01）。block 允许暂空（生成侧警告），
+    // action/strain 必填。
+    require_key("action");
+    require_key("strain");
+  } else if (kind == "Outputs") {
+    // W-03d：勾选历史输出套餐后面组必填；Times 勾选后间隔必填；
+    // 极值套餐勾选后变量列表必填。
+    const auto enabled = [&params](const QString& key) {
+      return params.value(key).toString().trimmed() == "true";
+    };
+    if (enabled("hist_reaction_force") || enabled("hist_displacement_avg")) {
+      require_key("hist_boundary");
+    }
+    if (enabled("times_enabled")) {
+      require_key("times_interval");
+    }
+    if (enabled("hist_extremum")) {
+      require_key("hist_extremum_variables");
     }
   }
   return missing;
@@ -1026,12 +1140,38 @@ QVariantMap PropertyEditor::build_type_template(const QString& kind,
     t.insert("material", mat);
   } else if (kind == "Steps") {
     if (type == "Transient") {
-      t.insert("dt", "0.1");
-      t.insert("end_time", "1.0");
-      t.insert("scheme", "bdf2");
+      // W-03e：v01 验收基线默认值（与 default_params_for_kind 对齐）。
+      t.insert("start_time", "0");
+      t.insert("end_time", "1");
       t.insert("solve_type", "NEWTON");
+      t.insert("line_search", "bt");
+      t.insert("automatic_scaling", "true");
+      t.insert("nl_rel_tol", "1e-9");
+      t.insert("nl_abs_tol", "1e-8");
+      t.insert("nl_max_its", "50");
+      t.insert("num_steps", "100000");
+      t.insert("dtmin", "1e-15");
+      t.insert("dtmax", "1");
+      t.insert("petsc_options_iname", "-pc_type -pc_factor_mat_solver_type");
+      t.insert("petsc_options_value", "lu mumps");
+      t.insert("timestepper_type", "IterationAdaptiveDT");
+      t.insert("dt", "0.01");
+      t.insert("optimal_iterations", "8");
+      t.insert("iteration_window", "3");
+      t.insert("growth_factor", "1.15");
+      t.insert("cutback_factor", "0.5");
+      t.insert("preconditioning_type", "SMP");
+      t.insert("preconditioning_full", "true");
     } else if (type == "Steady") {
       t.insert("solve_type", "NEWTON");
+    }
+  } else if (kind == "Functions") {
+    // W-03c：函数类型默认。PiecewiseLinear 给最小单调数据对占位。
+    if (type == "PiecewiseLinear") {
+      t.insert("x", "0 1");
+      t.insert("y", "0 1");
+    } else {
+      t.insert("expression", "1.0");
     }
   } else if (kind == "BC") {
     t.insert("variable", var);
@@ -1053,6 +1193,16 @@ QVariantMap PropertyEditor::build_type_template(const QString& kind,
     } else if (type == "MatDiffusion") {
       t.insert("diffusivity", "diff_u");
     }
+  } else if (kind == "Physics") {
+    // W-03b：v01 验收基线默认值（与 default_params_for_kind 对齐）；
+    // block 不覆盖（由 Section 指派/chips 填入）。
+    t.insert("action", "QuasiStatic");
+    t.insert("volumetric_locking_correction", "true");
+    t.insert("add_variables", "true");
+    t.insert("incremental", "true");
+    t.insert("strain", "SMALL");
+    t.insert("generate_output", QLatin1String(kPhysicsGenerateOutputDefault));
+    t.insert("save_in_resid", "true");
   }
   return t;
 }
@@ -1243,7 +1393,7 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     return;
   }
   const QSet<QString> supported = {"Materials", "Sections", "Steps", "BC",
-                                   "Loads"};
+                                   "Loads", "Functions", "Physics", "Outputs"};
   if (!supported.contains(kind)) {
     form_box_->setVisible(false);
     return;
@@ -1318,9 +1468,13 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
   };
 
   auto add_combo = [this](const QString& label, const QString& key,
-                          const QStringList& items) {
+                          const QStringList& items,
+                          const QString& object_name = QString()) {
     auto* combo = new QComboBox(form_box_);
     install_combo_popup_fix(combo);
+    if (!object_name.isEmpty()) {
+      combo->setObjectName(object_name);
+    }
     combo->addItems(items);
     combo->setEditable(true);
     form_layout_->addRow(label, combo);
@@ -1329,6 +1483,61 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
             [this, key](const QString& value) {
               set_param_value(key, value);
             });
+  };
+
+  // W-03e：分组小标题（占满整行），用于 Step 表单的基本/求解控制/
+  // 时间步进/预处理分组。
+  auto add_section = [this](const QString& text) {
+    auto* label = new QLabel(text, form_box_);
+    label->setStyleSheet("font-weight: 600; color: #333; padding-top: 6px;");
+    form_layout_->addRow(label);
+  };
+
+  // W-03d：checkbox 多选组（param 值 = 选中项按候选顺序空格拼接）。
+  // 每行 4 个，候选为 MOOSE 标识符（不翻译）。
+  auto add_checkbox_group = [this](const QString& label, const QString& key,
+                                   const QStringList& options,
+                                   const QString& object_name) {
+    auto* row = new QWidget(form_box_);
+    auto* row_layout = new QVBoxLayout(row);
+    row_layout->setContentsMargins(0, 0, 0, 0);
+    row_layout->setSpacing(2);
+    QHBoxLayout* line = nullptr;
+    for (int i = 0; i < options.size(); ++i) {
+      if (i % 4 == 0) {
+        line = new QHBoxLayout();
+        line->setContentsMargins(0, 0, 0, 0);
+        line->setSpacing(8);
+        row_layout->addLayout(line);
+      }
+      auto* box = new QCheckBox(options.at(i), row);
+      box->setObjectName(object_name + "_" + options.at(i));
+      line->addWidget(box);
+      if (i % 4 == 3 || i == options.size() - 1) {
+        line->addStretch(1);
+      }
+    }
+    form_layout_->addRow(label, row);
+    form_widgets_.insert(key, row);
+    for (auto* box : row->findChildren<QCheckBox*>()) {
+      connect(box, &QCheckBox::toggled, this,
+              [this, key, row, options](bool) {
+                if (form_updating_) {
+                  return;
+                }
+                QStringList selected;
+                const auto boxes = row->findChildren<QCheckBox*>();
+                for (const auto& opt : options) {
+                  for (auto* candidate : boxes) {
+                    if (candidate->text() == opt && candidate->isChecked()) {
+                      selected << opt;
+                      break;
+                    }
+                  }
+                }
+                set_param_value(key, selected.join(" "));
+              });
+    }
   };
 
   if (kind == "Materials") {
@@ -1399,24 +1608,75 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
                  "cdpTensionDamageFile");
   } else if (kind == "Sections") {
     add_combo("Type", "type", {"SolidSection"});
-    add_combo("Material", "material", materials);
+    add_combo("Material", "material", materials, "sectionMaterial");
+    add_line("Physical Volumes", "block", "sectionBlock");
   } else if (kind == "Steps") {
-    add_combo("Type", "type", {"Transient", "Steady"});
-    add_line("dt", "dt");
-    add_line("end_time", "end_time");
-    add_combo("solve_type", "solve_type", {"NEWTON", "PJFNK"});
-    add_combo("scheme", "scheme", {"bdf2", "implicit-euler"});
-    add_line("nl_max_its", "nl_max_its");
-    add_line("l_max_its", "l_max_its");
-    add_line("nl_abs_tol", "nl_abs_tol");
-    add_line("l_tol", "l_tol");
+    // W-03e：Step→Executioner/TimeStepper/Preconditioning 表单
+    // （*Static 四参数语义），分组：基本/求解控制/时间步进/预处理。
+    add_section("Basic");
+    add_combo("Type", "type", {"Transient", "Steady"}, "stepType");
+    add_line("start_time", "start_time", "stepStartTime");
+    add_line("end_time", "end_time", "stepEndTime");
+    add_line("num_steps", "num_steps", "stepNumSteps");
+    add_section("Solve Control");
+    add_combo("solve_type", "solve_type", {"NEWTON", "PJFNK"},
+              "stepSolveType");
+    add_combo("line_search", "line_search",
+              {"bt", "basic", "none", "cp", "l2", "shell", "default"},
+              "stepLineSearch");
+    add_combo("automatic_scaling", "automatic_scaling", {"true", "false"},
+              "stepAutomaticScaling");
+    add_line("nl_rel_tol", "nl_rel_tol", "stepNlRelTol");
+    add_line("nl_abs_tol", "nl_abs_tol", "stepNlAbsTol");
+    add_line("nl_max_its", "nl_max_its", "stepNlMaxIts");
+    add_line("petsc_options_iname", "petsc_options_iname",
+             "stepPetscOptionsIname");
+    add_line("petsc_options_value", "petsc_options_value",
+             "stepPetscOptionsValue");
+    add_combo("scheme", "scheme", {"bdf2", "implicit-euler"}, "stepScheme");
+    add_line("l_max_its", "l_max_its", "stepLMaxIts");
+    add_line("l_tol", "l_tol", "stepLTol");
+    add_section("Time Stepping");
+    add_combo("timestepper_type", "timestepper_type", {"IterationAdaptiveDT"},
+              "stepTimeStepperType");
+    add_line("dt", "dt", "stepDt");
+    add_line("optimal_iterations", "optimal_iterations",
+             "stepOptimalIterations");
+    add_line("iteration_window", "iteration_window", "stepIterationWindow");
+    add_line("growth_factor", "growth_factor", "stepGrowthFactor");
+    add_line("cutback_factor", "cutback_factor", "stepCutbackFactor");
+    add_line("dtmin", "dtmin", "stepDtMin");
+    add_line("dtmax", "dtmax", "stepDtMax");
+    add_section("Preconditioning");
+    add_combo("preconditioning_type", "preconditioning_type", {"SMP"},
+              "stepPreconditioningType");
+    add_combo("preconditioning_full", "preconditioning_full",
+              {"true", "false"}, "stepPreconditioningFull");
+  } else if (kind == "Functions") {
+    // W-03c：ParsedFunction（expression）/ PiecewiseLinear（x/y 数据对，
+    // 空格分隔，个数需一致）。
+    add_combo("Type", "type", {"ParsedFunction", "PiecewiseLinear"},
+              "functionTypeCombo");
+    add_line("Expression", "expression", "functionExpression");
+    add_line("X Values", "x", "functionXValues");
+    add_line("Y Values", "y", "functionYValues");
   } else if (kind == "BC") {
+    // W-03c：variable 候选 = Variables 节点 ∪ 常见位移变量名；
+    // boundary 继续用物理组 chips；FunctionDirichletBC 的 function 下拉
+    // 引用 Functions 节点子项名称。
+    QStringList variable_candidates = variables;
+    for (const auto& candidate : {"disp_x", "disp_y", "disp_z", "u", "v"}) {
+      if (!variable_candidates.contains(QLatin1String(candidate))) {
+        variable_candidates << QLatin1String(candidate);
+      }
+    }
     add_combo("Type", "type", {"DirichletBC", "FunctionDirichletBC",
-                               "NeumannBC"});
-    add_combo("Variable", "variable", variables);
-    add_line("Boundary", "boundary");
-    add_line("Value", "value");
-    add_combo("Function", "function", functions);
+                               "NeumannBC"},
+              "bcTypeCombo");
+    add_combo("Variable", "variable", variable_candidates, "bcVariableCombo");
+    add_line("Boundary", "boundary", "bcBoundaryEdit");
+    add_line("Value", "value", "bcValueEdit");
+    add_combo("Function", "function", functions, "bcFunctionCombo");
   } else if (kind == "Loads") {
     add_combo("Type", "type",
               {"BodyForce", "TimeDerivative", "MatDiffusion",
@@ -1426,6 +1686,56 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     add_combo("Function", "function", functions);
     add_line("Diffusivity", "diffusivity");
     add_line("Displacements", "displacements");
+  } else if (kind == "Physics") {
+    // W-03b：Physics action 快捷表单（v01 QuasiStatic 口径）。
+    // block 行编辑 + 体组 chips（groups_box_）；CDPQuasiStatic 候选仅在
+    // 档案 extra.physics_action 声明时由 MainWindow 注入。
+    add_section("Physics Action");
+    add_combo("Action", "action", physics_action_options_,
+              "physicsActionCombo");
+    add_line("Block", "block", "physicsBlockEdit");
+    add_combo("Strain", "strain", {"SMALL", "FINITE"}, "physicsStrainCombo");
+    add_combo("volumetric_locking_correction", "volumetric_locking_correction",
+              {"true", "false"}, "physicsVolumetricLocking");
+    add_combo("incremental", "incremental", {"true", "false"},
+              "physicsIncremental");
+    add_combo("add_variables", "add_variables", {"true", "false"},
+              "physicsAddVariables");
+    add_line("generate_output", "generate_output", "physicsGenerateOutput");
+    add_combo("save_in_resid", "save_in_resid", {"true", "false"},
+              "physicsSaveInResid");
+  } else if (kind == "Outputs") {
+    // W-03d：场/历史输出套餐快捷表单。场输出变量多选（8 个 CDP 诊断量
+    // checkbox 组）；历史输出套餐勾选（反力/平均位移/极值，面组 chips
+    // 写入 hist_boundary）；Times + Exodus/CSV 落盘开关。
+    add_section("Field Output");
+    add_checkbox_group("Field Variables", "field_outputs",
+                       kCdpFieldOutputVariables, "outputsFieldOutputs");
+    add_section("History Output");
+    add_combo("Reaction Force", "hist_reaction_force", {"false", "true"},
+              "outputsHistReactionForce");
+    add_combo("Displacement Avg", "hist_displacement_avg", {"false", "true"},
+              "outputsHistDisplacementAvg");
+    add_combo("Extremum", "hist_extremum", {"false", "true"},
+              "outputsHistExtremum");
+    add_line("History Boundary", "hist_boundary", "outputsHistBoundary");
+    add_line("Disp Variable", "hist_disp_variable", "outputsHistDispVariable");
+    add_line("Extremum Variables", "hist_extremum_variables",
+             "outputsHistExtremumVars");
+    add_line("Extremum Types", "hist_extremum_types",
+             "outputsHistExtremumTypes");
+    add_section("Times");
+    add_combo("Enable Times", "times_enabled", {"false", "true"},
+              "outputsTimesEnabled");
+    add_line("Times Name", "times_name", "outputsTimesName");
+    add_line("start_time", "times_start", "outputsTimesStart");
+    add_line("end_time", "times_end", "outputsTimesEnd");
+    add_line("time_interval", "times_interval", "outputsTimesInterval");
+    add_section("Output Files");
+    add_combo("Exodus", "output_exodus", {"true", "false"},
+              "outputsExodusEnabled");
+    add_combo("CSV", "output_csv", {"true", "false"}, "outputsCsvEnabled");
+    add_line("file_base", "file_base", "outputsFileBase");
   }
 
   const QString default_var = variables.isEmpty() ? "u" : variables.first();
@@ -1576,6 +1886,8 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     template_preview_ = new QPlainTextEdit(template_tabs_);
     template_preview_->setReadOnly(true);
     template_tabs_->addTab(template_preview_, "Preview");
+    // 模板说明只是只读的模板描述预览，限制高度避免喧宾夺主。
+    template_tabs_->setMaximumHeight(72);
     form_layout_->addRow("Template Info", template_tabs_);
   }
   if (template_combo_) {
@@ -1697,9 +2009,22 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
         set_row_visible("eigenstrain_name", true);
       }
     } else if (kind == "Steps") {
+      // W-03e：时间相关字段仅 Transient 显示；求解控制/预处理通用。
       const bool is_transient = (type != "Steady");
-      set_row_visible("dt", is_transient);
-      set_row_visible("end_time", is_transient);
+      const QStringList transient_keys = {
+          "start_time",     "end_time",      "num_steps",
+          "timestepper_type", "dt",          "optimal_iterations",
+          "iteration_window", "growth_factor", "cutback_factor",
+          "dtmin",          "dtmax"};
+      for (const auto& key : transient_keys) {
+        set_row_visible(key, is_transient);
+      }
+    } else if (kind == "Functions") {
+      // W-03c：ParsedFunction ↔ expression；PiecewiseLinear ↔ x/y 数据对。
+      const bool piecewise = (type == "PiecewiseLinear");
+      set_row_visible("expression", !piecewise);
+      set_row_visible("x", piecewise);
+      set_row_visible("y", piecewise);
     } else if (kind == "BC") {
       const bool use_function = (type == "FunctionDirichletBC");
       set_row_visible("function", use_function);
@@ -1758,6 +2083,13 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
       // 文件选择行：容器内第一个 QLineEdit 承载参数值。
       if (auto* edit = it.value()->findChild<QLineEdit*>()) {
         edit->setText(value);
+      } else {
+        // W-03d checkbox 多选组：按空格分隔值回显选中态。
+        const QStringList tokens = value.split(QRegularExpression("\\s+"),
+                                               Qt::SkipEmptyParts);
+        for (auto* box : it.value()->findChildren<QCheckBox*>()) {
+          box->setChecked(tokens.contains(box->text()));
+        }
       }
     }
   }
