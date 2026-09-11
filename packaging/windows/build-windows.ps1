@@ -147,6 +147,126 @@ if ($CondaPrefix) {
 # 依赖 DLL (VTK / Gmsh / yaml-cpp / OCC / HDF5 等传递依赖)
 Copy-Item (Join-Path $dllDir "*.dll") $dist
 
+# 校验应用及 Qt 动态插件的 PE 依赖闭包。Conda 的大部分 DLL 位于
+# Library\bin，但 python3xx.dll 等运行时位于环境根目录；仅复制前者会导致
+# 包在 CI 机器可运行、在干净客户机启动失败。这里会补齐能在构建环境找到的
+# 传递依赖，并让任何遗漏在 Action 内直接失败。GMP-ISE 不嵌入 Python，因此
+# Python 运行时依赖属于 VTK 链接范围回归，不能静默带入发布包。
+function Find-Dumpbin {
+  $command = Get-Command "dumpbin.exe" -ErrorAction SilentlyContinue
+  if ($command) { return $command.Source }
+
+  $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
+  if (-not (Test-Path $vswhere)) {
+    throw "dumpbin.exe and vswhere.exe are unavailable; cannot validate packaged DLL dependencies"
+  }
+  $vsInstall = & $vswhere -latest -products * `
+    -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+    -property installationPath
+  if (-not $vsInstall) {
+    throw "Visual Studio C++ tools were not found; cannot validate packaged DLL dependencies"
+  }
+  $matches = Get-ChildItem `
+    (Join-Path $vsInstall "VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe") `
+    -File -ErrorAction SilentlyContinue | Sort-Object FullName -Descending
+  if (-not $matches) {
+    throw "dumpbin.exe was not found under Visual Studio: $vsInstall"
+  }
+  return $matches[0].FullName
+}
+
+function Get-ImportedDllNames([string]$Binary, [string]$Dumpbin) {
+  $output = & $Dumpbin /nologo /dependents $Binary 2>&1
+  if ($LASTEXITCODE -ne 0) {
+    throw "dumpbin failed for '$Binary':`n$($output -join "`n")"
+  }
+  return @($output | ForEach-Object {
+    if ($_ -match '^\s+([A-Za-z0-9_.+-]+\.dll)\s*$') { $Matches[1] }
+  } | Sort-Object -Unique)
+}
+
+function Test-WindowsSystemDll([string]$Name) {
+  if ($Name -match '^(api-ms-win-|ext-ms-win-)') { return $true }
+  foreach ($systemDir in @(
+    (Join-Path $env:SystemRoot "System32"),
+    (Join-Path $env:SystemRoot "SysWOW64")
+  )) {
+    if (Test-Path (Join-Path $systemDir $Name)) { return $true }
+  }
+  return $false
+}
+
+function Find-PackagedDll([string]$Name, [string]$Root) {
+  return Get-ChildItem $Root -Recurse -File -Filter $Name -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+}
+
+$dumpbin = Find-Dumpbin
+$runtimeSearchDirs = @($dllDir)
+if ($CondaPrefix) { $runtimeSearchDirs += $CondaPrefix }
+if ($QtDir) { $runtimeSearchDirs += (Join-Path $QtDir "bin") }
+
+$dependencyRoots = @((Join-Path $dist "gmp_ise.exe"))
+foreach ($pluginDir in @("platforms", "styles", "imageformats")) {
+  $path = Join-Path $dist $pluginDir
+  if (Test-Path $path) {
+    $dependencyRoots += @(Get-ChildItem $path -Filter "*.dll" -File | ForEach-Object FullName)
+  }
+}
+
+$queue = [System.Collections.Generic.Queue[string]]::new()
+$seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+$missingDependencies = [System.Collections.Generic.List[string]]::new()
+$pythonDependencies = [System.Collections.Generic.List[string]]::new()
+foreach ($root in $dependencyRoots) { $queue.Enqueue($root) }
+
+while ($queue.Count -gt 0) {
+  $binary = $queue.Dequeue()
+  $binaryKey = [System.IO.Path]::GetFullPath($binary)
+  if (-not $seen.Add($binaryKey)) { continue }
+
+  foreach ($dependency in (Get-ImportedDllNames $binary $dumpbin)) {
+    if ($dependency -match '^python(?:3|\d{2,})\.dll$') {
+      $pythonDependencies.Add("$([System.IO.Path]::GetFileName($binary)) -> $dependency")
+    }
+
+    $bundled = Find-PackagedDll $dependency $dist
+    if ($bundled) {
+      $queue.Enqueue($bundled.FullName)
+      continue
+    }
+    if (Test-WindowsSystemDll $dependency) { continue }
+
+    $source = $null
+    foreach ($searchDir in $runtimeSearchDirs) {
+      $candidate = Join-Path $searchDir $dependency
+      if (Test-Path $candidate) {
+        $source = $candidate
+        break
+      }
+    }
+    if ($source) {
+      $target = Join-Path $dist $dependency
+      Copy-Item $source $target -Force
+      Write-Host "==> 补齐传递运行时: $dependency"
+      $queue.Enqueue($target)
+      continue
+    }
+
+    $missingDependencies.Add("$([System.IO.Path]::GetFileName($binary)) -> $dependency")
+  }
+}
+
+if ($pythonDependencies.Count -gt 0) {
+  $details = $pythonDependencies | Sort-Object -Unique
+  throw "Unexpected Python runtime dependency detected; check VTK component linkage:`n$($details -join "`n")"
+}
+if ($missingDependencies.Count -gt 0) {
+  $details = $missingDependencies | Sort-Object -Unique
+  throw "Packaged runtime dependency closure is incomplete:`n$($details -join "`n")"
+}
+Write-Host "==> DLL 依赖闭包校验通过 ($($seen.Count) 个二进制文件)"
+
 $zip = Join-Path $RepoRoot "gmp_ise-windows-x64.zip"
 if (Test-Path $zip) { Remove-Item $zip -Force }
 Compress-Archive -Path (Join-Path $dist "*") -DestinationPath $zip

@@ -27,7 +27,29 @@ if(GMP_ENABLE_PARAVIEW OR GMP_ENABLE_CATALYST)
 endif()
 
 if(GMP_ENABLE_VTK_VIEWER)
-  find_package(VTK REQUIRED)
+  # Request only the modules used by GMP-ISE. Some VTK distributions export
+  # every installed module when no component list is supplied, including the
+  # Python wrappers. That made the Windows executable depend on the build
+  # environment's python3xx.dll although GMP-ISE does not embed Python.
+  find_package(VTK REQUIRED COMPONENTS
+    CommonCore
+    CommonDataModel
+    CommonExecutionModel
+    FiltersCore
+    FiltersGeneral
+    FiltersGeometry
+    FiltersModeling
+    FiltersVerdict
+    GUISupportQt
+    IOExodus
+    IOImage
+    InteractionStyle
+    InteractionWidgets
+    RenderingAnnotation
+    RenderingCore
+    RenderingFreeType
+    RenderingOpenGL2
+  )
 endif()
 
 if(GMP_ENABLE_GMSH_GUI)
