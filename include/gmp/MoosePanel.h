@@ -50,9 +50,11 @@ class MoosePanel : public QWidget {
   void remote_cancel_done(const QVariantMap& result);
   void remote_file_downloaded(const QString& job_id, const QString& file_path,
                               const QString& local_path);
+  void mesh_path_changed(const QString& path);
 
  public slots:
   void set_mesh_path(const QString& path);
+  void set_mesh_paths(const QStringList& paths);
   void set_boundary_groups(const QStringList& names);
   void apply_model_blocks(const QString& functions,
                           const QString& variables,
@@ -165,7 +167,7 @@ class MoosePanel : public QWidget {
   QComboBox* exec_path_ = nullptr;
   QLineEdit* input_path_ = nullptr;
   QLineEdit* workdir_path_ = nullptr;
-  QLineEdit* mesh_path_ = nullptr;
+  QComboBox* mesh_path_ = nullptr;
   QLineEdit* extra_args_ = nullptr;
   QCheckBox* use_mpi_ = nullptr;
   QSpinBox* mpi_ranks_ = nullptr;

@@ -30,6 +30,7 @@
 #include <QSaveFile>
 #include <QScrollArea>
 #include <QSet>
+#include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStandardPaths>
 #include <QTableWidget>
@@ -359,14 +360,21 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
 
   auto* model_box = new QGroupBox("Model");
   auto* model_form = new QFormLayout(model_box);
-  geo_path_ = new QLineEdit();
-  geo_path_->setReadOnly(true);
-  geo_path_->setPlaceholderText("No geometry loaded");
+  model_selector_ = new QComboBox();
+  model_selector_->setObjectName("gmshModelSelector");
+  model_selector_->setPlaceholderText("No geometry loaded");
+  tune_gmsh_combo(model_selector_, 180, 240);
+  geo_path_ = new QLineEdit(this);  // 持久化导入路径，不再作为只读展示控件。
+  geo_path_->hide();
+  connect(model_selector_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+          this, [this](int index) {
+            activate_model(index);
+          });
   auto* open_geo = new QPushButton("Open Geometry");
   connect(open_geo, &QPushButton::clicked, this, &GmshPanel::on_open_geometry);
   auto* clear_geo = new QPushButton("Clear Model");
   connect(clear_geo, &QPushButton::clicked, this, &GmshPanel::on_clear_model);
-  model_form->addRow("Geometry", geo_path_);
+  model_form->addRow("Geometry", model_selector_);
   auto* model_actions = new QHBoxLayout();
   model_actions->addWidget(open_geo);
   model_actions->addWidget(clear_geo);
@@ -1146,6 +1154,7 @@ bool GmshPanel::import_geometry(const QString& path, bool auto_mesh) {
     gmsh::logger::start();
     gmsh::clear();
     external_model_name_.clear();
+    model_selector_->clear();
     gmsh::model::add("imported");
 
     const QString ext = QFileInfo(path).suffix().toLower();
@@ -1222,14 +1231,7 @@ bool GmshPanel::import_geometry(const QString& path, bool auto_mesh) {
             .arg(path)
             .arg(entities.size()));
 
-    geo_path_->setText(path);
-    model_loaded_ = true;
-    use_sample_box_->setChecked(false);
-    update_entity_summary();
-    update_entity_list();
-    update_physical_group_list();
-    update_field_list();
-    refresh_occ_entity_template_lists();
+    note_external_model_loaded(path);
     restore_abort_on_error();
 
     append_log("Geometry loaded: " + path);
@@ -1251,6 +1253,7 @@ bool GmshPanel::import_geometry(const QString& path, bool auto_mesh) {
   } catch (...) {
   }
   external_model_name_.clear();
+  model_selector_->clear();
   model_loaded_ = false;
   if (geo_path_) {
     geo_path_->clear();
@@ -1264,7 +1267,46 @@ bool GmshPanel::import_geometry(const QString& path, bool auto_mesh) {
 #endif
 }
 
-void GmshPanel::note_external_model_loaded(const QString& label) {
+bool GmshPanel::activate_model(int index) {
+  if (!model_selector_ || index < 0 || index >= model_selector_->count()) {
+    return false;
+  }
+  external_model_name_ = model_selector_->itemData(index).toString();
+  geo_path_->setText(model_selector_->itemText(index));
+#ifdef GMP_ENABLE_GMSH_GUI
+  try {
+    std::vector<std::string> model_names;
+    gmsh::model::list(model_names);
+    const std::string expected = external_model_name_.toStdString();
+    if (std::find(model_names.begin(), model_names.end(), expected) ==
+        model_names.end()) {
+      const QString source_path =
+          model_selector_->itemData(index, Qt::UserRole + 1).toString();
+      if (source_path.isEmpty() || !QFileInfo::exists(source_path)) {
+        return false;
+      }
+      gmsh::model::add(expected);
+      gmsh::vectorpair imported;
+      gmsh::model::occ::importShapes(source_path.toStdString(), imported, true,
+                                     "brep");
+      gmsh::model::occ::synchronize();
+    }
+    gmsh::model::setCurrent(expected);
+  } catch (...) {
+    return false;
+  }
+#endif
+  model_loaded_ = true;
+  update_entity_summary();
+  update_entity_list();
+  update_physical_group_list();
+  update_field_list();
+  refresh_occ_entity_template_lists();
+  return true;
+}
+
+void GmshPanel::note_external_model_loaded(const QString& label,
+                                           const QString& source_path) {
   // 部件特征等外部通道已把几何放进 Gmsh 模型；同步面板状态，
   // 避免“生成网格”按空模型清空模型改画示例盒（on_generate 1469 守卫）。
   model_loaded_ = true;
@@ -1283,11 +1325,75 @@ void GmshPanel::note_external_model_loaded(const QString& label) {
   if (geo_path_ && !label.isEmpty()) {
     geo_path_->setText(label);
   }
+  if (model_selector_ && !external_model_name_.isEmpty()) {
+    int index = model_selector_->findText(label);
+    if (index < 0) {
+      model_selector_->addItem(label, external_model_name_);
+      index = model_selector_->count() - 1;
+    } else {
+      model_selector_->setItemData(index, external_model_name_);
+    }
+    if (!source_path.isEmpty()) {
+      model_selector_->setItemData(index, source_path, Qt::UserRole + 1);
+    }
+    model_selector_->setCurrentIndex(index);
+    activate_model(index);  // 同一项被再次选择时 currentIndexChanged 不会发出。
+  }
   update_entity_summary();
   update_entity_list();
   update_physical_group_list();
   update_field_list();
   refresh_occ_entity_template_lists();
+}
+
+void GmshPanel::restore_external_models(const QVariantMap& sources,
+                                        const QString& selected_label) {
+  if (!model_selector_) {
+    return;
+  }
+#ifdef GMP_ENABLE_GMSH_GUI
+  ensure_gmsh();
+  gmsh::clear();
+#endif
+  external_model_name_.clear();
+  model_loaded_ = false;
+  geo_path_->clear();
+  const QSignalBlocker blocker(model_selector_);
+  model_selector_->clear();
+  for (auto it = sources.cbegin(); it != sources.cend(); ++it) {
+    model_selector_->addItem(it.key(), it.key());
+    model_selector_->setItemData(model_selector_->count() - 1,
+                                 it.value().toString(), Qt::UserRole + 1);
+  }
+  int index = model_selector_->findText(selected_label);
+  if (index < 0 && model_selector_->count() > 0) {
+    index = 0;
+  }
+  model_selector_->setCurrentIndex(index);
+  if (index < 0 || !activate_model(index)) {
+    update_entity_summary();
+    update_entity_list();
+    update_physical_group_list();
+    update_field_list();
+    refresh_occ_entity_template_lists();
+  }
+}
+
+void GmshPanel::select_external_model(const QString& label) {
+  if (!model_selector_) {
+    return;
+  }
+  const int index = model_selector_->findText(label);
+  if (index >= 0) {
+    model_selector_->setCurrentIndex(index);
+    activate_model(index);
+  }
+}
+
+void GmshPanel::set_mesh_output_path(const QString& path) {
+  if (output_path_ && !path.isEmpty()) {
+    output_path_->setText(path);
+  }
 }
 
 QVariantMap GmshPanel::gmsh_settings() const {
@@ -1319,6 +1425,8 @@ QVariantMap GmshPanel::gmsh_settings() const {
   map.insert("recombine", topology_mode != 1);
   map.insert("smoothing", smoothing_ ? smoothing_->value() : 10);
   map.insert("output_path", output_path_ ? output_path_->text() : "");
+  map.insert("model_source",
+             model_selector_ ? model_selector_->currentText() : "");
   const QString geo_path = geo_path_ ? geo_path_->text() : "";
   if (!geo_path.isEmpty() && QFileInfo::exists(geo_path)) {
     map.insert("geometry_path", geo_path);
@@ -1588,6 +1696,7 @@ void GmshPanel::on_clear_model() {
   ensure_gmsh();
   gmsh::clear();
   external_model_name_.clear();
+  model_selector_->clear();
   model_loaded_ = false;
   geo_path_->clear();
   update_entity_summary();
@@ -1727,7 +1836,9 @@ void GmshPanel::on_generate() {
           model_names.end()) {
         gmsh::model::setCurrent(expected);
       } else {
-        external_model_name_.clear();
+        throw std::runtime_error(
+            "The selected part model is no longer available. Select it again "
+            "or rebuild the part before generating the mesh.");
       }
     }
 
@@ -1786,6 +1897,7 @@ void GmshPanel::on_generate() {
       }
       gmsh::clear();
       external_model_name_.clear();
+      model_selector_->clear();
       gmsh::model::add("box_model");
       const int box = gmsh::model::occ::addBox(0, 0, 0, dx, dy, dz);
       gmsh::model::occ::synchronize();
@@ -1805,6 +1917,8 @@ void GmshPanel::on_generate() {
       }
       model_loaded_ = true;
       geo_path_->setText("sample: box");
+      model_selector_->addItem("sample: box", "box_model");
+      model_selector_->setCurrentIndex(0);
     } else {
       gmsh::model::mesh::clear();
     }
@@ -1985,8 +2099,12 @@ void GmshPanel::on_generate() {
     }
     const QString source_path =
         mesh_temp_dir.filePath("current_model.geo_unrolled");
+    QString restore_model_name = external_model_name_.isEmpty()
+                                     ? QString("current_model_restore")
+                                     : external_model_name_;
+    restore_model_name.replace(QRegularExpression("[^A-Za-z0-9_.-]"), "_");
     const QString restore_path =
-        mesh_temp_dir.filePath("current_model_restore.geo_unrolled");
+        mesh_temp_dir.filePath(restore_model_name + ".geo_unrolled");
     const auto generated_sequence = generated_mesh_model_sequence.fetch_add(
         1, std::memory_order_relaxed);
     const QString generated_path = mesh_temp_dir.filePath(
@@ -2123,13 +2241,15 @@ void GmshPanel::on_generate() {
           gmp::l10n::current_language() == gmp::l10n::Language::Chinese
               ? QString::fromUtf8("正在生成 %1D 网格…").arg(dim)
               : QString("Generating %1D mesh...").arg(dim));
-      progress->setRange(0, 0);
+      progress->setRange(0, 100);
+      progress->setValue(0);
       progress->setCancelButtonText(
           gmp::l10n::current_language() == gmp::l10n::Language::Chinese
               ? QString::fromUtf8("取消")
               : QString("Cancel"));
       progress->setMinimumDuration(0);
       progress->setAutoClose(false);
+      progress->setAutoReset(false);
       progress->setWindowModality(Qt::ApplicationModal);
       progress->show();
     }
@@ -2137,14 +2257,24 @@ void GmshPanel::on_generate() {
     QProcess mesh_process;
     mesh_process.setProcessChannelMode(QProcess::MergedChannels);
     QString process_output;
-    int reported_percent = -1;
+    int reported_percent = 0;
+    int progress_base = 0;
+    int progress_span = 3;
+    int reported_step = 1;
+    int optimization_passes = 0;
+    // ponytail: Gmsh CLI 不给节点插入总数；用预检单元数/8 估算，仅用于
+    // 阶段内反馈。若 CLI 后续提供总量，直接替换该估算。
+    const double estimated_insertions =
+        std::max(1.0, estimated_elements / 8.0);
     QString reported_phase =
         gmp::l10n::current_language() == gmp::l10n::Language::Chinese
             ? QString::fromUtf8("准备几何")
             : QString("Preparing geometry");
     const QRegularExpression percent_pattern("\\[\\s*(\\d+)%\\]");
+    const QRegularExpression iteration_pattern("\\bIt\\.\\s*(\\d+)\\s*-");
     auto consume_process_output = [&]() {
       process_output += QString::fromLocal8Bit(mesh_process.readAll());
+      process_output.replace('\r', '\n');
       int newline = -1;
       while ((newline = process_output.indexOf('\n')) >= 0) {
         const QString line = process_output.left(newline).trimmed();
@@ -2153,22 +2283,47 @@ void GmshPanel::on_generate() {
           continue;
         }
         append_log(line);
-        if (line.contains("Meshing 1D", Qt::CaseInsensitive)) {
+        if (line.contains("Done meshing 1D", Qt::CaseInsensitive)) {
+          reported_percent = std::max(reported_percent, 3);
+        } else if (line.contains("Done meshing 2D", Qt::CaseInsensitive)) {
+          reported_percent = std::max(reported_percent, 33);
+        } else if (line.contains("Done meshing 3D", Qt::CaseInsensitive)) {
+          reported_percent = std::max(reported_percent, 67);
+        } else if (line.contains("Done optimizing mesh",
+                                 Qt::CaseInsensitive)) {
+          reported_percent = 99;
+        } else if (line.contains("Meshing 1D", Qt::CaseInsensitive)) {
+          reported_percent = 0;
+          progress_base = 0;
+          progress_span = 3;
+          reported_step = 1;
           reported_phase =
               gmp::l10n::current_language() == gmp::l10n::Language::Chinese
                   ? QString::fromUtf8("生成 1D 边网格")
                   : QString("Generating 1D edge mesh");
         } else if (line.contains("Meshing 2D", Qt::CaseInsensitive)) {
+          reported_percent = 3;
+          progress_base = 3;
+          progress_span = 30;
+          reported_step = 1;
           reported_phase =
               gmp::l10n::current_language() == gmp::l10n::Language::Chinese
                   ? QString::fromUtf8("生成 2D 面网格")
                   : QString("Generating 2D surface mesh");
         } else if (line.contains("Meshing 3D", Qt::CaseInsensitive)) {
+          reported_percent = 33;
+          progress_base = 33;
+          progress_span = 34;
+          reported_step = 2;
           reported_phase =
               gmp::l10n::current_language() == gmp::l10n::Language::Chinese
                   ? QString::fromUtf8("生成 3D 体网格")
                   : QString("Generating 3D volume mesh");
         } else if (line.contains("Optimizing mesh", Qt::CaseInsensitive)) {
+          reported_percent = 67;
+          progress_base = 67;
+          progress_span = 32;
+          reported_step = 3;
           reported_phase =
               gmp::l10n::current_language() == gmp::l10n::Language::Chinese
                   ? QString::fromUtf8("优化网格质量")
@@ -2176,7 +2331,53 @@ void GmshPanel::on_generate() {
         }
         const auto match = percent_pattern.match(line);
         if (match.hasMatch()) {
-          reported_percent = match.captured(1).toInt();
+          reported_percent = std::max(
+              reported_percent,
+              std::min(99, progress_base +
+                               match.captured(1).toInt() * progress_span / 100));
+        }
+        const auto iteration = iteration_pattern.match(line);
+        if (reported_step == 2 && iteration.hasMatch()) {
+          const double fraction = std::min(
+              1.0, iteration.captured(1).toDouble() / estimated_insertions);
+          reported_percent = std::max(
+              reported_percent, 48 + static_cast<int>(17.0 * fraction));
+        } else if (reported_step == 2) {
+          if (line.contains("Done tetrahedrizing", Qt::CaseInsensitive)) {
+            reported_percent = std::max(reported_percent, 38);
+          } else if (line.contains("Tetrahedrizing", Qt::CaseInsensitive)) {
+            reported_percent = std::max(reported_percent, 35);
+          } else if (line.contains("Done reconstructing mesh",
+                                   Qt::CaseInsensitive)) {
+            reported_percent = std::max(reported_percent, 47);
+          } else if (line.contains("Reconstructing mesh",
+                                   Qt::CaseInsensitive)) {
+            reported_percent = std::max(reported_percent, 40);
+          } else if (line.contains("Creating surface mesh",
+                                   Qt::CaseInsensitive)) {
+            reported_percent = std::max(reported_percent, 42);
+          } else if (line.contains("Identifying boundary",
+                                   Qt::CaseInsensitive)) {
+            reported_percent = std::max(reported_percent, 44);
+          } else if (line.contains("Recovering boundary",
+                                   Qt::CaseInsensitive)) {
+            reported_percent = std::max(reported_percent, 45);
+          } else if (line.contains("Found volume", Qt::CaseInsensitive)) {
+            reported_percent = std::max(reported_percent, 48);
+          } else if (line.contains("3D refinement terminated",
+                                   Qt::CaseInsensitive)) {
+            reported_percent = std::max(reported_percent, 66);
+          }
+        } else if (reported_step == 3) {
+          if (line.contains("Optimization starts", Qt::CaseInsensitive)) {
+            reported_percent = std::max(reported_percent, 72);
+          } else if (line.contains("edge swaps", Qt::CaseInsensitive)) {
+            ++optimization_passes;
+            reported_percent = std::max(
+                reported_percent, std::min(97, 74 + optimization_passes * 7));
+          } else if (line.contains("No ill-shaped", Qt::CaseInsensitive)) {
+            reported_percent = std::max(reported_percent, 98);
+          }
         }
       }
     };
@@ -2195,7 +2396,8 @@ void GmshPanel::on_generate() {
     QTimer progress_timer;
     progress_timer.setInterval(250);
     connect(&progress_timer, &QTimer::timeout, &wait_loop,
-            [&elapsed, &progress, &reported_phase, &reported_percent]() {
+            [&elapsed, &progress, &reported_phase, &reported_percent,
+             &reported_step]() {
               if (progress) {
                 const qint64 seconds = elapsed.elapsed() / 1000;
                 const bool chinese =
@@ -2203,16 +2405,16 @@ void GmshPanel::on_generate() {
                     gmp::l10n::Language::Chinese;
                 progress->setLabelText(
                     chinese
-                        ? QString::fromUtf8("%1\n已用时 %2 秒")
+                        ? QString::fromUtf8("第 %1/3 步 · %2\n已用时 %3 秒")
+                              .arg(reported_step)
                               .arg(reported_phase)
                               .arg(seconds)
-                        : QString("%1\nElapsed %2 s")
+                        : QString("Step %1/3 · %2\nElapsed %3 s")
+                              .arg(reported_step)
                               .arg(reported_phase)
                               .arg(seconds));
-                if (reported_percent >= 0) {
-                  progress->setRange(0, 100);
-                  progress->setValue(reported_percent);
-                }
+                progress->setRange(0, 100);
+                progress->setValue(reported_percent);
               }
             });
     progress_timer.start();
@@ -2231,7 +2433,6 @@ void GmshPanel::on_generate() {
     }
     const bool canceled =
         progress && progress->wasCanceled();
-    progress.reset();
     if (canceled) {
       throw std::runtime_error("Mesh generation canceled by the user.");
     }
@@ -2242,6 +2443,11 @@ void GmshPanel::on_generate() {
               .arg(mesh_process.exitCode())
               .toStdString());
     }
+    if (progress) {
+      progress->setValue(100);
+      QApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
+    }
+    progress.reset();
 
     // 后处理暂时切到生成网格 model；作用域结束自动恢复原 OCC model。
     ScopedGeneratedMeshModel generated_model(generated_path, restore_path);
@@ -2616,6 +2822,10 @@ void GmshPanel::on_generate() {
         std::string restored_model;
         gmsh::model::getCurrent(restored_model);
         external_model_name_ = QString::fromStdString(restored_model);
+        if (model_selector_ && model_selector_->currentIndex() >= 0) {
+          model_selector_->setItemData(model_selector_->currentIndex(),
+                                       external_model_name_);
+        }
       }
     } catch (...) {
     }

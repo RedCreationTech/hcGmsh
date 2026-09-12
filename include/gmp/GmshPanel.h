@@ -37,7 +37,12 @@ class GmshPanel : public QWidget {
   // 外部通道（部件特征/装配等）把几何导入 Gmsh 模型后调用：
   // 同步面板状态（视为已加载、取消示例盒、刷新实体/物理组列表），
   // 否则“生成网格”会按空模型处理——清空模型改画示例盒。
-  void note_external_model_loaded(const QString& label);
+  void note_external_model_loaded(const QString& label,
+                                  const QString& source_path = QString());
+  void restore_external_models(const QVariantMap& sources,
+                               const QString& selected_label);
+  void select_external_model(const QString& label);
+  void set_mesh_output_path(const QString& path);
   // 最近一次几何导入的失败原因；成功或尚未导入时为空。
   QString last_import_error() const { return last_import_error_; }
 
@@ -82,6 +87,7 @@ class GmshPanel : public QWidget {
 
  private:
   void ensure_gmsh();
+  bool activate_model(int index);
   void update_entity_summary();
   void update_entity_list();
   void update_physical_group_list();
@@ -125,6 +131,7 @@ class GmshPanel : public QWidget {
   // 临时切换 Gmsh current model，正式生成前后必须按名称恢复。
   QString external_model_name_;
 
+  QComboBox* model_selector_ = nullptr;
   QLineEdit* geo_path_ = nullptr;
   QLabel* entity_summary_ = nullptr;
   QPlainTextEdit* entity_list_ = nullptr;

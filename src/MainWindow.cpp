@@ -1633,8 +1633,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     // 会按空模型清空模型改画示例盒，吞掉刚生成的部件几何。
     if (gmsh_panel_) {
       gmsh_panel_->note_external_model_loaded(
-          QString("part: %1 (%2)")
-              .arg(target_part->text(0), type.toLower()));
+          QString("part: %1").arg(target_part->text(0)), res.brep_path);
     }
     QString msg =
         QString("%1 ok: updated Part '%2' via %3; imported to gmsh as "
@@ -3436,6 +3435,46 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   connect(mesh_page, &GmshPanel::mesh_written, job_page,
           &MoosePanel::set_mesh_path);
+  connect(job_page, &MoosePanel::mesh_path_changed, this,
+          [this](const QString& path) {
+            auto* item = model_tree_ ? model_tree_->currentItem() : nullptr;
+            if (!item || !item->parent() ||
+                item->data(0, PropertyEditor::kKindRole).toString() != "Jobs") {
+              auto* root = find_root_item("Jobs");
+              auto* row_item = job_table_ && job_table_->currentRow() >= 0
+                                   ? job_table_->item(job_table_->currentRow(), 0)
+                                   : nullptr;
+              for (int row = 0; root && row_item && row < root->childCount();
+                   ++row) {
+                if (root->child(row)->text(0) == row_item->text()) {
+                  item = root->child(row);
+                  break;
+                }
+              }
+              if (!item || !item->parent() ||
+                  item->data(0, PropertyEditor::kKindRole).toString() !=
+                      "Jobs") {
+                return;
+              }
+            }
+            QVariantMap params =
+                item->data(0, PropertyEditor::kParamsRole).toMap();
+            if (params.value("mesh").toString() == path) {
+              return;
+            }
+            params.insert("mesh", path);
+            const QSignalBlocker blocker(model_tree_);
+            item->setData(0, PropertyEditor::kParamsRole, params);
+            set_project_dirty(true);
+            for (int row = 0; job_table_ && row < job_table_->rowCount(); ++row) {
+              auto* row_item = job_table_->item(row, 0);
+              if (row_item && row_item->text() == item->text(0)) {
+                row_item->setData(Qt::UserRole, params);
+                update_job_detail(row);
+                break;
+              }
+            }
+          });
   connect(mesh_page, &GmshPanel::boundary_groups, job_page,
           &MoosePanel::set_boundary_groups);
   connect(mesh_page, &GmshPanel::boundary_groups, property_editor_,
@@ -4098,6 +4137,26 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
           }
         }
       }
+      if (item->parent() && gmsh_panel_) {
+        if (kind == "Parts") {
+          gmsh_panel_->select_external_model("part: " + item->text(0));
+        } else if (kind == "Mesh") {
+          const QVariantMap params =
+              item->data(0, PropertyEditor::kParamsRole).toMap();
+          const QString path = params.value("path").toString().isEmpty()
+                                   ? QDir::current().absoluteFilePath(
+                                         "out/" + item->text(0) + ".msh")
+                                   : params.value("path").toString();
+          gmsh_panel_->set_mesh_output_path(path);
+          gmsh_panel_->select_external_model(
+              params.value("model_source").toString());
+        }
+      }
+      if (item->parent() && kind == "Jobs" && moose_panel_) {
+        const QVariantMap params =
+            item->data(0, PropertyEditor::kParamsRole).toMap();
+        moose_panel_->set_mesh_path(params.value("mesh").toString());
+      }
     }
     refresh_work_context();
     sync_active_ui_context();
@@ -4129,6 +4188,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 module_tabs_->setCurrentIndex(part_tab);
               }
               open_part_editor(item);
+            } else if (kind == "Mesh" && mesh_work_window_) {
+              mesh_work_window_->show();
+              mesh_work_window_->raise();
+              mesh_work_window_->activateWindow();
             } else if (kind != "Mesh" && kind != "Jobs" &&
                        kind != "Results") {
               open_property_form(item);
@@ -5823,19 +5886,15 @@ void MainWindow::build_model_tree() {
             QMenu menu(this);
             if (!item->parent()) {
               const QString kind = item->text(0);
-              if (kind == "Mesh" || kind == "Jobs" || kind == "Results") {
+              if (kind == "Jobs" || kind == "Results") {
                 auto* open_action = menu.addAction(
-                    kind == "Mesh"
-                        ? "Open Mesh Workspace"
-                        : (kind == "Jobs" ? "Open Job Workspace"
-                                           : "Open Results Workspace"));
+                    kind == "Jobs" ? "Open Job Workspace"
+                                   : "Open Results Workspace");
                 connect(open_action, &QAction::triggered, this,
                         [this, kind]() {
                           QDockWidget* workspace =
-                              kind == "Jobs"
-                                  ? job_work_window_
-                                  : (kind == "Results" ? results_work_window_
-                                                       : mesh_work_window_);
+                              kind == "Jobs" ? job_work_window_
+                                             : results_work_window_;
                           if (workspace) {
                             workspace->show();
                             workspace->raise();
@@ -6080,6 +6139,22 @@ void MainWindow::refresh_module_pages() {
       }
     }
     part_feature_panel_->set_sketch_names(sketch_names);
+  }
+  if (moose_panel_) {
+    QStringList mesh_paths;
+    if (auto* root = find_root_item("Mesh")) {
+      for (int i = 0; i < root->childCount(); ++i) {
+        const QString path = root->child(i)
+                                 ->data(0, PropertyEditor::kParamsRole)
+                                 .toMap()
+                                 .value("path")
+                                 .toString();
+        if (!path.isEmpty() && !mesh_paths.contains(path)) {
+          mesh_paths << path;
+        }
+      }
+    }
+    moose_panel_->set_mesh_paths(mesh_paths);
   }
   if (module_part_list_) {
     const QSignalBlocker blocker(module_part_list_);
@@ -7766,17 +7841,25 @@ void MainWindow::upsert_mesh_item(const QString& path) {
   if (!root) {
     return;
   }
-  auto* item = find_child_by_param(root, "path", path);
+  auto* item = model_tree_ ? model_tree_->currentItem() : nullptr;
+  if (!item || item->parent() != root ||
+      item->data(0, PropertyEditor::kKindRole).toString() != "Mesh") {
+    item = find_child_by_param(root, "path", path);
+  }
   const QString base = QFileInfo(path).baseName();
   const QString name =
       base.isEmpty() ? QString("mesh_%1").arg(root->childCount() + 1) : base;
-  QVariantMap params;
+  QVariantMap params =
+      item ? item->data(0, PropertyEditor::kParamsRole).toMap() : QVariantMap();
   params.insert("path", path);
   params.insert("source", "gmsh");
+  if (gmsh_panel_) {
+    params.insert("model_source",
+                  gmsh_panel_->gmsh_settings().value("model_source"));
+  }
   if (!item) {
     add_child_item(root, name, "Mesh", params);
   } else {
-    item->setText(0, unique_child_name(root, name, item));
     item->setData(0, PropertyEditor::kParamsRole, params);
   }
   item = find_child_by_param(root, "path", path);
@@ -9888,7 +9971,11 @@ void MainWindow::add_item_under_root(QTreeWidgetItem* root) {
   const QString base = kind.left(kind.size() - 1).toLower();
   QString name;
   if (!prompt_unique_child_name(root, QString("Add %1").arg(kind),
-                                base + "_1", &name)) {
+                                unique_child_name(
+                                    root, QString("%1_%2")
+                                              .arg(base)
+                                              .arg(root->childCount() + 1)),
+                                &name)) {
     return;
   }
   add_child_item(root, name, kind, default_params_for_kind(kind));
@@ -10196,6 +10283,9 @@ void MainWindow::apply_job_selection(int row) {
   selected_job_running_ =
       selected_job_remote_ &&
       (status == "Queued" || status == "Running");
+  if (moose_panel_) {
+    moose_panel_->set_mesh_path(params.value("mesh").toString());
+  }
   if (job_detail_stack_) {
     job_detail_stack_->setCurrentIndex(1);
   }
@@ -10474,10 +10564,29 @@ bool MainWindow::load_project(const QString& path) {
     }
     project_path_ = path;
     gmp::log_operation("project", "Project loaded: " + path);
+    QVariantMap part_sources;
+    if (auto* parts = find_root_item("Parts")) {
+      for (int row = 0; row < parts->childCount(); ++row) {
+        auto* part = parts->child(row);
+        const QString brep =
+            part->data(0, PropertyEditor::kParamsRole)
+                .toMap()
+                .value("brep")
+                .toString();
+        if (!brep.isEmpty()) {
+          part_sources.insert("part: " + part->text(0), brep);
+        }
+      }
+    }
     YAML::Node gmsh_node = root["gmsh"];
+    QVariantMap gmsh_settings;
     if (gmsh_node && gmsh_node.IsMap() && gmsh_panel_) {
-      const QVariantMap gmsh_settings = parse_map(gmsh_node, {});
+      gmsh_settings = parse_map(gmsh_node, {});
       gmsh_panel_->apply_gmsh_settings(gmsh_settings);
+    }
+    if (gmsh_panel_ && !part_sources.isEmpty()) {
+      gmsh_panel_->restore_external_models(
+          part_sources, gmsh_settings.value("model_source").toString());
     }
 
     YAML::Node moose_node = root["moose"];
@@ -11790,6 +11899,32 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     }
                   },
                   module_work_window_});
+    steps.append({"mesh_tree_double_click_opens_workspace",
+                  [this]() {
+                    auto* root = find_root_item("Mesh");
+                    if (!root || !mesh_work_window_ || !gmsh_panel_) {
+                      throw std::runtime_error(
+                          "Mesh double-click fixture is missing");
+                    }
+                    const QString path = QDir::current().absoluteFilePath(
+                        "out/mesh_double_click.msh");
+                    auto* item = add_child_item(
+                        root, "mesh_double_click", "Mesh", {{"path", path}});
+                    mesh_work_window_->hide();
+                    model_tree_->setCurrentItem(item);
+                    model_tree_->itemDoubleClicked(item, 0);
+                    qApp->processEvents();
+                    const bool opened = mesh_work_window_->isVisible() &&
+                                        gmsh_panel_->gmsh_settings()
+                                                .value("output_path")
+                                                .toString() == path;
+                    delete root->takeChild(root->indexOfChild(item));
+                    if (!opened) {
+                      throw std::runtime_error(
+                          "Mesh tree double-click did not open its workspace");
+                    }
+                  },
+                  mesh_work_window_});
     steps.append({"sketch_new_opens_editor",
                   [this]() {
                     for (int i = 0; i < module_tabs_->count(); ++i) {
@@ -13740,6 +13875,227 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                 },
                 this});
+  steps.append({"job_mesh_selector_contract",
+                [this, dir]() {
+                  auto* mesh_root = find_root_item("Mesh");
+                  auto* jobs_root = find_root_item("Jobs");
+                  auto* selector = moose_panel_
+                                       ? moose_panel_->findChild<QComboBox*>(
+                                             "jobMeshSelector")
+                                       : nullptr;
+                  if (!mesh_root || !jobs_root || !selector) {
+                    throw std::runtime_error(
+                        "Job mesh selector fixture is missing");
+                  }
+                  const QString mesh_1 = dir + "/job_mesh_1.msh";
+                  const QString mesh_2 = dir + "/job_mesh_2.msh";
+                  auto* mesh_item_1 = add_child_item(
+                      mesh_root, "tour_job_mesh_1", "Mesh", {{"path", mesh_1}});
+                  auto* mesh_item_2 = add_child_item(
+                      mesh_root, "tour_job_mesh_2", "Mesh", {{"path", mesh_2}});
+                  auto* job_1 = add_child_item(
+                      jobs_root, "tour_mesh_job_1", "Jobs", {{"mesh", mesh_1}});
+                  auto* job_2 = add_child_item(
+                      jobs_root, "tour_mesh_job_2", "Jobs", {{"mesh", mesh_2}});
+                  if (!mesh_item_1 || !mesh_item_2 || !job_1 || !job_2 ||
+                      selector->findText(mesh_1) < 0 ||
+                      selector->findText(mesh_2) < 0) {
+                    throw std::runtime_error(
+                        "Job mesh selector did not list Mesh nodes");
+                  }
+                  model_tree_->setCurrentItem(job_1);
+                  if (selector->currentText() != mesh_1) {
+                    throw std::runtime_error(
+                        "First Job did not restore its mesh selection");
+                  }
+                  model_tree_->setCurrentItem(job_2);
+                  if (selector->currentText() != mesh_2) {
+                    throw std::runtime_error(
+                        "Second Job did not restore its mesh selection");
+                  }
+                  const int first_index = selector->findText(mesh_1);
+                  selector->setCurrentIndex(first_index);
+                  selector->activated(first_index);
+                  if (job_2->data(0, PropertyEditor::kParamsRole)
+                          .toMap()
+                          .value("mesh")
+                          .toString() != mesh_1 ||
+                      job_1->data(0, PropertyEditor::kParamsRole)
+                              .toMap()
+                              .value("mesh")
+                              .toString() != mesh_1) {
+                    throw std::runtime_error(
+                        "Mesh selection was not stored per Job");
+                  }
+                  model_tree_->setCurrentItem(jobs_root);
+                  delete jobs_root->takeChild(jobs_root->indexOfChild(job_2));
+                  delete jobs_root->takeChild(jobs_root->indexOfChild(job_1));
+                  delete mesh_root->takeChild(
+                      mesh_root->indexOfChild(mesh_item_2));
+                  delete mesh_root->takeChild(
+                      mesh_root->indexOfChild(mesh_item_1));
+                  refresh_module_pages();
+                },
+                job_work_window_});
+  steps.append({"mesh_multiple_nodes",
+                [this]() {
+                  auto* root = find_root_item("Mesh");
+                  if (!root) {
+                    throw std::runtime_error("Mesh root is missing");
+                  }
+                  QStringList names;
+                  for (int attempt = 0; attempt < 2; ++attempt) {
+                    const int before = root->childCount();
+                    QTimer::singleShot(0, this, []() {
+                      auto* dialog = qobject_cast<QDialog*>(
+                          QApplication::activeModalWidget());
+                      auto* buttons = dialog
+                                          ? dialog->findChild<
+                                                QDialogButtonBox*>(
+                                                "uniqueObjectNameButtons")
+                                          : nullptr;
+                      if (buttons) {
+                        buttons->button(QDialogButtonBox::Ok)->click();
+                      }
+                    });
+                    add_item_under_root(root);
+                    auto* added = model_tree_->currentItem();
+                    if (!added || added->parent() != root ||
+                        root->childCount() != before + 1) {
+                      throw std::runtime_error(
+                          "Mesh root did not accept another child");
+                    }
+                    names << added->text(0);
+                    const QString expected_path =
+                        QDir::current().absoluteFilePath(
+                            "out/" + added->text(0) + ".msh");
+                    if (gmsh_panel_->gmsh_settings()
+                            .value("output_path")
+                            .toString() != expected_path) {
+                      throw std::runtime_error(
+                          "Mesh node did not receive its own output path");
+                    }
+                  }
+                  if (names.at(0) == names.at(1)) {
+                    throw std::runtime_error(
+                        "Repeated Mesh creation reused the same name");
+                  }
+                },
+                mesh_work_window_});
+  steps.append({"mesh_part_model_selector",
+                [this, dir]() {
+                  auto* selector = gmsh_panel_
+                                       ? gmsh_panel_->findChild<QComboBox*>(
+                                             "gmshModelSelector")
+                                       : nullptr;
+                  if (!selector) {
+                    throw std::runtime_error(
+                        "Mesh part model selector is missing");
+                  }
+#ifdef GMP_ENABLE_GMSH_GUI
+                  const QString solid_brep = dir + "/selector_part_1.brep";
+                  const QString hollow_brep = dir + "/selector_part_2.brep";
+                  gmsh::model::add("tour_selector_part_1");
+                  gmsh::model::occ::addBox(0, 0, 0, 2, 2, 1);
+                  gmsh::model::occ::synchronize();
+                  gmsh::write(solid_brep.toStdString());
+                  gmsh_panel_->note_external_model_loaded(
+                      "part: selector_part_1", solid_brep);
+                  gmsh::model::add("tour_selector_part_2");
+                  const int outer =
+                      gmsh::model::occ::addBox(0, 0, 0, 2, 2, 1);
+                  const int inner =
+                      gmsh::model::occ::addBox(0.5, 0.5, -0.1, 1, 1, 1.2);
+                  gmsh::vectorpair cut_result;
+                  std::vector<gmsh::vectorpair> cut_map;
+                  gmsh::model::occ::cut({{3, outer}}, {{3, inner}}, cut_result,
+                                        cut_map);
+                  gmsh::model::occ::synchronize();
+                  gmsh::write(hollow_brep.toStdString());
+                  gmsh_panel_->note_external_model_loaded(
+                      "part: selector_part_2", hollow_brep);
+
+                  const int first = selector->findText("part: selector_part_1");
+                  const int second = selector->findText("part: selector_part_2");
+                  if (first < 0 || second < 0 || first == second) {
+                    throw std::runtime_error(
+                        "Mesh selector did not retain both parts");
+                  }
+                  selector->setCurrentIndex(first);
+                  std::string current_model;
+                  gmsh::model::getCurrent(current_model);
+                  if (current_model != "tour_selector_part_1") {
+                    throw std::runtime_error(
+                        "Mesh selector did not activate the chosen part");
+                  }
+
+                  QVariantMap settings = gmsh_panel_->gmsh_settings();
+                  settings.insert("output_path",
+                                  dir + "/selector_part_1.msh");
+                  settings.insert("mesh_dim", 3);
+                  settings.insert("mesh_size", 0.5);
+                  settings.insert("mesh_topology_mode", 0);
+                  settings.insert("use_sample_box", false);
+                  gmsh_panel_->apply_gmsh_settings(settings);
+                  gmsh_panel_->generate_mesh();
+
+                  selector->setCurrentIndex(second);
+                  std::vector<std::pair<int, int>> hollow_faces;
+                  gmsh::model::getEntities(hollow_faces, 2);
+                  if (hollow_faces.size() <= 6) {
+                    throw std::runtime_error(
+                        "Mesh selector restored the wrong part geometry");
+                  }
+                  QString element_type;
+                  const auto manifest_connection = connect(
+                      gmsh_panel_, &GmshPanel::mesh_manifest, this,
+                      [&element_type](const QVariantMap& manifest) {
+                        element_type = manifest.value("element_type").toString();
+                      });
+                  settings.insert("output_path",
+                                  dir + "/selector_part_2.msh");
+                  gmsh_panel_->apply_gmsh_settings(settings);
+                  gmsh_panel_->generate_mesh();
+                  disconnect(manifest_connection);
+                  if (!element_type.contains("Tetrahedron",
+                                             Qt::CaseInsensitive)) {
+                    throw std::runtime_error(
+                        "Selected hollow part was not used for mesh generation");
+                  }
+                  selector->setCurrentIndex(first);
+                  std::vector<std::pair<int, int>> solid_faces;
+                  gmsh::model::getEntities(solid_faces, 2);
+                  if (solid_faces.size() != 6) {
+                    throw std::runtime_error(
+                        "Mesh selector did not restore the first part");
+                  }
+
+                  auto* parts = find_root_item("Parts");
+                  auto* part_1 = add_child_item(
+                      parts, "selector_part_1", "Parts", {{"brep", solid_brep}});
+                  auto* part_2 = add_child_item(parts, "selector_part_2", "Parts",
+                                                {{"brep", hollow_brep}});
+                  selector->setCurrentIndex(second);
+                  const QString project_path =
+                      dir + "/mesh_selector_restore.gmp.yaml";
+                  if (!part_1 || !part_2 || !save_project(project_path) ||
+                      !load_project(project_path) ||
+                      selector->findText("part: selector_part_1") < 0 ||
+                      selector->findText("part: selector_part_2") < 0 ||
+                      selector->currentText() != "part: selector_part_2") {
+                    throw std::runtime_error(
+                        "Project load did not restore Part geometry choices");
+                  }
+                  std::vector<std::pair<int, int>> restored_faces;
+                  gmsh::model::getEntities(restored_faces, 2);
+                  if (restored_faces.size() <= 6) {
+                    throw std::runtime_error(
+                        "Project load did not activate the saved Part geometry");
+                  }
+                  QFile::remove(project_path);
+#endif
+                },
+                mesh_work_window_});
   steps.append({"sketch_nested_loop_hole_extrude",
                 [this, dir]() {
                   // 嵌套环拉伸成孔：矩形+圆（对照）与手画多边形+圆

@@ -18,6 +18,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSettings>
+#include <QSignalBlocker>
 #include <QSet>
 #include <QSpinBox>
 #include <QString>
@@ -161,8 +162,23 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
 
   auto* mesh_box = new QGroupBox("Mesh");
   auto* mesh_form = new QFormLayout(mesh_box);
-  mesh_path_ = new QLineEdit();
-  mesh_path_->setPlaceholderText("Path to mesh file (.msh)");
+  mesh_path_ = new QComboBox();
+  mesh_path_->setObjectName("jobMeshSelector");
+  mesh_path_->setEditable(true);
+  mesh_path_->setInsertPolicy(QComboBox::NoInsert);
+  install_combo_popup_fix(mesh_path_);
+  mesh_path_->lineEdit()->setPlaceholderText("Path to mesh file (.msh)");
+  const auto mesh_path_changed = [this]() {
+    const QString path = mesh_path_->currentText();
+    if (!path.isEmpty()) {
+      set_boundary_groups(read_boundary_groups_from_mesh(path));
+    }
+    emit this->mesh_path_changed(path);
+  };
+  connect(mesh_path_, QOverload<int>::of(&QComboBox::activated), this,
+          [mesh_path_changed](int) { mesh_path_changed(); });
+  connect(mesh_path_->lineEdit(), &QLineEdit::editingFinished, this,
+          mesh_path_changed);
   auto* insert_mesh_btn = new QPushButton("Insert Mesh Block");
   connect(insert_mesh_btn, &QPushButton::clicked, this,
           &MoosePanel::on_insert_mesh_block);
@@ -569,7 +585,10 @@ void MoosePanel::set_running(bool running) {
 }
 
 void MoosePanel::set_mesh_path(const QString& path) {
-  mesh_path_->setText(path);
+  if (!path.isEmpty() && mesh_path_->findText(path) < 0) {
+    mesh_path_->addItem(path);
+  }
+  mesh_path_->setCurrentText(path);
   const QString updated = inject_mesh_block(input_editor_->toPlainText(), path);
   if (!updated.isEmpty()) {
     input_editor_->setPlainText(updated);
@@ -579,6 +598,17 @@ void MoosePanel::set_mesh_path(const QString& path) {
     set_boundary_groups(read_boundary_groups_from_mesh(path));
   }
   save_settings();
+}
+
+void MoosePanel::set_mesh_paths(const QStringList& paths) {
+  const QString current = mesh_path_->currentText();
+  const QSignalBlocker blocker(mesh_path_);
+  mesh_path_->clear();
+  mesh_path_->addItems(paths);
+  if (!current.isEmpty() && mesh_path_->findText(current) < 0) {
+    mesh_path_->addItem(current);
+  }
+  mesh_path_->setCurrentText(current);
 }
 
 void MoosePanel::set_boundary_groups(const QStringList& names) {
@@ -600,7 +630,7 @@ QVariantMap MoosePanel::moose_settings() const {
   map.insert("exec_path", exec_path_ ? exec_path_->currentText() : "");
   map.insert("input_path", input_path_ ? input_path_->text() : "");
   map.insert("workdir", workdir_path_ ? workdir_path_->text() : "");
-  map.insert("mesh_path", mesh_path_ ? mesh_path_->text() : "");
+  map.insert("mesh_path", mesh_path_ ? mesh_path_->currentText() : "");
   map.insert("use_mpi", use_mpi_ && use_mpi_->isChecked());
   map.insert("mpi_ranks", mpi_ranks_ ? mpi_ranks_->value() : 1);
   map.insert("runner_kind",
@@ -630,8 +660,8 @@ void MoosePanel::apply_moose_settings(const QVariantMap& settings) {
         settings.value("workdir", workdir_path_->text()).toString());
   }
   if (mesh_path_) {
-    mesh_path_->setText(
-        settings.value("mesh_path", mesh_path_->text()).toString());
+    mesh_path_->setCurrentText(
+        settings.value("mesh_path", mesh_path_->currentText()).toString());
   }
   if (use_mpi_) {
     use_mpi_->setChecked(
@@ -715,13 +745,15 @@ void MoosePanel::on_apply_template() {
   update_template_status_label();
   if (key == "filemesh") {
     const QString path =
-        mesh_path_->text().isEmpty() ? "path/to/mesh.msh" : mesh_path_->text();
+        mesh_path_->currentText().isEmpty() ? "path/to/mesh.msh"
+                                           : mesh_path_->currentText();
     input_editor_->setPlainText(template_file_mesh(path));
   } else if (key == "heat_generated") {
     input_editor_->setPlainText(template_heat_generated_mesh());
   } else if (key == "tm_filemesh") {
     const QString path =
-        mesh_path_->text().isEmpty() ? "path/to/mesh.msh" : mesh_path_->text();
+        mesh_path_->currentText().isEmpty() ? "path/to/mesh.msh"
+                                           : mesh_path_->currentText();
     input_editor_->setPlainText(template_tm_file_mesh(path));
   } else if (key == "tm_generated") {
     input_editor_->setPlainText(template_tm_generated_mesh());
@@ -878,7 +910,7 @@ QString MoosePanel::normalize_snapshot_refs(
               return a.size() > b.size();
             });
   const QString mesh_text =
-      mesh_path_ ? mesh_path_->text().trimmed() : QString();
+      mesh_path_ ? mesh_path_->currentText().trimmed() : QString();
   const QString mesh_abs =
       mesh_text.isEmpty() ? QString() : QFileInfo(mesh_text).absoluteFilePath();
   QString text = *input_text;
@@ -1253,7 +1285,8 @@ void MoosePanel::on_open_artifacts() {
 
 void MoosePanel::on_insert_mesh_block() {
   const QString path =
-      mesh_path_->text().isEmpty() ? "path/to/mesh.msh" : mesh_path_->text();
+      mesh_path_->currentText().isEmpty() ? "path/to/mesh.msh"
+                                         : mesh_path_->currentText();
   const QString updated = inject_mesh_block(input_editor_->toPlainText(), path);
   if (!updated.isEmpty()) {
     input_editor_->setPlainText(updated);
@@ -1328,7 +1361,7 @@ void MoosePanel::run_task(bool check_only) {
   start_info.insert("exec", exec_path);
   start_info.insert("input", input_path);
   start_info.insert("workdir", spec.working_dir);
-  start_info.insert("mesh", mesh_path_ ? mesh_path_->text() : QString());
+  start_info.insert("mesh", mesh_path_ ? mesh_path_->currentText() : QString());
   start_info.insert("use_mpi", use_mpi_->isChecked());
   start_info.insert("mpi_ranks", mpi_ranks_->value());
   start_info.insert("check_only", check_only);
@@ -2243,8 +2276,8 @@ void MoosePanel::load_settings() {
       settings.value("moose/input_path", input_path_->text()).toString());
   workdir_path_->setText(
       settings.value("moose/workdir", workdir_path_->text()).toString());
-  mesh_path_->setText(
-      settings.value("moose/mesh_path", mesh_path_->text()).toString());
+  mesh_path_->setCurrentText(
+      settings.value("moose/mesh_path", mesh_path_->currentText()).toString());
   use_mpi_->setChecked(
       settings.value("moose/use_mpi", use_mpi_->isChecked()).toBool());
   mpi_ranks_->setValue(
@@ -2278,7 +2311,7 @@ void MoosePanel::save_settings() const {
   settings.setValue("moose/exec_last", exec_path_->currentText());
   settings.setValue("moose/input_path", input_path_->text());
   settings.setValue("moose/workdir", workdir_path_->text());
-  settings.setValue("moose/mesh_path", mesh_path_->text());
+  settings.setValue("moose/mesh_path", mesh_path_->currentText());
   settings.setValue("moose/use_mpi", use_mpi_->isChecked());
   settings.setValue("moose/mpi_ranks", mpi_ranks_->value());
   settings.setValue("moose/runner_kind", runner_kind_->currentIndex());
@@ -2353,6 +2386,9 @@ QString MoosePanel::find_exec_in_parents(const QString& relative,
 
 QStringList MoosePanel::read_boundary_groups_from_mesh(const QString& mesh_path) const {
   QStringList names;
+  if (QFileInfo(mesh_path).suffix().compare("msh", Qt::CaseInsensitive) == 0) {
+    return parse_msh_physical_groups(mesh_path);
+  }
 #ifndef GMP_ENABLE_GMSH_GUI
   return parse_msh_physical_groups(mesh_path);
 #else
