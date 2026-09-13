@@ -5,11 +5,17 @@
 
 #include <QDialogButtonBox>
 #include <QGuiApplication>
+#include <QLabel>
+#include <QLayout>
 #include <QMap>
 #include <QPushButton>
 #include <QScreen>
+#include <QScrollArea>
 #include <QSettings>
 #include <QSignalBlocker>
+#include <QTabBar>
+#include <QTabWidget>
+#include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
@@ -121,6 +127,13 @@ FloatingPropertyForm::FloatingPropertyForm(
   QSettings settings("gmp-ise", "gmp_ise");
   const QSize remembered = settings.value(settings_key()).toSize();
   resize(remembered.isValid() ? remembered : QSize(760, 560));
+
+  if (auto* tabs = editor_->findChild<QTabWidget*>("propertyEditorTabs")) {
+    connect(tabs, &QTabWidget::currentChanged, this, [this]() {
+      QTimer::singleShot(0, this,
+                         [this]() { fit_to_current_tab(); });
+    });
+  }
 }
 
 QString FloatingPropertyForm::settings_key() const {
@@ -142,15 +155,16 @@ void FloatingPropertyForm::place_over_stage(QWidget* stage) {
   if (!stage) {
     return;
   }
+  stage_ = stage;
+  fit_to_current_tab();
   const QRect stage_rect(stage->mapToGlobal(QPoint(0, 0)), stage->size());
-  QSize fitted = size().boundedTo(
-      QSize(qMax(420, stage_rect.width() - 24),
-            qMax(360, stage_rect.height() - 24)));
-  resize(fitted);
-  QPoint candidate(stage_rect.left() + qMax(12, stage_rect.width() / 10),
-                   stage_rect.top() + (stage_rect.height() - height()) / 2);
+  QPoint candidate(stage_rect.center().x() - width() / 2,
+                   stage_rect.center().y() - height() / 2);
   QRect target(candidate, size());
-  const QRect safe = stage_rect.adjusted(12, 12, -12, -12);
+  QScreen* screen = stage->screen();
+  const QRect safe = screen ? screen->availableGeometry().adjusted(
+                                 12, 12, -12, -12)
+                            : stage_rect.adjusted(12, 12, -12, -12);
   if (!safe.contains(target)) {
     candidate.setX(qBound(safe.left(), candidate.x(),
                           qMax(safe.left(), safe.right() - width() + 1)));
@@ -158,6 +172,71 @@ void FloatingPropertyForm::place_over_stage(QWidget* stage) {
                           qMax(safe.top(), safe.bottom() - height() + 1)));
   }
   move(candidate);
+}
+
+QSize FloatingPropertyForm::preferred_size_for_current_tab() const {
+  auto* tabs = editor_
+                   ? editor_->findChild<QTabWidget*>("propertyEditorTabs")
+                   : nullptr;
+  QWidget* page = tabs ? tabs->currentWidget() : nullptr;
+  if (!editor_ || !tabs || !page) {
+    return QSize(760, 560);
+  }
+
+  QSize page_hint = page->layout() ? page->layout()->totalSizeHint()
+                                   : page->sizeHint();
+  if (auto* scroll =
+          page->findChild<QScrollArea*>("paramsTabScroll")) {
+    QWidget* content = scroll->widget();
+    if (content && content->layout()) {
+      content->layout()->activate();
+      page_hint = content->layout()->totalSizeHint();
+    }
+  }
+
+  const QMargins editor_margins = editor_->layout()->contentsMargins();
+  const int editor_spacing = editor_->layout()->spacing();
+  const auto* editor_header = editor_->findChild<QLabel*>();
+  const int header_height =
+      editor_header ? editor_header->sizeHint().height() : 0;
+  const int tabs_chrome = tabs->tabBar()->sizeHint().height() + 12;
+  const int editor_height = editor_margins.top() + header_height +
+                            editor_spacing + tabs_chrome + page_hint.height() +
+                            editor_margins.bottom();
+  const int editor_width = editor_margins.left() + page_hint.width() +
+                           editor_margins.right() + 12;
+
+  const QMargins dialog_margins = layout()->contentsMargins();
+  const int dialog_spacing = layout()->spacing();
+  const QSize buttons_hint = buttons_ ? buttons_->sizeHint() : QSize();
+  return QSize(qMax(760, qMax(editor_width, buttons_hint.width()) +
+                             dialog_margins.left() + dialog_margins.right()),
+               qMax(560, editor_height + buttons_hint.height() +
+                             dialog_spacing + dialog_margins.top() +
+                             dialog_margins.bottom()));
+}
+
+void FloatingPropertyForm::fit_to_current_tab() {
+  const QPoint center = frameGeometry().center();
+  QScreen* screen = stage_ ? stage_->screen()
+                           : QGuiApplication::screenAt(center);
+  if (!screen) {
+    screen = QGuiApplication::primaryScreen();
+  }
+  const QRect safe = screen ? screen->availableGeometry().adjusted(
+                                 12, 12, -12, -12)
+                            : QRect(QPoint(0, 0), preferred_size_for_current_tab());
+  const QSize target = preferred_size_for_current_tab().boundedTo(safe.size());
+  resize(target.expandedTo(minimumSize().boundedTo(safe.size())));
+
+  if (isVisible()) {
+    QPoint position(center.x() - width() / 2, center.y() - height() / 2);
+    position.setX(qBound(safe.left(), position.x(),
+                         qMax(safe.left(), safe.right() - width() + 1)));
+    position.setY(qBound(safe.top(), position.y(),
+                         qMax(safe.top(), safe.bottom() - height() + 1)));
+    move(position);
+  }
 }
 
 void FloatingPropertyForm::commit_if_valid() {

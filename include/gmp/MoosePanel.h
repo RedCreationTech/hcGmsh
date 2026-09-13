@@ -102,6 +102,9 @@ class MoosePanel : public QWidget {
   void set_extra_file_sources(const QMap<QString, QString>& sources);
   // 当前输入编辑器文本（巡览/装配断言用）。
   QString input_text() const;
+  // 将模型树装配后的当前输入物化为项目专属 .i 文件，并同步“输入文件”
+  // 与“工作目录”。返回 false 表示项目尚未保存或文件写出失败。
+  bool materialize_project_input(const QString& project_path);
 
  private slots:
   void on_pick_exec();

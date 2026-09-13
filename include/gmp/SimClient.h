@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QByteArray>
 #include <QHash>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -33,6 +34,12 @@ class SimClient : public QObject {
   static QJsonObject build_submission_manifest(
       const QJsonObject& snapshot_manifest, const QString& project_id,
       const QString& solver_program, QString* error);
+
+  // multipart 的 filename 必须与 manifest 中的 Unicode 文件名逐字一致。
+  // 这里返回包含原始 UTF-8 文件名的 Content-Disposition；不能对整个
+  // filename 做百分号编码，否则服务端会把 "%E6..." 当作实际文件名。
+  static QByteArray multipart_file_content_disposition(
+      const QString& file_name);
 
   // ---- TASK-E2E-11：提交与轮询 ----
   // snapshot_dir 为导出任务快照目录（含 manifest.json 与全部输入文件）。

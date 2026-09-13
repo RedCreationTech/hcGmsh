@@ -235,7 +235,7 @@ class MainWindow : public QMainWindow {
   QString build_aux_kernels_block() const;
   QString build_postprocessors_block() const;
   QString build_times_block(QString* header) const;
-  void sync_model_to_input();
+  void sync_model_to_input(const QString& project_path_override = QString());
   void load_demo_diffusion(bool run);
   void load_demo_thermo(bool run);
   void load_demo_nonlinear_heat(bool run);

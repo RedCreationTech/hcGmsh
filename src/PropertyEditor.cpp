@@ -96,15 +96,16 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   auto* params_layout = new QVBoxLayout(params_content);
 
   form_box_ = new QGroupBox("Quick Parameters", params_tab_);
+  form_box_->setObjectName("propertyQuickParametersBox");
   form_layout_ = new QFormLayout(form_box_);
   form_layout_->setRowWrapPolicy(QFormLayout::DontWrapRows);
   form_layout_->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
   // 高级参数表格展开时，快捷表单不得被挤压到 sizeHint 以下（否则行重叠/
   // 截断）；空间缺口由带滚动条的高级表格区吸收。
   form_box_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
-  params_layout->addWidget(form_box_);
 
   groups_box_ = new QGroupBox("Groups", params_tab_);
+  groups_box_->setObjectName("propertyGroupsBox");
   auto* groups_layout = new QVBoxLayout(groups_box_);
   groups_hint_ = new QLabel("Select physical groups to apply.", groups_box_);
   groups_hint_->setStyleSheet("color: #444;");
@@ -112,7 +113,7 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   groups_list_->setObjectName("propertyGroupsList");
   groups_list_->setSelectionMode(QAbstractItemView::ExtendedSelection);
   groups_list_->setMaximumHeight(120);
-  groups_summary_ = new QLabel("Selected:", groups_box_);
+  groups_summary_ = new QLabel("Selection to apply:", groups_box_);
   groups_summary_->setStyleSheet("color: #333;");
   groups_chips_container_ = new QWidget(groups_box_);
   groups_chips_layout_ = new QHBoxLayout(groups_chips_container_);
@@ -126,7 +127,10 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   groups_layout->addWidget(groups_chips_container_);
   groups_layout->addWidget(apply_groups_btn_);
   groups_box_->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Minimum);
+  // 分组指派决定对象实际作用域，优先于普通参数展示，避免用户只填完
+  // 快捷参数便直接确认而遗漏“应用所选分组”。不适用分组的节点会隐藏该区。
   params_layout->addWidget(groups_box_);
+  params_layout->addWidget(form_box_);
 
   advanced_toggle_ = new QCheckBox("Advanced Parameters", params_tab_);
   advanced_toggle_->setChecked(false);
@@ -688,17 +692,26 @@ void PropertyEditor::update_group_widget_for_kind(const QString& kind) {
   QStringList source = use_boundary ? boundary_groups_ : volume_groups_;
   groups_list_->addItems(source);
   if (groups_hint_) {
-    groups_hint_->setText(use_boundary
-                              ? "Apply selection to boundary."
-                              : (kind == "Sections"
-                                     ? "Apply selection to assigned volumes."
-                                     : "Apply selection to block."));
+    groups_hint_->setText(l10n::tr(
+        use_boundary
+            ? "Select one or more boundaries, then apply the selection."
+            : (kind == "Sections"
+                   ? "Select one or more physical volumes below, then apply "
+                     "the selection."
+                   : "Select one or more volume groups, then apply the "
+                     "selection.")));
   }
   if (groups_box_) {
-    groups_box_->setTitle(use_boundary ? "Boundary Groups"
-                                       : (kind == "Sections"
-                                              ? "Physical Volumes"
-                                              : "Volume Groups"));
+    groups_box_->setTitle(l10n::tr(
+        use_boundary ? "Available Boundary Groups"
+                     : (kind == "Sections" ? "Available Physical Volumes"
+                                            : "Available Volume Groups")));
+  }
+  if (apply_groups_btn_) {
+    apply_groups_btn_->setText(l10n::tr(
+        use_boundary ? "Apply Selected Boundaries"
+                     : (kind == "Sections" ? "Apply Selected Volumes"
+                                            : "Apply Selected Groups")));
   }
   const QVariantMap params =
       current_item_ ? current_item_->data(0, kParamsRole).toMap()
@@ -733,7 +746,7 @@ void PropertyEditor::update_group_summary() {
       selected << item->text();
     }
   }
-  groups_summary_->setText("Selected:");
+  groups_summary_->setText(l10n::tr("Selection to apply:"));
 
   while (QLayoutItem* item = groups_chips_layout_->takeAt(0)) {
     if (auto* widget = item->widget()) {
@@ -743,7 +756,7 @@ void PropertyEditor::update_group_summary() {
   }
 
   if (selected.isEmpty()) {
-    auto* none = new QLabel("(none)", groups_chips_container_);
+    auto* none = new QLabel(l10n::tr("(none)"), groups_chips_container_);
     none->setStyleSheet("color: #666;");
     groups_chips_layout_->addWidget(none);
     groups_chips_layout_->addStretch(1);
@@ -1212,25 +1225,121 @@ void PropertyEditor::apply_template_values(const QVariantMap& values,
   if (!current_item_) {
     return;
   }
-  const QVariantMap params = current_item_->data(0, kParamsRole).toMap();
+  QVariantMap params = current_item_->data(0, kParamsRole).toMap();
+  bool changed = false;
+  const QString kind =
+      current_item_->data(0, kKindRole).toString().isEmpty()
+          ? current_item_->text(0)
+          : current_item_->data(0, kKindRole).toString();
+  // 材料模板切换时清掉其他材料类型的已知专属字段。普通材料的
+  // prop_names/prop_values 若残留到 AbaqusCDP，会被当作无效 MOOSE
+  // 参数写进 AbaqusCDPStressUpdate。
+  if (kind == "Materials" && values.contains("type")) {
+    const QString type = values.value("type").toString();
+    const QSet<QString> known_type_keys = {
+        "prop_names",
+        "prop_values",
+        "expression",
+        "property_name",
+        "coupled_variables",
+        "fill_method",
+        "C_ijkl",
+        "thermal_expansion_coeff",
+        "temperature",
+        "stress_free_temperature",
+        "eigenstrain_name",
+        "displacements",
+        "youngs_modulus",
+        "poissons_ratio",
+        "dilation_angle",
+        "eccentricity",
+        "biaxial_to_uniaxial_compression_ratio",
+        "tensile_meridian_ratio",
+        "viscosity",
+        "tension_recovery",
+        "compression_recovery",
+        "maximum_substeps",
+        "maximum_strain_increment",
+        "enable_performance_diagnostics",
+        "unit_factor_stress",
+        "compression_hardening_file",
+        "compression_damage_file",
+        "tension_stiffening_file",
+        "tension_damage_file"};
+    QSet<QString> allowed;
+    if (type == "GenericConstantMaterial") {
+      allowed = {"prop_names", "prop_values"};
+    } else if (type == "ParsedMaterial") {
+      allowed = {"expression", "property_name", "coupled_variables"};
+    } else if (type == "ComputeElasticityTensor") {
+      allowed = {"fill_method", "C_ijkl"};
+    } else if (type == "ComputeSmallStrain") {
+      allowed = {"displacements"};
+    } else if (type == "ComputeThermalExpansionEigenstrain") {
+      allowed = {"thermal_expansion_coeff", "temperature",
+                 "stress_free_temperature", "eigenstrain_name"};
+    } else if (type == "AbaqusCDP") {
+      allowed = {"youngs_modulus",
+                 "poissons_ratio",
+                 "dilation_angle",
+                 "eccentricity",
+                 "biaxial_to_uniaxial_compression_ratio",
+                 "tensile_meridian_ratio",
+                 "viscosity",
+                 "tension_recovery",
+                 "compression_recovery",
+                 "maximum_substeps",
+                 "maximum_strain_increment",
+                 "enable_performance_diagnostics",
+                 "unit_factor_stress",
+                 "compression_hardening_file",
+                 "compression_damage_file",
+                 "tension_stiffening_file",
+                 "tension_damage_file"};
+    }
+    if (!allowed.isEmpty() || type == "ComputeLinearElasticStress") {
+      for (const auto& key : known_type_keys) {
+        if (!allowed.contains(key) && params.remove(key) > 0) {
+          changed = true;
+        }
+      }
+    }
+  }
   for (auto it = values.begin(); it != values.end(); ++it) {
     if (!overwrite && !params.value(it.key()).toString().trimmed().isEmpty()) {
       continue;
     }
-    set_param_value(it.key(), it.value().toString());
+    if (params.value(it.key()) != it.value()) {
+      params.insert(it.key(), it.value());
+      changed = true;
+    }
+  }
+  if (changed) {
+    // 模板是一组参数，必须一次写入。逐字段 setData 会同步触发模型树刷新，
+    // 中途重建本编辑器，导致后续字段（尤其 type）丢失。
+    current_item_->setData(0, kParamsRole, params);
+    load_from_item();
   }
   update_validation();
 }
 
 void PropertyEditor::on_apply_template() {
-  if (!current_item_ || !template_combo_) {
+  if (!current_item_) {
     return;
   }
   const QString kind =
       current_item_->data(0, kKindRole).toString().isEmpty()
           ? current_item_->text(0)
           : current_item_->data(0, kKindRole).toString();
-  const QString choice = template_combo_->currentText();
+  // 显示文字会随界面语言翻译，模板查找必须使用稳定的内部键。
+  // 否则中文的“CDP 混凝土 (Abaqus)”无法命中英文 preset key。
+  QString choice = "Type Defaults";
+  if (template_combo_) {
+    choice = template_combo_->currentData().toString();
+    if (choice.isEmpty()) {
+      choice = template_combo_->currentText();
+    }
+  }
   QVariantMap values;
   if (choice == "Type Defaults") {
     QString type;
@@ -1252,6 +1361,14 @@ void PropertyEditor::on_apply_template() {
   }
   apply_template_values(values, true);
   build_form_for_kind(kind);
+  // 应用模板会重建整张表单。模板选择仅用于编辑器交互，不写入模型参数，
+  // 因此重建后要按稳定内部键恢复当前项，避免界面看起来回退到“类型默认值”。
+  if (template_combo_) {
+    const int applied_index = template_combo_->findData(choice);
+    if (applied_index >= 0) {
+      template_combo_->setCurrentIndex(applied_index);
+    }
+  }
   update_group_widget_for_kind(kind);
   update_validation();
   refresh_preview();
@@ -1407,19 +1524,37 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
   const QStringList functions = current_functions_;
   const QStringList materials = current_materials_;
 
-  auto* template_row = new QWidget(form_box_);
-  auto* template_layout = new QHBoxLayout(template_row);
-  template_layout->setContentsMargins(0, 0, 0, 0);
-  template_combo_ = new QComboBox(template_row);
-  install_combo_popup_fix(template_combo_);
-  template_combo_->addItem("Type Defaults");
-  apply_template_btn_ = new QPushButton("Apply Template", template_row);
-  template_layout->addWidget(template_combo_);
-  template_layout->addWidget(apply_template_btn_);
-  template_layout->addStretch(1);
-  form_layout_->addRow("Template", template_row);
-  connect(apply_template_btn_, &QPushButton::clicked, this,
-          &PropertyEditor::on_apply_template);
+  // Section 当前只有 SolidSection；Physics 当前也只有一套 QuasiStatic
+  // 默认参数，因此不显示模板栏。Materials/BC/Loads 具有多个命名
+  // 模板，使用下拉选择；Steps/Functions/Outputs 只有“类型默认值”，
+  // 用直接按钮代替无选择意义的单项下拉，避免 macOS 弹层错位。
+  if (kind != "Sections" && kind != "Physics") {
+    const bool has_named_templates =
+        kind == "Materials" || kind == "BC" || kind == "Loads";
+    auto* template_row = new QWidget(form_box_);
+    auto* template_layout = new QHBoxLayout(template_row);
+    template_layout->setContentsMargins(0, 0, 0, 0);
+    if (has_named_templates) {
+      template_combo_ = new QComboBox(template_row);
+      template_combo_->setObjectName("propertyTemplateSelector");
+      install_combo_popup_fix(template_combo_);
+      template_combo_->addItem("Type Defaults", "Type Defaults");
+      template_layout->addWidget(template_combo_);
+    }
+    apply_template_btn_ =
+        new QPushButton(has_named_templates ? "Apply Template"
+                                            : "Restore Type Defaults",
+                        template_row);
+    apply_template_btn_->setObjectName("propertyApplyTemplateButton");
+    apply_template_btn_->setToolTip(
+        l10n::tr("Overwrite template-controlled fields with their default "
+                 "values; group assignments are kept."));
+    template_layout->addWidget(apply_template_btn_);
+    template_layout->addStretch(1);
+    form_layout_->addRow("Template", template_row);
+    connect(apply_template_btn_, &QPushButton::clicked, this,
+            &PropertyEditor::on_apply_template);
+  }
   template_presets_.clear();
   template_descriptions_.clear();
 
@@ -1607,9 +1742,41 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     add_file_row("Tension Damage CSV", "tension_damage_file",
                  "cdpTensionDamageFile");
   } else if (kind == "Sections") {
-    add_combo("Type", "type", {"SolidSection"});
+    // Section 当前只有 SolidSection 一种合法类型。只读显示比单选项下拉
+    // 更准确，也规避 macOS 上下拉弹层按整行宽度展开的视觉异常。
+    auto* section_type = new QLineEdit(form_box_);
+    section_type->setObjectName("sectionType");
+    section_type->setReadOnly(true);
+    form_layout_->addRow("Type", section_type);
+    form_widgets_.insert("type", section_type);
     add_combo("Material", "material", materials, "sectionMaterial");
-    add_line("Physical Volumes", "block", "sectionBlock");
+    if (auto* material_combo =
+            qobject_cast<QComboBox*>(form_widgets_.value("material"))) {
+      // Material 是模型节点引用，只允许从现有材料中选择。按内容给一个
+      // 紧凑宽度，避免 QFormLayout 将控件拉满整行后，macOS popup 也随之
+      // 横跨整个工作窗。
+      material_combo->setEditable(false);
+      int content_width = 0;
+      for (int i = 0; i < material_combo->count(); ++i) {
+        content_width =
+            qMax(content_width,
+                 material_combo->fontMetrics().horizontalAdvance(
+                     material_combo->itemText(i)));
+      }
+      const int compact_width = qBound(240, content_width + 64, 480);
+      material_combo->setMinimumWidth(compact_width);
+      material_combo->setMaximumWidth(compact_width);
+      material_combo->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    }
+    auto* assigned_volumes = new QLineEdit(form_box_);
+    assigned_volumes->setObjectName("sectionBlock");
+    assigned_volumes->setReadOnly(true);
+    assigned_volumes->setPlaceholderText(
+        "Choose from the available physical volumes below.");
+    assigned_volumes->setToolTip(l10n::tr(
+        "This value is updated by Apply Selected Volumes below."));
+    form_layout_->addRow("Assigned Physical Volumes", assigned_volumes);
+    form_widgets_.insert("block", assigned_volumes);
   } else if (kind == "Steps") {
     // W-03e：Step→Executioner/TimeStepper/Preconditioning 表单
     // （*Static 四参数语义），分组：基本/求解控制/时间步进/预处理。
@@ -1662,8 +1829,8 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     add_line("Y Values", "y", "functionYValues");
   } else if (kind == "BC") {
     // W-03c：variable 候选 = Variables 节点 ∪ 常见位移变量名；
-    // boundary 继续用物理组 chips；FunctionDirichletBC 的 function 下拉
-    // 引用 Functions 节点子项名称。
+    // boundary 由下方物理面组列表指派，上方字段只读回显；
+    // FunctionDirichletBC 的 function 下拉引用 Functions 节点子项名称。
     QStringList variable_candidates = variables;
     for (const auto& candidate : {"disp_x", "disp_y", "disp_z", "u", "v"}) {
       if (!variable_candidates.contains(QLatin1String(candidate))) {
@@ -1674,7 +1841,15 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
                                "NeumannBC"},
               "bcTypeCombo");
     add_combo("Variable", "variable", variable_candidates, "bcVariableCombo");
-    add_line("Boundary", "boundary", "bcBoundaryEdit");
+    add_line("Assigned Boundaries", "boundary", "bcBoundaryEdit");
+    if (auto* boundary_edit =
+            qobject_cast<QLineEdit*>(form_widgets_.value("boundary"))) {
+      boundary_edit->setReadOnly(true);
+      boundary_edit->setPlaceholderText(
+          "Choose from the available boundary groups below.");
+      boundary_edit->setToolTip(l10n::tr(
+          "This value is updated by Apply Selected Boundaries below."));
+    }
     add_line("Value", "value", "bcValueEdit");
     add_combo("Function", "function", functions, "bcFunctionCombo");
   } else if (kind == "Loads") {
@@ -1741,8 +1916,6 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
   const QString default_var = variables.isEmpty() ? "u" : variables.first();
   const QString default_func =
       functions.isEmpty() ? "func_1" : functions.first();
-  const QString default_mat =
-      materials.isEmpty() ? "material_1" : materials.first();
   const QString default_bnd =
       boundary_groups_.isEmpty() ? "left" : boundary_groups_.first();
   const QString default_block =
@@ -1866,22 +2039,15 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     template_descriptions_.insert(
         "TensorMechanics",
         "Tensor mechanics kernel using displacement variables.");
-  } else if (kind == "Sections") {
-    template_presets_.insert("Solid Section",
-                             {{"type", "SolidSection"},
-                              {"material", default_mat}});
-    template_descriptions_.insert(
-        "Solid Section",
-        "Solid section assigning material.");
   }
 
   if (template_combo_) {
     for (const auto& key : template_presets_.keys()) {
-      template_combo_->addItem(key);
+      template_combo_->addItem(key, key);
     }
   }
 
-  if (!template_tabs_) {
+  if (template_combo_ && !template_tabs_) {
     template_tabs_ = new QTabWidget(form_box_);
     template_preview_ = new QPlainTextEdit(template_tabs_);
     template_preview_->setReadOnly(true);
@@ -1891,22 +2057,27 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     form_layout_->addRow("Template Info", template_tabs_);
   }
   if (template_combo_) {
-    connect(template_combo_, &QComboBox::currentTextChanged, this,
-            [this](const QString& key) {
+    connect(template_combo_, &QComboBox::currentIndexChanged, this,
+            [this](int index) {
               if (!template_preview_) {
                 return;
               }
+              QString key = template_combo_->itemData(index).toString();
+              if (key.isEmpty()) {
+                key = template_combo_->itemText(index);
+              }
               if (key == "Type Defaults") {
                 template_preview_->setPlainText(
-                    "Applies defaults for the selected type.");
+                    l10n::tr("Applies defaults for the selected type."));
                 return;
               }
               const QString desc =
                   template_descriptions_.value(key, "No description.");
-              template_preview_->setPlainText(desc);
+              template_preview_->setPlainText(l10n::tr(desc));
             });
     if (template_preview_) {
-      template_preview_->setPlainText("Applies defaults for the selected type.");
+      template_preview_->setPlainText(
+          l10n::tr("Applies defaults for the selected type."));
     }
   }
 
@@ -2106,6 +2277,13 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     }
   }
   update_visibility();
+
+  // 表单会在类型切换、应用模板和应用分组后动态重建；新建控件必须立即
+  // 使用当前语言，否则弹窗会从中文退回英文。
+  const bool was_updating = form_updating_;
+  form_updating_ = true;
+  l10n::apply(form_box_);
+  form_updating_ = was_updating;
 }
 
 void PropertyEditor::set_param_value(const QString& key,

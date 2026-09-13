@@ -1,7 +1,7 @@
 # GMP-ISE UI 重构 Phase 4 人工验收清单（W-00 / W-03a / W-02b）
 
-> 版本：2026-09-12 v3（补充多 Mesh、按部件生成、Job 网格选择、项目恢复与三阶段实时进度验收）
-> 前置：Phase 0~3 已全部验收关闭；自动回归基线为 99 步真实点击巡览 + CTest `1/1`
+> 版本：2026-09-13 v9（完整 CDP 快照的远程提交与计算节点启动已人工验收；最终状态与结果回放待验证）
+> 前置：Phase 0~3 已全部验收关闭；自动回归基线为 102 步真实点击巡览 + CTest `1/1`
 > 方案依据：`doc/UI重构Phase4方案设计.md`；任务口径：`doc/UI重构开发任务清单.md` W-00、W-02b、W-03a
 > 通用检查表见 `doc/UI重构开发任务清单.md` 附录 B
 
@@ -14,9 +14,9 @@
 
 ---
 
-## 当前仍需人工验证（2026-09-12）
+## 当前仍需人工验证（2026-09-13）
 
-本轮自动回归已通过 99 步真实点击巡览与 CTest `1/1`。以下 12 项仍需要人工确认；建议先验证本次 Mesh 改动对应的前三项。
+自动回归基线现为 102 步真实点击巡览与 CTest `1/1`；W-04 旧模板清理、`TEST-P4-W03-03` BC/函数扩展、`TEST-P4-W03-04` Step 映射、`TEST-P4-W03-05` Physics action 与 `TEST-P4-W03-06` 场/历史输出套餐已完成人工复测。以下 7 项仍需要人工确认。
 
 | 优先级 | 用例 | 人工确认重点 |
 |---|---|---|
@@ -25,13 +25,8 @@
 | P0 | TEST-P4-GEN-04 | 三阶段内实时进度、界面响应与取消手感 |
 | P1 | TEST-P4-GEN-05 | 无孔六面体结构化网格与带孔体回退 |
 | P1 | TEST-P4-GEN-06 | 单元拓扑策略、严格模式拒绝与持久化 |
-| P1 | TEST-P4-E2E-01 | 真实几何到远端求解、结果回放的端到端流程 |
-| P2 | TEST-P4-W01-01 | Section 指派与失效引用 |
+| P1 | TEST-P4-E2E-01 | 远程提交/计算节点启动已通过；待最终状态、结果登记与 Exodus 回放 |
 | P2 | TEST-P4-W01-02 | 从物理组创建选择集及重开恢复 |
-| P2 | TEST-P4-W03-03 | BC/函数扩展及输入同步 |
-| P2 | TEST-P4-W03-04 | Step 到 Executioner 映射及幂等同步 |
-| P2 | TEST-P4-W03-05 | Physics action 生成 |
-| P2 | TEST-P4-W03-06 | 场/历史输出套餐 |
 
 ---
 
@@ -211,7 +206,7 @@
 
 通过标准：子项创建成功（type=PhysicalGroup、维度/组名正确）；点击后视口按组过滤（tag 可解析时）；保存重开后仍在。
 
-## TEST-P4-W03-03 BC/函数扩展（W-03c）
+## TEST-P4-W03-03 BC/函数扩展（W-03c，已通过）
 
 1. 新建 Functions 子项，type 选 PiecewiseLinear，填 x=`0 1 2 3`、y=`0 2.5e-05 0 2.5e-05`；再试 x/y 个数不一致。
 2. 新建 BC，type 选 FunctionDirichletBC，function 下拉选到该函数，boundary 用面组 chips 选择。
@@ -219,13 +214,17 @@
 
 通过标准：个数不一致被校验拦截；`.i` 中函数为 `type = PiecewiseLinear` 且 x/y 带引号；BC 为 `type = FunctionDirichletBC` 且 `function = <函数名>`、无残留 value 行；DirichletBC 路径不受影响。
 
+验收记录（2026-09-13）：人工通过 UI 建立三个固定端 `DirichletBC`（`disp_x`/`disp_y`/`disp_z`，`boundary = fixed`，`value = 0`）与一个加载端 `FunctionDirichletBC`（`disp_z`，`boundary = load`，`function = function_1`）。同步后 `PiecewiseLinear` 仅生成等长且带引号的 `x/y`，无残留 `expression`；加载 BC 无残留 `value`；`[Mesh/file]` 无多余结束符；输入不再引用 `left`/`right`/`u`/`v`。
+
 ## TEST-P4-W03-04 Step→Executioner 映射（W-03e）
+
+> 本阶段可保存多个 Step，但同步只使用顺序中的第一个 Step，并必须明确告警其余 Step 未串联执行。真正的多 Step 串联、状态继承与分阶段对象激活已转入下一阶段 `REQ-018` / `TASK-NEXT-001`。
 
 1. 新建 Step（默认即 v01 参数），检查表单四组字段（基本/求解控制/时间步进/预处理）。
 2. 同步到输入检查 `[Executioner]`、`[TimeStepper]` 子块、`[Preconditioning/smp]`。
-3. 再建第二个 Step 后同步；连续同步两次。
+3. 可新建第二个 Step 后同步，检查提示；连续同步两次。
 
-通过标准：`[Executioner]` 含 NEWTON/line_search=bt/automatic_scaling/容差/petsc options（带引号）；`[TimeStepper]` 含 dt/optimal_iterations 等五项；`[Preconditioning/smp] full = true`；两个 Step 时给出“仅取第一个 Step”警告；重复同步不产生重复块。
+通过标准：`[Executioner]` 含 NEWTON/line_search=bt/automatic_scaling/容差/petsc options（带引号）；`[TimeStepper]` 含 dt/optimal_iterations 等五项；`[Preconditioning/smp] full = true`；多个 Step 时明确提示“仅取第一个 Step”；重复同步不产生重复块。
 
 ## TEST-P4-W03-05 Physics action 生成（W-03b）
 
@@ -234,14 +233,24 @@
 
 通过标准：`.i` 含 `[GlobalParams] displacements = 'disp_x disp_y disp_z'` 与 `[Physics/SolidMechanics/QuasiStatic/<名>]`；block 为指派组名；generate_output 16 项与 save_in='resid_x resid_y resid_z' 正确；重复同步幂等。
 
-## TEST-P4-W03-06 场/历史输出套餐（W-03d）
+## TEST-P4-W03-06 场/历史输出套餐（W-03d，已通过）
 
 1. 新建 Outputs 子项，勾选场输出变量 3 项以上（DamageC/DamageT/kappa_c）、历史输出反力（边界选面组）、Times（间隔 0.01）、Exodus+CSV。
 2. 同步到输入检查各块；连续同步两次。
 
 通过标准：生成对应 AuxVariables（CONSTANT MONOMIAL）与 AuxKernels（`property = DamageC`、`property = cdp_kappa_c` 命名正确）；Postprocessors 含 NodalSum；`[Times]` 为 TimeIntervalTimes；Exodus/CSV 带 sync_times_object 与 sync_only = true；重复同步无重复块。
 
-## TEST-P4-E2E-01 端到端：真实几何全流程（第二轮准出）
+验收记录（2026-09-13）：人工通过 UI 勾选 `DamageC`、`DamageT`、`kappa_c`，启用边界反力与边界平均位移并将历史输出面组应用为 `load`，位移变量为 `disp_z`；启用 `field_output_times`（0～1，间隔 0.01）以及 Exodus、CSV。同步后生成对应的 `[AuxVariables]`/`[AuxKernels]`、`load_reaction_x/y/z`、`load_disp_avg`、`[Times/field_output_times]`，两个输出子块引用同一 Times 对象且均含 `sync_only = true`；多次同步无重复块，`output_1` 显示“就绪”。
+
+## TEST-P4-W04-01 清理模型树已不存在的受管输入块（W-04）
+
+1. 输入编辑器先存在 diffusion 示例块，模型树仅保留当前实际对象。
+2. 执行“同步模型到 MOOSE 输入”或 `Ctrl+Shift+R`。
+3. 检查同步结果并连续同步第二次。
+
+通过标准：保留 `[Mesh/file]` 和模型树当前材料；自动删除模型树已不存在的 Variables、Functions、ICs、Kernels、BCs、Postprocessors、Executioner、Outputs 等旧示例块；重复同步不重新出现。
+
+## TEST-P4-E2E-01 端到端：真实几何全流程（远程提交与启动已通过）
 
 1. 打开你的几何（如 demo_fixed.geo），在“分组与网格场”页给表面建命名面组（如 fixed/load）、给体建体组（如 solid），生成网格。
 2. 新建 CDP 材料（填 v01 参数与 4 张 CSV）→ 新建 Section 指派材料到 solid → Add Physics（确认 block）→ 新建 Step → 新建 PiecewiseLinear 或 ParsedFunction 位移函数 → 新建 BC（固定面 DirichletBC + 加载面 FunctionDirichletBC，boundary 用 chips 选组）→ 新建 Outputs 勾选场/历史套餐。
@@ -250,19 +259,29 @@
 
 通过标准：全流程不手改 `.i` 文本；远端 --check-input 预检通过、作业成功；结果 .e 可载入并回放（若几何/边界与物理场景本身不收敛，以“预检通过 + 作业正常启动”为准，并在备注记录求解表现）。
 
+验收记录（2026-09-13，提交与启动阶段通过）：`测试03.gmp.yaml` 同步生成
+`.work/case/测试03/测试03.i`，v2 快照 `case-20260913-223920` 正确打包中文名输入、
+`mes_1.msh`、四个 CDP CSV 与 manifest。经 `http://127.0.0.1:8200`、项目
+`gmp-ise` 提交后创建 `job_20260913_223929_xu10t1`，状态由 `queued` 进入
+`running`；远端显示 PID `129578`、4 MPI ranks，物理时间从 `0.000625` 推进到
+`0.00125`。这证明中文 multipart 文件名与 manifest 已匹配、远端预检通过、计算节点
+求解器实际启动，提交和运行状态刷新人工验收完成。记录时作业仍在运行；最终
+`succeeded`、Results 登记、制品下载及 Exodus 回放仍需后续补证。
+
 ## 第二轮验收记录
 
 | 用例 | 结果 | 备注 |
 |---|---|---|
 | TEST-P4-W02-03 | 通过 | 物理组命名/维度/非空校验已完成人工验收 |
 | TEST-P4-W02-04 | 通过 | 2026-09-12 人工验收：输入文件显示 `[Mesh/file]` 与 `type = FileMeshGenerator`，无旧式顶层 `type = FileMesh`；日志确认网格路径已注入 |
-| TEST-P4-W01-01 | 待验证 | Section 指派 |
+| TEST-P4-W01-01 | 通过 | 2026-09-13 人工验收：Section 可选择 CDP 材料并将 `solid` 指派为物理体；三个 CDP `[Materials]` 子块均生成 `block = 'solid'`；删除材料后 Section 失效，恢复同名材料后引用自愈 |
+| TEST-P4-W04-01 | 通过 | 2026-09-13 人工验收：日志确认执行模型同步；结果仅保留 `[Mesh/file]` 与模型树当前 `material_1`，旧 `u/v`、Functions、ICs、MatDiffusion Kernels、diffusion 材料、left/right BC、Postprocessors、Executioner、Outputs 均已清理。当前材料为 `GenericConstantMaterial`，不代表完整 CDP 配置已完成 |
 | TEST-P4-W01-02 | 待验证 | 选择集创建 |
-| TEST-P4-W03-03 | 待验证 | BC/函数扩展 |
-| TEST-P4-W03-04 | 待验证 | Executioner 映射 |
-| TEST-P4-W03-05 | 待验证 | Physics action |
-| TEST-P4-W03-06 | 待验证 | 输出套餐 |
-| TEST-P4-E2E-01 | 待验证 | 端到端真实几何全流程 |
+| TEST-P4-W03-03 | 通过 | 2026-09-13 人工验收：`fixed` 三向零位移 + `load` 端 `FunctionDirichletBC`/`function_1` 映射正确；PiecewiseLinear 无残留 expression，FunctionDirichletBC 无残留 value，Mesh 块无多余 `[]` |
+| TEST-P4-W03-04 | 通过 | 2026-09-13 人工验收：`step_1` 表单与模型树状态正确；同步生成唯一一套 `[Executioner]` / `[TimeStepper]` / `[Preconditioning/smp]`，参数符合 v01 基线；日志记录多次同步且多 Step 时明确提示“仅取第一个 Step”，最终输入无重复块。多 Step 串联执行与状态继承转 `REQ-018` / `TASK-NEXT-001` |
+| TEST-P4-W03-05 | 通过 | 2026-09-13 人工验收：`physic_1` 保存后显示“就绪”；同步生成 `[GlobalParams]`、`[Physics/SolidMechanics/QuasiStatic/physic_1]`、16 项 `generate_output`、`save_in` 与 `resid_x/y/z`；连续同步无重复块 |
+| TEST-P4-W03-06 | 通过 | 2026-09-13 人工验收：`DamageC`/`DamageT`/`kappa_c` 场输出、`load` 面反力与 `disp_z` 平均位移、Times 0～1/0.01、Exodus+CSV 均正确生成；重复同步无重复块 |
+| TEST-P4-E2E-01 | 提交与启动通过 | 2026-09-13：`job_20260913_223929_xu10t1` 已由 queued 进入 running，远端 PID/4 MPI ranks/物理时间推进均有证据；最终状态、Results 登记、制品下载与 Exodus 回放待补证 |
 
 ---
 

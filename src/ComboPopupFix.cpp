@@ -151,10 +151,10 @@ class ComboPopupFixer : public QObject {
       popup_h = min_popup_h;
     }
 
-    int popup_w = hint.width();
-    if (popup_w < width) {
-      popup_w = width;
-    }
+    // macOS 上原生 popup 容器的 sizeHint 偶尔会返回接近整块滚动页/屏幕
+    // 的宽度。内容宽度已在上方逐项测量，直接使用该结果，避免下拉列表
+    // 被错误扩展成横跨整个窗口的长条。
+    int popup_w = width;
 
     if (const QScreen* screen = QGuiApplication::screenAt(origin)) {
       const QRect geo = screen->availableGeometry();

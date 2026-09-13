@@ -111,6 +111,12 @@ QJsonObject SimClient::build_submission_manifest(
   return sub;
 }
 
+QByteArray SimClient::multipart_file_content_disposition(
+    const QString& file_name) {
+  return QByteArrayLiteral("form-data; name=\"files\"; filename=\"") +
+         file_name.toUtf8() + QByteArrayLiteral("\"");
+}
+
 QString SimClient::describe_http_error(int status, const QJsonObject& body) {
   const QJsonObject failure = body.value("failure").toObject();
   if (!failure.isEmpty()) {
@@ -201,11 +207,12 @@ void SimClient::submit_snapshot(const QString& snapshot_dir,
     QHttpPart part;
     part.setHeader(QNetworkRequest::ContentTypeHeader,
                    QVariant(QStringLiteral("application/octet-stream")));
-    part.setHeader(QNetworkRequest::ContentDispositionHeader,
-                   QVariant(QString("form-data; name=\"files\"; "
-                                    "filename=\"%1\"")
-                                .arg(QString::fromUtf8(
-                                    QUrl::toPercentEncoding(name)))));
+    // 浏览器/Sanic 兼容形态：filename 直接携带 UTF-8。此前把整个文件名
+    // 百分号编码后，服务端收到的是字面量 "%E6%B5...i"，无法与
+    // manifest 中的 "测试03.i" 对应。
+    part.setRawHeader(
+        QByteArrayLiteral("Content-Disposition"),
+        multipart_file_content_disposition(name));
     part.setBodyDevice(file);
     file->setParent(multi);
     multi->append(part);

@@ -14,6 +14,7 @@
 #include <QMap>
 #include <QMessageBox>
 #include <QRegularExpression>
+#include <QSaveFile>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QScrollArea>
@@ -454,6 +455,7 @@ void MoosePanel::on_pick_input() {
                                    "MOOSE Input (*.i)");
   if (!path.isEmpty()) {
     input_path_->setText(path);
+    workdir_path_->setText(QFileInfo(path).absolutePath());
     save_settings();
   }
 }
@@ -483,6 +485,7 @@ void MoosePanel::on_write_input() {
   }
   file.write(input_editor_->toPlainText().toUtf8());
   file.close();
+  workdir_path_->setText(QFileInfo(out_path).absolutePath());
   append_log("Input file written: " + out_path);
   save_settings();
 }
@@ -699,6 +702,14 @@ void MoosePanel::apply_model_blocks(const QString& functions,
                                     const QString& outputs,
                                     const QString& executioner) {
   QString input = input_editor_->toPlainText();
+  // 同步也是旧项目的自愈入口：历史版本可能把旧式 [Mesh] 的外层 []
+  // 遗留在直接路径块之后。只要当前已有网格路径，就在装配其他模型块前
+  // 统一规范化 Mesh 块，无需用户重新选择或重新生成网格。
+  const QString current_mesh_path =
+      mesh_path_ ? mesh_path_->currentText().trimmed() : QString();
+  if (!current_mesh_path.isEmpty()) {
+    input = inject_mesh_block(input, current_mesh_path);
+  }
   input = upsert_block(input, "Functions", functions);
   input = upsert_block(input, "Variables", variables);
   input = upsert_block(input, "Materials", materials);
@@ -859,6 +870,73 @@ void MoosePanel::set_extra_file_sources(
 
 QString MoosePanel::input_text() const {
   return input_editor_ ? input_editor_->toPlainText() : QString();
+}
+
+bool MoosePanel::materialize_project_input(const QString& project_path) {
+  const QFileInfo project_info(project_path.trimmed());
+  if (project_path.trimmed().isEmpty() ||
+      project_info.absolutePath().trimmed().isEmpty()) {
+    return false;
+  }
+
+  QString project_name = project_info.fileName();
+  if (project_name.endsWith(".gmp.yaml", Qt::CaseInsensitive)) {
+    project_name.chop(QString(".gmp.yaml").size());
+  } else {
+    project_name = project_info.completeBaseName();
+  }
+  if (project_name.trimmed().isEmpty()) {
+    project_name = "generated_input";
+  }
+  project_name.replace(QRegularExpression("[\\\\/:*?\"<>|]"), "_");
+
+  const QString case_dir = project_info.absoluteDir().absoluteFilePath(
+      ".work/case/" + project_name);
+  if (!QDir().mkpath(case_dir)) {
+    append_log("Failed to create project case directory: " + case_dir);
+    return false;
+  }
+  const QString target =
+      QDir(case_dir).absoluteFilePath(project_name + ".i");
+  QSaveFile output(target);
+  if (!output.open(QIODevice::WriteOnly) ||
+      output.write(input_editor_->toPlainText().toUtf8()) < 0 ||
+      !output.commit()) {
+    append_log("Failed to write generated project input: " + target);
+    return false;
+  }
+
+  project_path_ = project_path;
+  input_path_->setText(target);
+  workdir_path_->setText(case_dir);
+
+  // 本地 --check-input 与直接运行都以 case_dir 为工作目录；将材料 CSV
+  // 等相对引用的已登记来源同步到此处，保证编辑器、落盘 .i 与运行环境一致。
+  bool staged_all = true;
+  for (auto it = extra_file_sources_.constBegin();
+       it != extra_file_sources_.constEnd(); ++it) {
+    const QString source_path = QFileInfo(it.value()).absoluteFilePath();
+    const QString dest_path = QDir(case_dir).absoluteFilePath(it.key());
+    if (source_path == dest_path) {
+      continue;
+    }
+    QFile source(source_path);
+    if (!source.open(QIODevice::ReadOnly)) {
+      append_log("Failed to stage input attachment: " + source_path);
+      staged_all = false;
+      continue;
+    }
+    QSaveFile dest(dest_path);
+    if (!dest.open(QIODevice::WriteOnly) ||
+        dest.write(source.readAll()) < 0 || !dest.commit()) {
+      append_log("Failed to stage input attachment: " + dest_path);
+      staged_all = false;
+    }
+  }
+
+  append_log("Generated project input written: " + target);
+  save_settings();
+  return staged_all;
 }
 
 ApplicationProfile MoosePanel::snapshot_profile() const {
@@ -1426,23 +1504,54 @@ QString MoosePanel::upsert_block(const QString& input,
                                  const QString& block_name,
                                  const QString& block_text) const {
   const QString trimmed = block_text.trimmed();
-  if (trimmed.isEmpty()) {
-    return input;
-  }
-  const QString pattern =
-      QString(R"((?s)\[%1\].*?(?=\n\[|\z))")
-          .arg(QRegularExpression::escape(block_name));
-  QRegularExpression re(pattern);
   QString out = input;
-  if (re.match(out).hasMatch()) {
-    out.replace(re, trimmed);
+  // 顶层 MOOSE 块及其闭合行都必须一起替换。旧实现只匹配到根级
+  // `[]` 之前，导致每次同步都会遗留一个孤立的 `[]`。
+  const QRegularExpression open_re(
+      QString(R"((?m)^\[%1\][ \t]*\r?$)")
+          .arg(QRegularExpression::escape(block_name)));
+  const QRegularExpression close_re(R"((?m)^\[\][ \t]*\r?$)");
+  const auto open = open_re.match(out);
+  const auto close = open.hasMatch()
+                         ? close_re.match(out, open.capturedEnd())
+                         : QRegularExpressionMatch();
+  if (open.hasMatch() && close.hasMatch()) {
+    int replace_end = close.capturedEnd();
+    if (replace_end < out.size() && out.at(replace_end) == '\n') {
+      ++replace_end;
+    }
+    // 顺手清理由旧替换逻辑已经产生、且紧邻当前根闭合行的孤立 `[]`。
+    while (replace_end < out.size()) {
+      const auto extra = close_re.match(
+          out, replace_end, QRegularExpression::NormalMatch,
+          QRegularExpression::AnchorAtOffsetMatchOption);
+      if (!extra.hasMatch()) {
+        break;
+      }
+      replace_end = extra.capturedEnd();
+      if (replace_end < out.size() && out.at(replace_end) == '\n') {
+        ++replace_end;
+      }
+    }
+    out.replace(open.capturedStart(), replace_end - open.capturedStart(),
+                trimmed.isEmpty() ? QString() : trimmed + "\n");
   } else {
+    // 模型树中没有该类对象时，空块意味着删除既有受管块；若输入中本来
+    // 就没有该块，则无需改动。
+    if (trimmed.isEmpty()) {
+      return input;
+    }
     out = out.trimmed();
     if (!out.isEmpty()) {
       out += "\n\n";
     }
     out += trimmed;
     out += "\n";
+  }
+  // 删除块可能把其前后空行拼成三行以上，统一保持块间一个空行。
+  out.replace(QRegularExpression("\\n{3,}"), "\n\n");
+  if (!out.trimmed().isEmpty()) {
+    out = out.trimmed() + "\n";
   }
   return out;
 }
@@ -2157,7 +2266,11 @@ QString MoosePanel::inject_mesh_block(const QString& input,
     if (lines[i].trimmed() == "[Mesh]") {
       start = i;
       for (int j = i + 1; j < lines.size(); ++j) {
-        if (lines[j].trimmed() == "[]") {
+        // 只接受列 0 的结束符。旧式 [Mesh] 可能包含缩进子块，若用
+        // trimmed() 判断会误把内层 "  []" 当成整个 [Mesh] 的结尾，
+        // 替换后遗留第二个顶层 []。
+        if (lines[j].trimmed() == "[]" &&
+            !lines[j].startsWith(' ') && !lines[j].startsWith('\t')) {
           end = j;
           break;
         }
@@ -2173,12 +2286,32 @@ QString MoosePanel::inject_mesh_block(const QString& input,
   }
 
   // 已有 [Mesh/...] 子块（无顶层包装）时按 upsert 语义整体替换。
-  static const QRegularExpression subblock_re(
-      QStringLiteral(R"((?s)\[Mesh/[^\]\n]+\].*?(?=\n\[|\z))"));
-  if (subblock_re.match(input).hasMatch()) {
-    QString out = input;
-    out.replace(subblock_re, block);
-    return out;
+  // 同时兼容并清理由旧缺陷生成、紧跟在 Mesh 子块后的孤立第二个 []。
+  start = -1;
+  end = -1;
+  for (int i = 0; i < lines.size(); ++i) {
+    if (!lines[i].startsWith(' ') && !lines[i].startsWith('\t') &&
+        lines[i].trimmed().startsWith("[Mesh/")) {
+      start = i;
+      for (int j = i + 1; j < lines.size(); ++j) {
+        if (lines[j].trimmed() == "[]" &&
+            !lines[j].startsWith(' ') && !lines[j].startsWith('\t')) {
+          end = j;
+          break;
+        }
+      }
+      break;
+    }
+  }
+  if (start >= 0 && end >= start) {
+    if (end + 1 < lines.size() && lines[end + 1].trimmed() == "[]" &&
+        !lines[end + 1].startsWith(' ') &&
+        !lines[end + 1].startsWith('\t')) {
+      ++end;
+    }
+    lines.erase(lines.begin() + start, lines.begin() + end + 1);
+    lines.insert(start, block);
+    return lines.join('\n');
   }
 
   // Prepend if not found.

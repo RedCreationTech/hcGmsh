@@ -724,26 +724,23 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   phys_form->addRow(phys_refresh);
 
   phys_group_dim_ = new QComboBox();
-  phys_group_dim_->addItem("0", 0);
-  phys_group_dim_->addItem("1", 1);
-  phys_group_dim_->addItem("2", 2);
-  phys_group_dim_->addItem("3", 3);
+  phys_group_dim_->setObjectName("physicalGroupDimension");
+  phys_group_dim_->addItem("0 — Point", 0);
+  phys_group_dim_->addItem("1 — Curve", 1);
+  phys_group_dim_->addItem("2 — Surface", 2);
+  phys_group_dim_->addItem("3 — Volume", 3);
   tune_dim_combo(phys_group_dim_);
-  connect(phys_group_dim_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-          this, [this]() {
-            validate_entity_input(phys_group_entities_,
-                                 phys_group_dim_ ? phys_group_dim_->currentData().toInt()
-                                                : -1,
-                                 false);
-          });
   phys_group_name_ = new QLineEdit();
   phys_group_name_->setPlaceholderText("Name");
   phys_form->addRow("Dim", phys_group_dim_);
   phys_form->addRow("Name", phys_group_name_);
 
   phys_group_entities_ = new QLineEdit();
-  phys_group_entities_->setPlaceholderText("Entity IDs or dim:tag list");
+  phys_group_entities_->setObjectName("physicalGroupEntities");
+  phys_group_entities_->setPlaceholderText(
+      "Use dimension:tag, e.g. 3:1 or 2:1, 2:7");
   auto* phys_entities_pick = new QPushButton("Pick");
+  phys_entities_pick->setObjectName("physicalGroupEntityPickButton");
   connect(phys_entities_pick, &QPushButton::clicked, this, [this]() {
     const int dim = phys_group_dim_ ? phys_group_dim_->currentData().toInt() : -1;
     active_entity_input_ = phys_group_entities_;
@@ -757,6 +754,28 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* phys_entities_container = new QWidget();
   phys_entities_container->setLayout(phys_entities_row);
   phys_form->addRow("Entities", phys_entities_container);
+  auto* phys_entities_hint = new QLabel();
+  phys_entities_hint->setObjectName("physicalGroupEntityHint");
+  phys_entities_hint->setWordWrap(true);
+  phys_entities_hint->setStyleSheet("color: #555;");
+  phys_form->addRow(phys_entities_hint);
+  auto update_physical_dimension_hint = [this, phys_entities_hint]() {
+    const int dim = phys_group_dim_ ? phys_group_dim_->currentData().toInt() : -1;
+    static const QStringList hints = {
+        "Point selection: values use 0:tag, e.g. 0:1.",
+        "Curve selection: values use 1:tag, e.g. 1:1.",
+        "Surface selection: values use 2:tag, e.g. 2:1, 2:7.",
+        "Volume selection: values use 3:tag, e.g. 3:1."};
+    phys_entities_hint->setText(dim >= 0 && dim < hints.size()
+                                    ? l10n::tr(hints.at(dim))
+                                    : QString());
+    validate_entity_input(phys_group_entities_, dim, false);
+  };
+  connect(phys_group_dim_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+          this, [update_physical_dimension_hint](int) {
+            update_physical_dimension_hint();
+          });
+  update_physical_dimension_hint();
   bind_entity_input_validation(phys_group_entities_, phys_group_dim_, false);
 
   phys_group_add_ = new QPushButton("Add");
@@ -780,7 +799,7 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   phys_group_table_ = new QTableWidget();
   phys_group_table_->setColumnCount(5);
   phys_group_table_->setHorizontalHeaderLabels(
-      {"Dim", "Tag", "Name", "Entities", "Elements"});
+      {"Dim", "Tag", "Name", "Entity Count", "Elements"});
   phys_group_table_->horizontalHeader()->setStretchLastSection(true);
   // 5列表格不参与撑宽面板, 过窄时表格内部自行横向滚动
   phys_group_table_->setSizePolicy(QSizePolicy::Ignored,
@@ -3186,7 +3205,7 @@ void GmshPanel::on_physical_group_selected(int) {
   gmsh::model::getEntitiesForPhysicalGroup(dim, tag, ent_tags);
   QStringList ids;
   for (int t : ent_tags) {
-    ids << QString::number(t);
+    ids << QString("%1:%2").arg(dim).arg(t);
   }
   if (phys_group_entities_) {
     phys_group_entities_->setText(ids.join(", "));
@@ -3239,8 +3258,7 @@ void GmshPanel::apply_entity_pick(int dim, int tag) {
   }
 
   const bool same_dim = dim_filter >= 0 && dim_filter == dim;
-  const QString token = same_dim ? QString::number(tag)
-                                 : QString("%1:%2").arg(dim).arg(tag);
+  const QString token = QString("%1:%2").arg(dim).arg(tag);
   const QString text = active_entity_input_->text();
   QStringList parts =
       text.split(QRegularExpression("[,\\s]+"), Qt::SkipEmptyParts);
@@ -4082,12 +4100,49 @@ QString GmshPanel::pick_entities_dialog(int dim_filter,
     return current_text;
   }
   ensure_gmsh();
+  const bool chinese =
+      l10n::current_language() == l10n::Language::Chinese;
   QDialog dialog(this);
-  dialog.setWindowTitle(title);
-  dialog.resize(420, 360);
+  dialog.setObjectName("entityPickerDialog");
+  dialog.setWindowTitle(
+      chinese && title == "Select Physical Group Entities"
+          ? QString::fromUtf8("选择物理组实体")
+          : title);
+  dialog.resize(760, 460);
   auto* layout = new QVBoxLayout(&dialog);
 
+  QString source;
+  if (model_selector_) {
+    source = model_selector_->currentText().trimmed();
+  }
+  if (source.startsWith("part: ")) {
+    source = source.mid(QString("part: ").size()).trimmed();
+  } else if (!source.isEmpty()) {
+    const QFileInfo source_info(source);
+    if (!source_info.fileName().isEmpty()) {
+      source = source_info.fileName();
+    }
+  }
+
+  QString help_text = chinese
+                          ? QString::fromUtf8(
+                                "请选择要操作的几何实体。标识格式为“维度:编号”："
+                                "0=点、1=边、2=面、3=体。")
+                          : QString(
+                                "Select the geometric entities to operate on. "
+                                "IDs use dimension:tag: 0=point, 1=curve, "
+                                "2=surface, 3=volume.");
+  if (!source.isEmpty()) {
+    help_text += chinese ? QString::fromUtf8(" 当前来源：%1").arg(source)
+                         : QString(" Current source: %1").arg(source);
+  }
+  auto* help = new QLabel(help_text, &dialog);
+  help->setObjectName("entityPickerHelp");
+  help->setWordWrap(true);
+  layout->addWidget(help);
+
   auto* list = new QListWidget();
+  list->setObjectName("entityPickerList");
   list->setSelectionMode(QAbstractItemView::NoSelection);
   layout->addWidget(list, 1);
 
@@ -4105,9 +4160,49 @@ QString GmshPanel::pick_entities_dialog(int dim_filter,
     gmsh::model::getEntities(entities);
   }
   std::sort(entities.begin(), entities.end());
+  const QStringList chinese_types = {QString::fromUtf8("点"),
+                                     QString::fromUtf8("边"),
+                                     QString::fromUtf8("面"),
+                                     QString::fromUtf8("体")};
+  const QStringList english_types = {"Point", "Curve", "Surface", "Volume"};
   for (const auto& e : entities) {
     const QString key = QString("%1:%2").arg(e.first).arg(e.second);
-    auto* item = new QListWidgetItem(key, list);
+    const QString type =
+        e.first >= 0 && e.first < 4
+            ? (chinese ? chinese_types.at(e.first) : english_types.at(e.first))
+            : (chinese ? QString::fromUtf8("实体") : QString("Entity"));
+    QString bounds;
+    try {
+      double xmin = 0.0;
+      double ymin = 0.0;
+      double zmin = 0.0;
+      double xmax = 0.0;
+      double ymax = 0.0;
+      double zmax = 0.0;
+      gmsh::model::getBoundingBox(e.first, e.second, xmin, ymin, zmin, xmax,
+                                  ymax, zmax);
+      auto number = [](double value) { return QString::number(value, 'g', 6); };
+      bounds = QString("X[%1, %2] Y[%3, %4] Z[%5, %6]")
+                   .arg(number(xmin), number(xmax), number(ymin), number(ymax),
+                        number(zmin), number(zmax));
+    } catch (...) {
+    }
+    QString label = chinese
+                        ? QString::fromUtf8("%1 %2（Gmsh 标识 %3）")
+                              .arg(type)
+                              .arg(e.second)
+                              .arg(key)
+                        : QString("%1 %2 (Gmsh ID %3)")
+                              .arg(type)
+                              .arg(e.second)
+                              .arg(key);
+    if (!bounds.isEmpty()) {
+      label += chinese ? QString::fromUtf8(" · 范围 %1").arg(bounds)
+                       : QString(" · Bounds %1").arg(bounds);
+    }
+    auto* item = new QListWidgetItem(label, list);
+    item->setData(Qt::UserRole, key);
+    item->setToolTip(help_text + "\n" + label);
     item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
     item->setCheckState(preselect.contains(key) ? Qt::Checked
                                                 : Qt::Unchecked);
@@ -4115,8 +4210,17 @@ QString GmshPanel::pick_entities_dialog(int dim_filter,
 
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok |
                                        QDialogButtonBox::Cancel);
-  auto* select_all = new QPushButton("All");
-  auto* clear_all = new QPushButton("Clear");
+  buttons->setObjectName("entityPickerButtons");
+  auto* select_all = new QPushButton(chinese ? QString::fromUtf8("全部")
+                                             : QString("All"));
+  auto* clear_all = new QPushButton(chinese ? QString::fromUtf8("清除")
+                                            : QString("Clear"));
+  if (auto* ok = buttons->button(QDialogButtonBox::Ok)) {
+    ok->setText(chinese ? QString::fromUtf8("确定") : QString("OK"));
+  }
+  if (auto* cancel = buttons->button(QDialogButtonBox::Cancel)) {
+    cancel->setText(chinese ? QString::fromUtf8("取消") : QString("Cancel"));
+  }
   buttons->addButton(select_all, QDialogButtonBox::ActionRole);
   buttons->addButton(clear_all, QDialogButtonBox::ActionRole);
   layout->addWidget(buttons);
@@ -4144,15 +4248,8 @@ QString GmshPanel::pick_entities_dialog(int dim_filter,
     if (item->checkState() != Qt::Checked) {
       continue;
     }
-    const QString key = item->text();
-    if (dim_filter >= 0) {
-      const int colon = key.indexOf(':');
-      if (colon > 0) {
-        selected << key.mid(colon + 1);
-      }
-    } else {
-      selected << key;
-    }
+    const QString key = item->data(Qt::UserRole).toString();
+    selected << key;
   }
   return selected.join(", ");
 #else

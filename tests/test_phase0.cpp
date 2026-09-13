@@ -389,6 +389,14 @@ void test_snapshot_v2(TestContext& test) {
 }
 
 void test_submission_manifest(TestContext& test) {
+  const QByteArray unicode_disposition =
+      gmp::SimClient::multipart_file_content_disposition(
+          QString::fromUtf8("测试03.i"));
+  test.expect(unicode_disposition.contains(
+                  QString::fromUtf8("测试03.i").toUtf8()) &&
+                  !unicode_disposition.contains("%E6"),
+              "multipart filename preserves the manifest Unicode name");
+
   QJsonObject mesh_entry;
   mesh_entry.insert("name", "mesh/case.msh");
   mesh_entry.insert("sha256", QString(64, 'b'));

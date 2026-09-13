@@ -409,6 +409,20 @@ Gmsh .geo / OCC 几何 / 导入 CAD
 - 关联逻辑/路径：`MainWindow::start_submit_workflow()`、`src/MoosePanel.cpp::on_submit_job()`、`src/SimClient.cpp`、Jobs/Results 模型树节点。
 - 验收标准：参考案例通过 UI 生成并校验后可提交到计算节点；作业状态、日志和结果文件回写项目，用户无需手工复制 `.i` 或 `.msh`。
 
+### REQ-018 支持多 Step 串联执行与状态继承（下一阶段 TODO）
+
+- 目标/价值：一个项目可按顺序定义多个分析 Step，后一个 Step 在前一个 Step 的解、内部状态和时间线基础上继续求解，用于加载、保持、卸载及再加载等连续分析。
+- 当前阶段约束：项目可保存多个 Step，但生成合同只覆盖顺序中的第一个 Step，生成唯一一套 `[Executioner]` / `[TimeStepper]` / `[Preconditioning]`；存在其余 Step 时必须明确告警它们未串联执行，且不得把该降级行为视为最终多 Step 设计。
+- 业务规则：
+  - Step 具有稳定顺序，支持新建、删除、重排和复制；保存、重开项目后顺序与参数不变。
+  - 除非用户明确选择独立重启模式，否则 Step N+1 必须继承 Step N 末端的位移、速度/加速度（如适用）、材料内部变量、损伤/塑性状态及可继承的 Aux 状态。
+  - 每个 Step 可定义起止时间、求解与时间步参数，以及 BC、Load、Constraint、Contact 和 Output 的激活、保持、修改或停用策略。
+  - MOOSE 生成器不应机械输出多个同级 `[Executioner]`；应根据应用能力将 Step 序列编译到单一连续时间线与 Controls/时间依赖对象，或显式生成可追溯的分段作业和 restart 链。
+  - 目标应用若不支持所需的串联/状态传递能力，必须在生成前阻断并定位到具体 Step，不得静默忽略。
+- 数据/接口影响：项目 schema 需保存 Step 顺序、时间区间、状态继承模式和对象激活表；生成报告与 manifest 需记录 Step 到 MOOSE 时间段/作业/restart 文件的映射。
+- 依赖/约束：需先对目标 MOOSE 应用验证 Controls、restart/recover、材料 stateful properties 以及分段输出的支持边界。
+- 验收标准：建立至少“加载 → 保持 → 卸载/再加载”三个 Step；连续运行后时间单调、后一 Step 初始状态与前一 Step 末状态一致，损伤/塑性历史不被重置；各 Step 的载荷、边界条件和输出按激活表生效，保存重开与重复生成均幂等。
+
 ## 4. 关键交互流程
 
 ### 4.1 编辑已有节点

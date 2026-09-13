@@ -38,12 +38,15 @@ class FloatingPropertyForm : public QDialog {
  private:
   void commit_if_valid();
   QString settings_key() const;
+  void fit_to_current_tab();
+  QSize preferred_size_for_current_tab() const;
 
   QTreeWidgetItem* target_item_ = nullptr;
   QTreeWidget* buffer_tree_ = nullptr;
   QTreeWidgetItem* buffer_item_ = nullptr;
   PropertyEditor* editor_ = nullptr;
   QDialogButtonBox* buttons_ = nullptr;
+  QWidget* stage_ = nullptr;
 };
 
 }  // namespace gmp

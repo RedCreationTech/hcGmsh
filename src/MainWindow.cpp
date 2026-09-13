@@ -6893,6 +6893,13 @@ void MainWindow::refresh_tree_statuses() {
       }
       const QVariantMap params =
           child->data(0, PropertyEditor::kParamsRole).toMap();
+      const QString kind =
+          child->data(0, PropertyEditor::kKindRole).toString().isEmpty()
+              ? root->text(0)
+              : child->data(0, PropertyEditor::kKindRole).toString();
+      const QStringList validation_issues =
+          property_editor_ ? property_editor_->validate_params(kind, params)
+                           : QStringList();
       if (child->icon(0).isNull() && !root->icon(0).isNull()) {
         child->setIcon(0, root->icon(0));
       }
@@ -6964,15 +6971,15 @@ void MainWindow::refresh_tree_statuses() {
                    IconGlyph::Output, raw);
       } else if (normalized.contains("new") || normalized.contains("idle") ||
                  normalized.contains("missing") ||
-                 (!params.isEmpty() &&
-                  params.value("type").toString().isEmpty() &&
-                  params.value("path").toString().isEmpty())) {
+                 !validation_issues.isEmpty()) {
         has_incomplete = true;
         all_success = false;
         set_status(child, chinese ? "不完整" : "Incomplete",
                    IconGlyph::Sync,
-                   raw.isEmpty() ? QString("Required configuration is incomplete")
-                                 : raw);
+                   raw.isEmpty()
+                       ? QString("Required configuration is incomplete: %1")
+                             .arg(validation_issues.join(", "))
+                       : raw);
       } else if (params.isEmpty()) {
         has_incomplete = true;
         all_success = false;
@@ -8550,10 +8557,10 @@ QString quote_moose_value_if_needed(const QString& value) {
 QString upsert_generated_block(const QString& input, const QString& header,
                                const QString& block_text) {
   const QString trimmed = block_text.trimmed();
-  if (trimmed.isEmpty()) {
+  if (header.trimmed().isEmpty()) {
     return input;
   }
-  if (input.contains(trimmed)) {
+  if (!trimmed.isEmpty() && input.contains(trimmed)) {
     return input;
   }
   const QStringList lines = input.split('\n');
@@ -8566,6 +8573,9 @@ QString upsert_generated_block(const QString& input, const QString& header,
     }
   }
   if (start < 0) {
+    if (trimmed.isEmpty()) {
+      return input;
+    }
     QString out = input.trimmed();
     if (!out.isEmpty()) {
       out += "\n\n";
@@ -8583,9 +8593,27 @@ QString upsert_generated_block(const QString& input, const QString& header,
     }
   }
   QStringList out_lines = lines.mid(0, start);
-  out_lines += trimmed.split('\n');
+  if (!trimmed.isEmpty()) {
+    out_lines += trimmed.split('\n');
+  }
   out_lines += lines.mid(end);
-  return out_lines.join('\n');
+  QString out = out_lines.join('\n');
+  out.replace(QRegularExpression("\\n{3,}"), "\n\n");
+  return out.trimmed().isEmpty() ? QString() : out.trimmed() + "\n";
+}
+
+QStringList generated_headers_with_prefix(const QString& input,
+                                          const QString& prefix) {
+  QStringList headers;
+  const QRegularExpression header_re(R"((?m)^\[([^\]\r\n]+)\][ \t]*\r?$)");
+  auto matches = header_re.globalMatch(input);
+  while (matches.hasNext()) {
+    const QString header = matches.next().captured(1);
+    if (header.startsWith(prefix) && !headers.contains(header)) {
+      headers << header;
+    }
+  }
+  return headers;
 }
 
 }  // namespace
@@ -8613,6 +8641,13 @@ QString MainWindow::build_functions_block(QTreeWidgetItem* root) const {
     const bool piecewise = (type == "PiecewiseLinear");
     for (auto it = params.begin(); it != params.end(); ++it) {
       if (it.key() == "type") {
+        continue;
+      }
+      // 函数类型切换后项目数据中可能保留另一类型的字段。表单虽会隐藏
+      // 不适用字段，生成器仍需按当前 type 过滤，避免 PiecewiseLinear
+      // 输出无效 expression，或 ParsedFunction 输出无效 x/y。
+      if ((piecewise && it.key() == "expression") ||
+          (!piecewise && (it.key() == "x" || it.key() == "y"))) {
         continue;
       }
       QString value = it.value().toString();
@@ -8746,8 +8781,14 @@ QString MainWindow::build_materials_block(QTreeWidgetItem* root) const {
                                  "compression_damage_file",
                                  "tension_stiffening_file",
                                  "tension_damage_file"};
-  const QStringList skip_keys = {"type",   "block",  "section",
-                                 "status", "state",  "unit_factor_stress"};
+  const QStringList skip_keys = {
+      "type", "block", "section", "status", "state", "unit_factor_stress",
+      // 从其他材料类型切换到 CDP 的旧项目可能仍保存这些字段；它们都不
+      // 属于 AbaqusCDPStressUpdate，生成时必须过滤。
+      "prop_names", "prop_values", "expression", "property_name",
+      "coupled_variables", "fill_method", "C_ijkl",
+      "thermal_expansion_coeff", "temperature", "stress_free_temperature",
+      "eigenstrain_name", "displacements"};
   QString out;
   out += "[Materials]\n";
   for (int i = 0; i < root->childCount(); ++i) {
@@ -9526,10 +9567,13 @@ QString MainWindow::build_times_block(QString* header) const {
   return out;
 }
 
-void MainWindow::sync_model_to_input() {
+void MainWindow::sync_model_to_input(const QString& project_path_override) {
   if (!moose_panel_) {
     return;
   }
+  // 材料 CSV 等相对输入文件可能刚由属性表单更新；每次装配前刷新来源表，
+  // 供项目工作目录物化与后续快照打包共同使用。
+  moose_panel_->set_extra_file_sources(collect_material_file_sources());
   const QString functions = build_functions_block(find_root_item("Functions"));
   const QString variables = build_variables_block(find_root_item("Variables"));
   const QString materials = build_materials_block(find_root_item("Materials"));
@@ -9540,6 +9584,8 @@ void MainWindow::sync_model_to_input() {
   const QString outputs = build_outputs_block(find_root_item("Outputs"));
   QString executioner =
       build_executioner_block(find_root_item("Steps"));
+  const QStringList current_preconditioning_headers =
+      generated_headers_with_prefix(executioner, "Preconditioning/");
   // W-03e 幂等防护：apply_model_blocks 的 upsert 只锚定 [Executioner]
   // 区，[Preconditioning] 随 executioner 文本注入；若编辑器中已存在完全
   // 相同的生成块（参数未变的重复 sync），本次仅更新 [Executioner] 区，
@@ -9562,6 +9608,7 @@ void MainWindow::sync_model_to_input() {
   {
     QString input = moose_panel_->input_text();
     auto* physics_root = find_root_item("Physics");
+    QSet<QString> current_physics_headers;
     if (physics_root && physics_root->childCount() > 0) {
       input = upsert_generated_block(input, "GlobalParams",
                                      build_global_params_block());
@@ -9569,7 +9616,31 @@ void MainWindow::sync_model_to_input() {
         QString header;
         const QString block =
             build_physics_action_block(physics_root->child(i), &header);
+        current_physics_headers.insert(header);
         input = upsert_generated_block(input, header, block);
+      }
+    } else {
+      input = upsert_generated_block(input, "GlobalParams", QString());
+    }
+    // 删除已从模型树移除或改名的 Physics action，避免旧 action 与新
+    // action 同时残留在输入中。
+    for (const auto& header : generated_headers_with_prefix(
+             input, "Physics/SolidMechanics/")) {
+      if (!current_physics_headers.contains(header)) {
+        input = upsert_generated_block(input, header, QString());
+      }
+    }
+    // 当前模型没有任何变量时，模板遗留的 IC 也不可能有效。IC 尚无
+    // 独立模型树节点，因此在这一明确条件下清理旧 [ICs]。
+    if (variables.trimmed().isEmpty()) {
+      input = upsert_generated_block(input, "ICs", QString());
+    }
+    // [Preconditioning/<name>] 是 Step 生成的独立顶层块。Step 删除或
+    // 预条件器改名后，必须同步移除旧块。
+    for (const auto& header :
+         generated_headers_with_prefix(input, "Preconditioning/")) {
+      if (!current_preconditioning_headers.contains(header)) {
+        input = upsert_generated_block(input, header, QString());
       }
     }
     input = upsert_generated_block(input, "AuxVariables",
@@ -9580,10 +9651,24 @@ void MainWindow::sync_model_to_input() {
                                    build_postprocessors_block());
     QString times_header;
     const QString times = build_times_block(&times_header);
-    input = upsert_generated_block(input, times_header, times);
+    for (const auto& header :
+         generated_headers_with_prefix(input, "Times/")) {
+      if (header != times_header) {
+        input = upsert_generated_block(input, header, QString());
+      }
+    }
+    if (!times_header.isEmpty()) {
+      input = upsert_generated_block(input, times_header, times);
+    }
     if (input != moose_panel_->input_text()) {
       moose_panel_->apply_moose_settings({{"input_text", input}});
     }
+  }
+  const QString artifact_project_path = project_path_override.isEmpty()
+                                            ? project_path_
+                                            : project_path_override;
+  if (!artifact_project_path.isEmpty()) {
+    moose_panel_->materialize_project_input(artifact_project_path);
   }
   const QVariantMap settings = moose_panel_->moose_settings();
   const QString input_path = settings.value("input_path").toString();
@@ -10617,6 +10702,27 @@ bool MainWindow::load_project(const QString& path) {
     application_profile_ = loaded_application_profile;
     unit_contract_ = loaded_unit_contract;
     mesh_snapshot_ = loaded_mesh_snapshot;
+    // 项目保存时 physical groups 已进入 mesh_snapshot；加载后还必须按
+    // 网格维度重新喂给 PropertyEditor，否则 BC/Outputs 的边界候选与
+    // Section/Physics/Loads 的体组候选只在本次网格生成信号触发后才有值。
+    // 这属于派生 UI 状态恢复，不修改已保存的对象参数。
+    if (property_editor_) {
+      int model_dim = mesh_snapshot_.mesh_dim;
+      if (model_dim < 0) {
+        for (const auto& group : mesh_snapshot_.groups) {
+          model_dim = qMax(model_dim, group.dim);
+        }
+      }
+      if (model_dim >= 0) {
+        property_editor_->set_boundary_groups(
+            mesh_snapshot_.group_names(qMax(0, model_dim - 1)));
+        property_editor_->set_volume_groups(
+            mesh_snapshot_.group_names(model_dim));
+      } else {
+        property_editor_->set_boundary_groups({});
+        property_editor_->set_volume_groups({});
+      }
+    }
     suppress_dirty_ = false;
     // W-00a/W-00d：档案字段恢复后刷新选择器并按档案重载 mapping 注册表；
     // 旧项目无档案字段时保持“未选择”，允许用户补选，不阻断加载。
@@ -10642,6 +10748,10 @@ bool MainWindow::load_project(const QString& path) {
 
 bool MainWindow::save_project(const QString& path) {
   try {
+    // 工程文件中的 moose.input_text 是模型树的派生产物。保存前统一同步，
+    // 避免 Material/Section 已就绪而工程仍持久化旧输入文本。
+    sync_model_to_input(path);
+
     YAML::Node root;
     root["schema_version"] = schema_version_;
     root["version"] = 2;  // 保留旧字段以兼容只读 version 的工具
@@ -11344,6 +11454,62 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         !project_dirty_) {
                       throw std::runtime_error("I-01 accepted edit was not committed");
                     }
+                  },
+                  this});
+    steps.append({"property_form_adaptive_tabs_contract",
+                  [this]() {
+                    auto* bc_root = find_root_item("BC");
+                    if (!bc_root || !property_editor_ || !viewer_) {
+                      throw std::runtime_error(
+                          "Adaptive property form fixture is missing");
+                    }
+                    const QStringList saved_boundaries =
+                        property_editor_->boundary_groups();
+                    property_editor_->set_boundary_groups({"fixed", "load"});
+                    auto* bc = add_child_item(
+                        bc_root, "tour_adaptive_bc", "BC",
+                        {{"type", "DirichletBC"},
+                         {"variable", "disp_z"},
+                         {"boundary", "fixed"},
+                         {"value", "0"}});
+                    open_property_form(bc);
+                    qApp->processEvents();
+                    auto* form = findChild<FloatingPropertyForm*>(
+                        "floatingPropertyForm");
+                    auto* tabs = form ? form->findChild<QTabWidget*>(
+                                            "propertyEditorTabs")
+                                      : nullptr;
+                    auto* groups = form ? form->findChild<QGroupBox*>(
+                                              "propertyGroupsBox")
+                                        : nullptr;
+                    auto* quick = form ? form->findChild<QGroupBox*>(
+                                             "propertyQuickParametersBox")
+                                       : nullptr;
+                    if (!form || !tabs || !groups || !quick) {
+                      throw std::runtime_error(
+                          "Adaptive property form controls are missing");
+                    }
+                    form->resize(760, 420);
+                    tabs->setCurrentIndex(0);
+                    qApp->processEvents();
+                    const int general_height = form->height();
+                    tabs->setCurrentIndex(1);
+                    qApp->processEvents();
+                    const QRect safe = form->screen()->availableGeometry()
+                                           .adjusted(12, 12, -12, -12);
+                    if (form->height() <= general_height ||
+                        form->size().width() > safe.width() ||
+                        form->size().height() > safe.height() ||
+                        groups->geometry().top() >= quick->geometry().top()) {
+                      throw std::runtime_error(
+                          "Property form did not fit the active tab or place "
+                          "group assignment first");
+                    }
+                    form->reject();
+                    qApp->sendPostedEvents(nullptr,
+                                           QEvent::DeferredDelete);
+                    delete bc_root->takeChild(bc_root->indexOfChild(bc));
+                    property_editor_->set_boundary_groups(saved_boundaries);
                   },
                   this});
     steps.append({"i02_navigation_status_filter",
@@ -12811,6 +12977,122 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                 },
                 this});
+  steps.append({"entity_picker_guidance_contract",
+                [this]() {
+                  const QString picker_geo =
+                      QDir::temp().absoluteFilePath(
+                          QString("gmp_entity_picker_%1.geo")
+                              .arg(QDateTime::currentMSecsSinceEpoch()));
+                  {
+                    QFile file(picker_geo);
+                    if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                      throw std::runtime_error(
+                          "Entity picker geometry fixture cannot be written");
+                    }
+                    file.write("SetFactory(\"OpenCASCADE\");\n"
+                               "Box(1) = {0, 0, 0, 2, 3, 4};\n");
+                  }
+                  if (!gmsh_panel_ ||
+                      !gmsh_panel_->import_geometry(picker_geo, false)) {
+                    QFile::remove(picker_geo);
+                    throw std::runtime_error(
+                        "Entity picker geometry fixture cannot be loaded");
+                  }
+                  auto* dim = gmsh_panel_
+                                  ? gmsh_panel_->findChild<QComboBox*>(
+                                        "physicalGroupDimension")
+                                  : nullptr;
+                  auto* pick = gmsh_panel_
+                                   ? gmsh_panel_->findChild<QPushButton*>(
+                                         "physicalGroupEntityPickButton")
+                                   : nullptr;
+                  auto* entity_input =
+                      gmsh_panel_ ? gmsh_panel_->findChild<QLineEdit*>(
+                                        "physicalGroupEntities")
+                                  : nullptr;
+                  auto* entity_hint =
+                      gmsh_panel_ ? gmsh_panel_->findChild<QLabel*>(
+                                        "physicalGroupEntityHint")
+                                  : nullptr;
+                  if (!dim || !pick || !entity_input || !entity_hint) {
+                    throw std::runtime_error(
+                        "Entity picker guidance fixture is missing");
+                  }
+                  const int saved_dim = dim->currentIndex();
+                  const int volume_index = dim->findData(3);
+                  if (volume_index < 0) {
+                    throw std::runtime_error(
+                        "Entity picker volume filter is missing");
+                  }
+                  dim->setCurrentIndex(volume_index);
+                  struct PickerState {
+                    bool opened = false;
+                    bool explained = false;
+                    bool readable_item = false;
+                    QString selected_key;
+                  };
+                  auto state = std::make_shared<PickerState>();
+                  QTimer::singleShot(0, this, [state]() {
+                    auto* dialog = qobject_cast<QDialog*>(
+                        QApplication::activeModalWidget());
+                    auto* help = dialog
+                                     ? dialog->findChild<QLabel*>(
+                                           "entityPickerHelp")
+                                     : nullptr;
+                    auto* list = dialog
+                                     ? dialog->findChild<QListWidget*>(
+                                           "entityPickerList")
+                                     : nullptr;
+                    auto* buttons =
+                        dialog ? dialog->findChild<QDialogButtonBox*>(
+                                     "entityPickerButtons")
+                               : nullptr;
+                    state->opened = dialog && help && list && buttons;
+                    state->explained =
+                        help && help->text().contains("0=") &&
+                        help->text().contains("3=") &&
+                        help->text().contains("gmp_entity_picker_");
+                    if (list && list->count() > 0) {
+                      auto* item = list->item(0);
+                      const QString key = item->data(Qt::UserRole).toString();
+                      state->readable_item =
+                          key.startsWith("3:") && item->text().contains(key) &&
+                          (item->text().contains(QString::fromUtf8("体")) ||
+                           item->text().contains("Volume")) &&
+                          (item->text().contains(QString::fromUtf8("范围")) ||
+                           item->text().contains("Bounds"));
+                      if (state->readable_item) {
+                        item->setCheckState(Qt::Checked);
+                        state->selected_key = key;
+                      }
+                    }
+                    if (buttons &&
+                        buttons->button(QDialogButtonBox::Ok)) {
+                      buttons->button(QDialogButtonBox::Ok)->click();
+                    } else if (dialog) {
+                      dialog->reject();
+                    }
+                  });
+                  pick->click();
+                  const bool qualified_writeback =
+                      !state->selected_key.isEmpty() &&
+                      entity_input->text() == state->selected_key;
+                  const bool dimension_explained =
+                      (dim->currentText().contains(QString::fromUtf8("体")) ||
+                       dim->currentText().contains("Volume")) &&
+                      entity_hint->text().contains("3:");
+                  entity_input->clear();
+                  dim->setCurrentIndex(saved_dim);
+                  QFile::remove(picker_geo);
+                  if (!state->opened || !state->explained ||
+                      !state->readable_item || !qualified_writeback ||
+                      !dimension_explained) {
+                    throw std::runtime_error(
+                        "Entity picker does not explain dimension tags or "
+                        "identify selectable geometry");
+                  }
+                },
+                mesh_work_window_});
 #endif
   // W-03a/W-02b：v01 基线 fixture（4 CSV + Exodus 网格）目录解析，
   // 候选顺序与 MooseMappingRegistry::default_path 一致。
@@ -12848,13 +13130,90 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   const QStringList csv_names = {
                       "compression_hardening.csv", "compression_damage.csv",
                       "tension_stiffening.csv", "tension_damage.csv"};
-                  auto* item = add_child_item(root, "tour_cdp", "Materials",
-                                              {{"type", "AbaqusCDP"}});
+                  auto* item = add_child_item(
+                      root, "tour_cdp", "Materials",
+                      {{"type", "GenericConstantMaterial"},
+                       {"prop_names", "prop"},
+                       {"prop_values", "1.0"}});
                   if (!item) {
                     throw std::runtime_error(
                         "W-03a CDP material node was not created");
                   }
+                  // 中文界面会翻译模板显示名；按钮必须通过稳定 itemData
+                  // 命中英文模板键，并立即把普通材料切换为 AbaqusCDP。
                   property_editor_->set_item(item);
+                  // 表单重建使用 deleteLater；先清掉旧控件，确保真实点击命中
+                  // 当前可见的模板选择器与按钮。
+                  QCoreApplication::sendPostedEvents(
+                      nullptr, QEvent::DeferredDelete);
+                  auto* template_combo =
+                      property_editor_->findChild<QComboBox*>(
+                          "propertyTemplateSelector");
+                  auto* apply_template =
+                      property_editor_->findChild<QPushButton*>(
+                          "propertyApplyTemplateButton");
+                  const int cdp_template =
+                      template_combo
+                          ? template_combo->findData("CDP Concrete (Abaqus)")
+                          : -1;
+                  if (!template_combo || !apply_template || cdp_template < 0) {
+                    throw std::runtime_error(
+                        "W-03a CDP template control is missing");
+                  }
+                  // 下拉弹窗宽度应由控件/选项内容决定，不能采用 macOS
+                  // 原生容器偶发返回的整屏 sizeHint。
+                  template_combo->showPopup();
+                  QCoreApplication::processEvents();
+                  const int expected_popup_width =
+                      qMax(160,
+                           qMax(template_combo->width(),
+                                template_combo->view()->sizeHintForColumn(0) +
+                                    24));
+                  const int actual_popup_width =
+                      template_combo->view()->window()->width();
+                  template_combo->hidePopup();
+                  if (actual_popup_width > expected_popup_width + 8) {
+                    throw std::runtime_error(
+                        "Property template popup expands beyond its content");
+                  }
+                  template_combo->setCurrentIndex(cdp_template);
+                  l10n::apply(property_editor_);
+                  apply_template->click();
+                  QCoreApplication::sendPostedEvents(
+                      nullptr, QEvent::DeferredDelete);
+                  auto* applied_template_combo =
+                      property_editor_->findChild<QComboBox*>(
+                          "propertyTemplateSelector");
+                  const QString applied_type =
+                      item->data(0, PropertyEditor::kParamsRole)
+                          .toMap()
+                          .value("type")
+                          .toString();
+                  if (applied_type != "AbaqusCDP" ||
+                      item->data(0, PropertyEditor::kParamsRole)
+                          .toMap()
+                          .contains("prop_names") ||
+                      item->data(0, PropertyEditor::kParamsRole)
+                          .toMap()
+                          .contains("prop_values") ||
+                      !applied_template_combo ||
+                      applied_template_combo->currentData().toString() !=
+                          "CDP Concrete (Abaqus)" ||
+                      !property_editor_->findChild<QLineEdit*>(
+                          "cdpYoungsModulusMpa")) {
+                    throw std::runtime_error(
+                        QString("W-03a localized CDP template was not applied "
+                                "(data=%1, text=%2, type=%3)")
+                            .arg(applied_template_combo
+                                     ? applied_template_combo->currentData()
+                                           .toString()
+                                     : QString("<missing>"),
+                                 applied_template_combo
+                                     ? applied_template_combo->currentText()
+                                     : QString("<missing>"),
+                                 applied_type)
+                            .toStdString());
+                  }
                   auto require_edit =
                       [this](const char* object_name) -> QLineEdit* {
                     auto* edit =
@@ -12920,6 +13279,26 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                           "W-03a CDP file_sources channel contract failed");
                     }
                   }
+                  // 回归旧项目：历史版本可能已把普通材料字段写回 CDP
+                  // 节点，编辑器文本也可能含一次旧 upsert 遗留的根闭合行。
+                  // 新版同步必须直接清理二者，无需用户重建材料。
+                  {
+                    QSignalBlocker tree_blocker(model_tree_);
+                    QVariantMap legacy_params =
+                        item->data(0, PropertyEditor::kParamsRole).toMap();
+                    legacy_params.insert("prop_names", "prop");
+                    legacy_params.insert("prop_values", "1.0");
+                    item->setData(0, PropertyEditor::kParamsRole,
+                                  legacy_params);
+                  }
+                  QString legacy_input = moose_panel_->input_text();
+                  const QString legacy_close = "\n[]\n\n[BCs]";
+                  if (legacy_input.contains(legacy_close)) {
+                    legacy_input.replace(legacy_close,
+                                         "\n[]\n[]\n\n[BCs]");
+                    moose_panel_->apply_moose_settings(
+                        {{"input_text", legacy_input}});
+                  }
                   sync_model_to_input();
                   const QString input = moose_panel_->input_text();
                   if (!input.contains(
@@ -12933,9 +13312,20 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       !input.contains("compression_hardening_file = "
                                       "compression_hardening.csv") ||
                       !input.contains(
-                          "tension_damage_file = tension_damage.csv")) {
+                          "tension_damage_file = tension_damage.csv") ||
+                      input.contains("\n    prop_names = prop\n") ||
+                      input.contains("\n    prop_values = 1.0\n") ||
+                      input.contains("  []\n[]\n[]")) {
+                    const int materials_pos = input.indexOf("[Materials]");
+                    const QString excerpt =
+                        materials_pos >= 0
+                            ? input.mid(materials_pos, 1600)
+                            : input.left(1600);
                     throw std::runtime_error(
-                        "W-03a CDP three-object generation contract failed");
+                        QString("W-03a CDP three-object generation contract "
+                                "failed:\n%1")
+                            .arg(excerpt)
+                            .toStdString());
                   }
                   if (input.contains(fixture_dir)) {
                     throw std::runtime_error(
@@ -13040,8 +13430,13 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   // 模拟 GmshPanel::volume_groups 信号喂入体组名称。
                   const QStringList saved_volumes =
                       property_editor_->volume_groups();
+                  const l10n::Language saved_language =
+                      l10n::current_language();
+                  l10n::set_language(l10n::Language::Chinese);
                   property_editor_->set_volume_groups({"solid", "solid_b"});
                   property_editor_->set_item(section);
+                  QCoreApplication::sendPostedEvents(
+                      nullptr, QEvent::DeferredDelete);
                   auto* material_combo =
                       property_editor_->findChild<QComboBox*>(
                           "sectionMaterial");
@@ -13051,11 +13446,34 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   auto* apply_btn =
                       property_editor_->findChild<QPushButton*>(
                           "applyGroupsBtn");
+                  auto* redundant_template =
+                      property_editor_->findChild<QComboBox*>(
+                          "propertyTemplateSelector");
+                  auto* section_type =
+                      property_editor_->findChild<QLineEdit*>("sectionType");
                   if (!material_combo || !groups_list || !apply_btn ||
+                      redundant_template || !section_type ||
+                      !section_type->isReadOnly() ||
+                      section_type->text() != "SolidSection" ||
+                      material_combo->isEditable() ||
+                      material_combo->width() > 480 ||
                       material_combo->findText("tour_sec_cdp") < 0) {
                     throw std::runtime_error(
                         "W-01b section form contract failed (material "
-                        "dropdown or volume groups)");
+                        "dropdown, volume groups, or redundant template UI)");
+                  }
+                  material_combo->showPopup();
+                  QCoreApplication::processEvents();
+                  const int expected_material_popup_width =
+                      qMax(material_combo->width(),
+                           material_combo->view()->sizeHintForColumn(0) + 24);
+                  const int actual_material_popup_width =
+                      material_combo->view()->window()->width();
+                  material_combo->hidePopup();
+                  if (actual_material_popup_width >
+                      expected_material_popup_width + 8) {
+                    throw std::runtime_error(
+                        "W-01b material popup expands beyond its content");
                   }
                   // 多组指派：选中两个体组并应用 → block 含两组名
                   // （selectedItems 顺序不作假设，生成取首个）。
@@ -13065,6 +13483,8 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     }
                   }
                   apply_btn->click();
+                  QCoreApplication::sendPostedEvents(
+                      nullptr, QEvent::DeferredDelete);
                   QVariantMap section_params =
                       section->data(0, PropertyEditor::kParamsRole).toMap();
                   const QStringList assigned =
@@ -13077,18 +13497,80 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     throw std::runtime_error(
                         "W-01b volume group apply contract failed");
                   }
-                  sync_model_to_input();
+                  auto* assigned_edit =
+                      property_editor_->findChild<QLineEdit*>("sectionBlock");
+                  auto* localized_groups =
+                      property_editor_->findChild<QGroupBox*>(
+                          "propertyGroupsBox");
+                  auto* localized_apply =
+                      property_editor_->findChild<QPushButton*>(
+                          "applyGroupsBtn");
+                  if (!assigned_edit || !assigned_edit->isReadOnly() ||
+                      assigned_edit->text().isEmpty() || !localized_groups ||
+                      localized_groups->title() !=
+                          QString::fromUtf8("可选物理体") ||
+                      !localized_apply ||
+                      localized_apply->text() !=
+                          QString::fromUtf8("应用所选物理体")) {
+                    throw std::runtime_error(
+                        "W-01b section assignment UX/localization contract "
+                        "failed");
+                  }
+                  // 保存本身必须先同步模型树，不能把旧的 MOOSE 输入文本写入
+                  // 工程。先主动放入陈旧输入，再仅调用保存验证该合同。
+                  QVariantMap stale_settings = moose_panel_->moose_settings();
+                  stale_settings.insert("input_text", "[Materials]\n[]\n");
+                  moose_panel_->apply_moose_settings(stale_settings);
+                  const QString save_path =
+                      QDir::tempPath() + "/gmp_tour_w01b_save_sync.gmp.yaml";
+                  if (!save_project(save_path)) {
+                    throw std::runtime_error(
+                        "W-01b project save failed during sync contract");
+                  }
+                  QString saved_input;
+                  QString saved_input_path;
+                  QString saved_workdir;
+                  try {
+                    const YAML::Node saved =
+                        YAML::LoadFile(save_path.toStdString());
+                    if (saved["moose"] && saved["moose"]["input_text"]) {
+                      saved_input = QString::fromStdString(
+                          saved["moose"]["input_text"].as<std::string>());
+                      saved_input_path = QString::fromStdString(
+                          saved["moose"]["input_path"].as<std::string>());
+                      saved_workdir = QString::fromStdString(
+                          saved["moose"]["workdir"].as<std::string>());
+                    }
+                  } catch (...) {
+                    QFile::remove(save_path);
+                    throw;
+                  }
+                  QFile::remove(save_path);
                   const QString input = moose_panel_->input_text();
                   const QString expected_block =
                       QString("block = '%1'").arg(assigned.first());
+                  const QString expected_workdir =
+                      QDir(QFileInfo(save_path).absolutePath())
+                          .absoluteFilePath(
+                              ".work/case/gmp_tour_w01b_save_sync");
+                  const QString expected_input_path =
+                      QDir(expected_workdir)
+                          .absoluteFilePath("gmp_tour_w01b_save_sync.i");
                   if (!input.contains("[tour_sec_cdp_elasticity]") ||
+                      saved_input != input ||
+                      saved_input_path != expected_input_path ||
+                      saved_workdir != expected_workdir ||
+                      !QFileInfo::exists(expected_input_path) ||
                       !input.contains(expected_block) ||
                       input.contains("[tour_sec_cdp_elasticity]\n"
                                      "    type = ComputeIsotropicElasticityTensor\n"
                                      "    block = ''")) {
+                    QDir(expected_workdir).removeRecursively();
                     throw std::runtime_error(
-                        "W-01b assigned block generation contract failed");
+                        "W-01b assigned block/input artifact generation "
+                        "contract failed");
                   }
+                  QDir(expected_workdir).removeRecursively();
                   // 删除被引用材料 → validate_params 报 material reference，
                   // 树状态标 Invalid（中/英环境均可）。
                   remove_item(material);
@@ -13110,7 +13592,221 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         sections->indexOfChild(section));
                   }
                   property_editor_->set_volume_groups(saved_volumes);
+                  l10n::set_language(saved_language);
+                  l10n::apply(property_editor_);
                   refresh_module_pages();
+                },
+                this});
+  steps.append({"mesh_block_injection_contract",
+                [this]() {
+                  if (!moose_panel_) {
+                    throw std::runtime_error(
+                        "Mesh injection fixture is missing");
+                  }
+                  const QVariantMap saved = moose_panel_->moose_settings();
+                  const QString replacement =
+                      QDir::current().absoluteFilePath("out/replacement.msh");
+                  auto verify_replacement = [this, &replacement]() {
+                    const QString input = moose_panel_->input_text();
+                    const QString expected =
+                        QString("[Mesh/file]\n  type = FileMeshGenerator\n"
+                                "  file = %1\n[]")
+                            .arg(replacement);
+                    if (!input.startsWith(expected) ||
+                        input.mid(expected.size()).startsWith("\n[]")) {
+                      throw std::runtime_error(
+                          "Mesh injection retained an orphan top-level close");
+                    }
+                  };
+
+                  QVariantMap fixture = saved;
+                  fixture.insert(
+                      "input_text",
+                      QString::fromUtf8(R"([Mesh]
+  [file]
+    type = FileMeshGenerator
+    file = old.msh
+  []
+[]
+
+[Variables]
+[]
+)"));
+                  fixture.insert("mesh_path", replacement);
+                  moose_panel_->apply_moose_settings(fixture);
+                  moose_panel_->set_mesh_path(replacement);
+                  verify_replacement();
+
+                  // 已由旧版本写出的直接路径块也应在下一次模型同步时自愈。
+                  fixture.insert(
+                      "input_text",
+                      QString::fromUtf8(R"([Mesh/file]
+  type = FileMeshGenerator
+  file = old.msh
+[]
+[]
+
+[Variables]
+[]
+)"));
+                  moose_panel_->apply_moose_settings(fixture);
+                  moose_panel_->apply_model_blocks(
+                      QString(), QString(), QString(), QString(), QString(),
+                      QString(), QString());
+                  verify_replacement();
+                  moose_panel_->apply_moose_settings(saved);
+                },
+                this});
+  steps.append({"model_sync_prunes_stale_blocks",
+                [this]() {
+                  // W-04：结构化模型为空时，同步必须删除旧模板遗留块，
+                  // 而不是要求用户在输入编辑器中逐块手工清理。
+                  if (!model_tree_ || !moose_panel_ || !property_editor_) {
+                    throw std::runtime_error(
+                        "W-04 stale-block fixture is missing");
+                  }
+                  const QString restore_path =
+                      QDir::tempPath() +
+                      "/gmp_tour_w04_prune_restore.gmp.yaml";
+                  if (!save_project(restore_path)) {
+                    throw std::runtime_error(
+                        "W-04 could not save the restore fixture");
+                  }
+
+                  property_editor_->set_item(nullptr);
+                  clear_model_tree_children();
+                  auto* material = add_child_item(
+                      find_root_item("Materials"), "tour_prune_cdp",
+                      "Materials", {{"type", "AbaqusCDP"}});
+                  auto* section = add_child_item(
+                      find_root_item("Sections"), "tour_prune_section",
+                      "Sections", {{"type", "SolidSection"},
+                                   {"material", "tour_prune_cdp"},
+                                   {"block", "solid"}});
+                  if (!material || !section) {
+                    QFile::remove(restore_path);
+                    throw std::runtime_error(
+                        "W-04 minimal model could not be created");
+                  }
+
+                  QVariantMap stale = moose_panel_->moose_settings();
+                  stale.insert(
+                      "input_text",
+                      QString::fromUtf8(R"([Mesh/file]
+  type = FileMeshGenerator
+  file = stale.msh
+[]
+
+[Variables]
+  [u]
+    family = LAGRANGE
+  []
+[]
+
+[Functions]
+  [source_u]
+    type = ParsedFunction
+  []
+[]
+
+[ICs]
+  [u_ic]
+    type = FunctionIC
+  []
+[]
+
+[Kernels]
+  [u_diff]
+    type = MatDiffusion
+  []
+[]
+
+[Materials]
+  [diffusion]
+    type = GenericConstantMaterial
+  []
+[]
+
+[BCs]
+  [u_left]
+    boundary = left
+  []
+[]
+
+[Postprocessors]
+  [u_avg]
+    type = ElementAverageValue
+  []
+[]
+
+[Executioner]
+  type = Transient
+[]
+
+[Preconditioning/old_smp]
+  type = SMP
+[]
+
+[GlobalParams]
+  displacements = 'disp_x disp_y disp_z'
+[]
+
+[Physics/SolidMechanics/old_action]
+  action = QuasiStatic
+[]
+
+[AuxVariables]
+  [DamageC]
+    family = MONOMIAL
+  []
+[]
+
+[AuxKernels]
+  [damage_c_aux]
+    type = MaterialRealAux
+  []
+[]
+
+[Times/old_times]
+  type = TimeIntervalTimes
+[]
+
+[Outputs]
+  exodus = true
+[]
+)"));
+                  moose_panel_->apply_moose_settings(stale);
+                  sync_model_to_input();
+                  const QString input = moose_panel_->input_text();
+                  const QStringList forbidden{
+                      "[Variables]", "[Functions]", "[ICs]", "[Kernels]",
+                      "[BCs]", "[Postprocessors]", "[Executioner]",
+                      "[Preconditioning/", "[GlobalParams]",
+                      "[Physics/SolidMechanics/", "[AuxVariables]",
+                      "[AuxKernels]", "[Times/", "[Outputs]",
+                      "[diffusion]"};
+                  QString failure;
+                  if (!input.contains("[Mesh/file]") ||
+                      !input.contains("[tour_prune_cdp_elasticity]") ||
+                      !input.contains("block = 'solid'")) {
+                    failure =
+                        "W-04 sync did not preserve Mesh/CDP Section output";
+                  }
+                  for (const auto& marker : forbidden) {
+                    if (failure.isEmpty() && input.contains(marker)) {
+                      failure = QString("W-04 sync retained stale block: %1")
+                                    .arg(marker);
+                    }
+                  }
+                  const bool restored = load_project(restore_path);
+                  QFile::remove(restore_path);
+                  if (!restored) {
+                    throw std::runtime_error(
+                        "W-04 could not restore the tour project");
+                  }
+                  if (!failure.isEmpty()) {
+                    throw std::runtime_error(failure.toStdString());
+                  }
                 },
                 this});
   steps.append({"selection_from_group_contract",
@@ -13126,15 +13822,27 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   // GMSH 构建下 i04_geo_import_feedback 已生成含 "solid"
                   // 的快照；否则就地注入条目模拟 W-00b 生产者。
                   const PhysicalGroupManifest saved_snapshot = mesh_snapshot_;
-                  if (!mesh_snapshot_.has_group("solid", 3)) {
+                  if (!mesh_snapshot_.has_group("solid", 3) ||
+                      !mesh_snapshot_.has_group("fixed", 2) ||
+                      !mesh_snapshot_.has_group("load", 2)) {
                     PhysicalGroupManifest snapshot = mesh_snapshot_;
-                    PhysicalGroupEntry entry;
-                    entry.name = "solid";
-                    entry.dim = 3;
-                    entry.tags = {1};
-                    entry.entity_count = 1;
-                    entry.element_count = 1;
-                    snapshot.groups.append(entry);
+                    snapshot.mesh_dim = 3;
+                    auto ensure_group = [&snapshot](const QString& name,
+                                                    int dim, int tag) {
+                      if (snapshot.has_group(name, dim)) {
+                        return;
+                      }
+                      PhysicalGroupEntry entry;
+                      entry.name = name;
+                      entry.dim = dim;
+                      entry.tags = {tag};
+                      entry.entity_count = 1;
+                      entry.element_count = 1;
+                      snapshot.groups.append(entry);
+                    };
+                    ensure_group("fixed", 2, 1);
+                    ensure_group("load", 2, 2);
+                    ensure_group("solid", 3, 1);
                     mesh_snapshot_ = snapshot;
                   }
                   const auto solid_entry = mesh_snapshot_.group("solid");
@@ -13181,14 +13889,35 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                           "PhysicalGroup" ||
                       reloaded_params.value("group_name").toString() !=
                           "solid" ||
-                      reloaded_params.value("group_dim").toInt() != 3) {
+                      reloaded_params.value("group_dim").toInt() != 3 ||
+                      !property_editor_->boundary_groups().contains("fixed") ||
+                      !property_editor_->boundary_groups().contains("load") ||
+                      !property_editor_->volume_groups().contains("solid")) {
                     throw std::runtime_error(
-                        "W-01c selection round-trip contract failed");
+                        "W-01c selection/physical-group UI round-trip "
+                        "contract failed");
                   }
                   // 清理：移除节点、恢复快照、删除临时工程文件。
                   delete reloaded_root->takeChild(
                       reloaded_root->indexOfChild(reloaded));
                   mesh_snapshot_ = saved_snapshot;
+                  if (property_editor_) {
+                    int model_dim = mesh_snapshot_.mesh_dim;
+                    if (model_dim < 0) {
+                      for (const auto& group : mesh_snapshot_.groups) {
+                        model_dim = qMax(model_dim, group.dim);
+                      }
+                    }
+                    property_editor_->set_boundary_groups(
+                        model_dim >= 0
+                            ? mesh_snapshot_.group_names(
+                                  qMax(0, model_dim - 1))
+                            : QStringList());
+                    property_editor_->set_volume_groups(
+                        model_dim >= 0
+                            ? mesh_snapshot_.group_names(model_dim)
+                            : QStringList());
+                  }
                   QFile::remove(path);
                   refresh_module_pages();
                 },
@@ -14444,6 +15173,19 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   property_editor_->set_item(func);
                   flush_form_rebuilds();
+                  // Function 只支持按当前 type 恢复默认值，不应
+                  // 显示只有一个选项的模板下拉；直接按钮仍保留该能力。
+                  auto* redundant_template =
+                      property_editor_->findChild<QComboBox*>(
+                          "propertyTemplateSelector");
+                  auto* restore_defaults =
+                      property_editor_->findChild<QPushButton*>(
+                          "propertyApplyTemplateButton");
+                  if (redundant_template || !restore_defaults) {
+                    throw std::runtime_error(
+                        "W-03c Function must use a direct type-defaults "
+                        "button without a single-item template dropdown");
+                  }
                   // 走真实 textChanged 路径填 x/y（填表期间屏蔽树信号，
                   // 避免逐字段重建让控件指针悬垂，同 W-03a 巡览做法）。
                   {
@@ -14506,11 +15248,15 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       "bcFunctionCombo");
                   auto* var_combo = property_editor_->findChild<QComboBox*>(
                       "bcVariableCombo");
+                  auto* boundary_edit = property_editor_->findChild<QLineEdit*>(
+                      "bcBoundaryEdit");
                   if (!fn_combo || !var_combo ||
+                      !boundary_edit || !boundary_edit->isReadOnly() ||
                       fn_combo->findText("tour_reload_curve") < 0 ||
                       var_combo->findText("disp_y") < 0) {
                     throw std::runtime_error(
-                        "W-03c BC dropdown candidates contract failed");
+                        "W-03c BC dropdown candidates or read-only boundary "
+                        "contract failed");
                   }
                   {
                     const QSignalBlocker tree_blocker(model_tree_);
@@ -14542,6 +15288,17 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     throw std::runtime_error(
                         "W-03c generation contract failed (PiecewiseLinear x/y "
                         "or FunctionDirichletBC function line missing)");
+                  }
+                  const int function_pos =
+                      input.indexOf("[tour_reload_curve]");
+                  const int function_end =
+                      input.indexOf("[]", function_pos);
+                  if (function_pos < 0 || function_end < 0 ||
+                      input.mid(function_pos, function_end - function_pos)
+                          .contains("expression =")) {
+                    throw std::runtime_error(
+                        "W-03c PiecewiseLinear must not emit a stale "
+                        "expression line");
                   }
                   // FunctionDirichletBC 子块不得残留 value 行。
                   const int bc_pos = input.indexOf("[tour_top_disp]");
@@ -14793,7 +15550,11 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   property_editor_->set_item(phys);
                   flush_form_rebuilds();
                   // 快捷表单合同：action/strain/布尔/generate_output/save_in。
-                  if (require_combo("physicsActionCombo")->currentText() !=
+                  auto* redundant_template =
+                      property_editor_->findChild<QComboBox*>(
+                          "propertyTemplateSelector");
+                  if (redundant_template ||
+                      require_combo("physicsActionCombo")->currentText() !=
                           "QuasiStatic" ||
                       require_edit("physicsBlockEdit")->text() != "solid" ||
                       require_combo("physicsStrainCombo")->currentText() !=
@@ -14844,6 +15605,15 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   if (phys_params.value("block").toString() != "solid") {
                     throw std::runtime_error(
                         "W-03b volume chips apply contract failed");
+                  }
+                  // Physics 使用 action/strain 合同而不是通用 type 字段；
+                  // 保存后树节点必须显示就绪，不能被误判为不完整。
+                  refresh_tree_statuses();
+                  const QString physics_status = phys->text(1);
+                  if (physics_status != "Ready" &&
+                      physics_status != QString::fromUtf8("就绪")) {
+                    throw std::runtime_error(
+                        "W-03b valid Physics node was not marked Ready");
                   }
                   sync_model_to_input();
                   const QString input = moose_panel_->input_text();
