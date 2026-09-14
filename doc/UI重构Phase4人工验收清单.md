@@ -1,7 +1,8 @@
 # GMP-ISE UI 重构 Phase 4 人工验收清单（W-00 / W-03a / W-02b）
 
-> 版本：2026-09-13 v9（完整 CDP 快照的远程提交与计算节点启动已人工验收；最终状态与结果回放待验证）
-> 前置：Phase 0~3 已全部验收关闭；自动回归基线为 102 步真实点击巡览 + CTest `1/1`
+> 版本：2026-09-14 v14（G0-01～G0-04 人工验收通过）
+> 前置：Phase 0~3 已全部验收关闭；当前自动巡览清单为 106 步，最近一次全量证据为
+> 106 步真实点击巡览 + CTest `1/1`，均于 2026-09-14 提交前验证通过
 > 方案依据：`doc/UI重构Phase4方案设计.md`；任务口径：`doc/UI重构开发任务清单.md` W-00、W-02b、W-03a
 > 通用检查表见 `doc/UI重构开发任务清单.md` 附录 B
 
@@ -14,9 +15,9 @@
 
 ---
 
-## 当前仍需人工验证（2026-09-13）
+## 当前仍需人工验证（2026-09-14）
 
-自动回归基线现为 102 步真实点击巡览与 CTest `1/1`；W-04 旧模板清理、`TEST-P4-W03-03` BC/函数扩展、`TEST-P4-W03-04` Step 映射、`TEST-P4-W03-05` Physics action 与 `TEST-P4-W03-06` 场/历史输出套餐已完成人工复测。以下 7 项仍需要人工确认。
+当前自动巡览清单为 106 步；W-04 旧模板清理、`TEST-P4-W03-03` BC/函数扩展、`TEST-P4-W03-04` Step 映射、`TEST-P4-W03-05` Physics action、`TEST-P4-W03-06` 场/历史输出套餐及远程提交启动已完成人工复测。G0 收口新增用例 `TEST-P4-G0-01`～`TEST-P4-G0-04` 已全部通过并关闭；下表仍有 6 项原 Phase 4 人工准出项待确认。已关闭的 E2E 证据保留在表中供追溯。
 
 | 优先级 | 用例 | 人工确认重点 |
 |---|---|---|
@@ -25,7 +26,7 @@
 | P0 | TEST-P4-GEN-04 | 三阶段内实时进度、界面响应与取消手感 |
 | P1 | TEST-P4-GEN-05 | 无孔六面体结构化网格与带孔体回退 |
 | P1 | TEST-P4-GEN-06 | 单元拓扑策略、严格模式拒绝与持久化 |
-| P1 | TEST-P4-E2E-01 | 远程提交/计算节点启动已通过；待最终状态、结果登记与 Exodus 回放 |
+| 已关闭 | TEST-P4-E2E-01 | 远程提交、计算节点启动、状态监控与取消终态已通过；用户确认满足当前阶段验收 |
 | P2 | TEST-P4-W01-02 | 从物理组创建选择集及重开恢复 |
 
 ---
@@ -250,7 +251,7 @@
 
 通过标准：保留 `[Mesh/file]` 和模型树当前材料；自动删除模型树已不存在的 Variables、Functions、ICs、Kernels、BCs、Postprocessors、Executioner、Outputs 等旧示例块；重复同步不重新出现。
 
-## TEST-P4-E2E-01 端到端：真实几何全流程（远程提交与启动已通过）
+## TEST-P4-E2E-01 端到端：真实几何全流程（当前阶段已通过）
 
 1. 打开你的几何（如 demo_fixed.geo），在“分组与网格场”页给表面建命名面组（如 fixed/load）、给体建体组（如 solid），生成网格。
 2. 新建 CDP 材料（填 v01 参数与 4 张 CSV）→ 新建 Section 指派材料到 solid → Add Physics（确认 block）→ 新建 Step → 新建 PiecewiseLinear 或 ParsedFunction 位移函数 → 新建 BC（固定面 DirichletBC + 加载面 FunctionDirichletBC，boundary 用 chips 选组）→ 新建 Outputs 勾选场/历史套餐。
@@ -265,8 +266,11 @@
 `gmp-ise` 提交后创建 `job_20260913_223929_xu10t1`，状态由 `queued` 进入
 `running`；远端显示 PID `129578`、4 MPI ranks，物理时间从 `0.000625` 推进到
 `0.00125`。这证明中文 multipart 文件名与 manifest 已匹配、远端预检通过、计算节点
-求解器实际启动，提交和运行状态刷新人工验收完成。记录时作业仍在运行；最终
-`succeeded`、Results 登记、制品下载及 Exodus 回放仍需后续补证。
+求解器实际启动，提交和运行状态刷新人工验收完成。该作业随后由用户取消，远端于
+2026-09-13 22:51:54（Asia/Shanghai）进入 `canceled`，原因 `canceled_by_user`；取消前推进到
+Step 3、物理时间 `0.00196875/1`。取消终态显示正确，但不能作为成功结果闭环证据；
+2026-09-13 用户确认“任务可正常提交并触发远端执行”满足当前阶段验收，因此本用例标记通过；
+成功制品下载、Results 登记及 Exodus 回放转入 Phase 5 的 M-01 端到端结果验收。
 
 ## 第二轮验收记录
 
@@ -281,7 +285,28 @@
 | TEST-P4-W03-04 | 通过 | 2026-09-13 人工验收：`step_1` 表单与模型树状态正确；同步生成唯一一套 `[Executioner]` / `[TimeStepper]` / `[Preconditioning/smp]`，参数符合 v01 基线；日志记录多次同步且多 Step 时明确提示“仅取第一个 Step”，最终输入无重复块。多 Step 串联执行与状态继承转 `REQ-018` / `TASK-NEXT-001` |
 | TEST-P4-W03-05 | 通过 | 2026-09-13 人工验收：`physic_1` 保存后显示“就绪”；同步生成 `[GlobalParams]`、`[Physics/SolidMechanics/QuasiStatic/physic_1]`、16 项 `generate_output`、`save_in` 与 `resid_x/y/z`；连续同步无重复块 |
 | TEST-P4-W03-06 | 通过 | 2026-09-13 人工验收：`DamageC`/`DamageT`/`kappa_c` 场输出、`load` 面反力与 `disp_z` 平均位移、Times 0～1/0.01、Exodus+CSV 均正确生成；重复同步无重复块 |
-| TEST-P4-E2E-01 | 提交与启动通过 | 2026-09-13：`job_20260913_223929_xu10t1` 已由 queued 进入 running，远端 PID/4 MPI ranks/物理时间推进均有证据；最终状态、Results 登记、制品下载与 Exodus 回放待补证 |
+| TEST-P4-E2E-01 | 通过（当前阶段） | 2026-09-13：`job_20260913_223929_xu10t1` 已由 queued 进入 running，远端 PID/4 MPI ranks/物理时间推进均有证据；随后由用户取消并正确进入 canceled。用户确认提交/触发执行满足本阶段验收，成功结果回放转 M-01 |
+
+## G0 收口新增用例（2026-09-13，人工验收进度）
+
+开发侧自动证据：2026-09-13 已通过 `workflow_preflight_contract`、
+`expert_input_contract` 两项定向巡览；随后完成 105 步全量真实点击巡览（全部
+`ok=1`）与 CTest `1/1`。截图目录为
+`/tmp/gmp-ui-tour-g0-final2.4L8JBI`（临时目录，不作为长期验收附件）。
+2026-09-14 根据首次人工执行反馈，将“校验工作流”补到 Job Workspace 底部操作栏及
+“作业”主菜单；`workflow_preflight_contract` 已实际点击工作窗入口并通过。
+2026-09-14 修复新建/打开项目时 MOOSE 路径与输入上下文串项目；新增
+`project_context_isolation_contract` 定向巡览并通过。当前巡览用例数为 106，
+新基线的全量巡览留待提交前执行。2026-09-14 用户再次复核干净的 `Untitled` 项目，
+确认输入文件、工作目录、网格文件、生成输入与物理组均为空，旧项目及
+`/tmp/gmp-ui-tour...` 路径不再继承，`TEST-P4-G0-01` 最终关闭。
+
+| 用例 | 状态 | 关联任务 | 详细步骤 |
+|---|---|---|---|
+| TEST-P4-G0-01 | 通过（已关闭） | TASK-P4-CLOSE-01 / W-05 | 2026-09-14 人工验收：空模型树点击“校验工作流”后报告 9 项缺失；未自动创建 Materials、Sections、Physics、Steps、BC/Load、Outputs 或 Mesh 对象，远程提交保持禁用；衍生的项目上下文串用缺陷回归通过，干净 `Untitled` 项目的输入文件、工作目录、网格文件、生成输入与物理组均为空；详细步骤见 `manual/test04.md` §13.1 |
+| TEST-P4-G0-02 | 通过（已关闭） | TASK-P4-CLOSE-01 / W-05 | 2026-09-14 人工验收：正常项目仅有多 Step 警告；删除 `material_1` 后三项关联错误正确；旧 `diffusion.i`/工作目录迁移与“定位”后属性窗层级缺陷回归通过；悬空 Function、缺失 CDP CSV、故障恢复及重复同步均符合通过标准；详见 `manual/test04.md` §13.2 |
+| TEST-P4-G0-03 | 通过（已关闭） | TASK-P4-CLOSE-02 / W-04 | 2026-09-14 人工验收：结构化只读、重复同步一致、专家块独立编辑与差异/合并预览、受管路径冲突拒绝均通过；contract v2 快照记录 `input_mode: expert` 且输入哈希一致；保存重开及结构化/专家模式往返后内容保留、最终输入按模式移除或恢复且不重复；旧项目重开后恢复 `case-20260914-154626` 并成功提交 `job_20260914_171546_sdefw7`，远端由 queued 进入 running；详见 `manual/test04.md` §13.3 |
+| TEST-P4-G0-04 | 通过（已关闭） | TASK-P4-CLOSE-02 / W-04 | 2026-09-14 人工验收：生成报告完整记录活动档案、mapping `1.0.0`、expert 输入模式及 Mesh/Materials/Section/Physics/Functions/BC/Step/Outputs/Physical Groups 来源；`b_4` 临时重命名后输入与报告同步刷新，恢复名称后再次一致；项目保存重开后报告保留；旧共享网格和快照目录污染修复后，Mesh Workspace、Job Workspace、输入及报告统一指向项目自有 `.work/case/测试03/mes_1.msh`；详见 `manual/test04.md` §13.4 |
 
 ---
 

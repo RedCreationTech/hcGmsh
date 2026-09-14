@@ -51,6 +51,9 @@ class MoosePanel : public QWidget {
   void remote_file_downloaded(const QString& job_id, const QString& file_path,
                               const QString& local_path);
   void mesh_path_changed(const QString& path);
+  // Job Workspace 内的显式模型工作流预检入口；由 MainWindow 执行统一
+  // 跨对象校验，避免与 MOOSE --check-input 混淆。
+  void workflow_validation_requested();
 
  public slots:
   void set_mesh_path(const QString& path);
@@ -94,6 +97,12 @@ class MoosePanel : public QWidget {
   void set_physical_group_manifest(const PhysicalGroupManifest& manifest);
   // 项目文件路径（traceability.project_path/project_version 来源）。
   void set_project_context(const QString& project_path);
+  // 旧项目可能持久化了其他项目的生成输入/工作目录。只重算项目拥有的
+  // .work/case/<项目名>/<项目名>.i 路径，不改输入文本或外部网格路径。
+  void rebase_project_artifact_paths(const QString& project_path);
+  // 新建项目或切换项目前清空项目专属的输入、网格、
+  // 快照与专家扩展状态。可执行文件、MPI 和远程服务器等用户偏好保留。
+  void reset_project_state();
   // 快照 input_mode：structured | expert | manual；非法值拒绝并保留原值。
   void set_input_mode(const QString& input_mode);
   // W-03a：材料 CSV 等显式文件来源表（basename -> 绝对路径，MainWindow 收集
@@ -102,6 +111,17 @@ class MoosePanel : public QWidget {
   void set_extra_file_sources(const QMap<QString, QString>& sources);
   // 当前输入编辑器文本（巡览/装配断言用）。
   QString input_text() const;
+  // W-04 专家扩展层：模型同步前恢复纯结构化输入，同步完成后保存基础输入、
+  // 校验并追加 Custom Blocks；普通模式的生成输入保持只读。
+  void begin_model_sync();
+  bool finalize_model_sync(const QString& generation_report,
+                           QString* error = nullptr);
+  QString input_mode() const;
+  QString custom_blocks_text() const;
+  QString generation_report() const;
+  // G0 提交门禁：MainWindow 注入只读预检结果。UI 禁用只是提示层，
+  // 导出/提交槽函数仍会重复检查，避免程序化调用绕过门禁。
+  void set_workflow_preflight(bool ready, const QStringList& blockers);
   // 将模型树装配后的当前输入物化为项目专属 .i 文件，并同步“输入文件”
   // 与“工作目录”。返回 false 表示项目尚未保存或文件写出失败。
   bool materialize_project_input(const QString& project_path);
@@ -124,6 +144,8 @@ class MoosePanel : public QWidget {
                           const QString& error);
   void on_insert_mesh_block();
   void on_insert_bcs_block();
+  void on_input_mode_changed(int index);
+  void on_preview_expert_merge();
 
  private:
   void append_log(const QString& text);
@@ -153,6 +175,12 @@ class MoosePanel : public QWidget {
                        const QString& block_text) const;
   QString resolve_exodus_path(const QString& token) const;
   void maybe_emit_exodus(const QString& path);
+  void refresh_input_mode_ui();
+  bool merge_expert_blocks(const QString& structured,
+                           const QString& custom_blocks,
+                           QString* merged,
+                           QString* error) const;
+  QString expert_diff_preview(const QString& custom_blocks) const;
   // W-00c：由注入的 application_profile_map_ 组装档案；单位合同缺省时回落
   // unit_contract_map_ 的标量键。
   ApplicationProfile snapshot_profile() const;
@@ -176,8 +204,11 @@ class MoosePanel : public QWidget {
   QSpinBox* mpi_ranks_ = nullptr;
   QComboBox* runner_kind_ = nullptr;
   QComboBox* template_kind_ = nullptr;
+  QComboBox* input_mode_selector_ = nullptr;
 
   QPlainTextEdit* input_editor_ = nullptr;
+  QPlainTextEdit* custom_blocks_editor_ = nullptr;
+  QPlainTextEdit* generation_report_editor_ = nullptr;
   QPlainTextEdit* log_ = nullptr;
   QPlainTextEdit* boundary_list_ = nullptr;
   QLabel* template_status_label_ = nullptr;
@@ -187,6 +218,9 @@ class MoosePanel : public QWidget {
   QPushButton* run_btn_ = nullptr;
   QPushButton* check_btn_ = nullptr;
   QPushButton* stop_btn_ = nullptr;
+  QPushButton* validate_workflow_btn_ = nullptr;
+  QPushButton* export_snapshot_btn_ = nullptr;
+  QPushButton* submit_remote_btn_ = nullptr;
 
   std::unique_ptr<Runner> runner_;
   QStringList boundary_names_;
@@ -202,6 +236,11 @@ class MoosePanel : public QWidget {
   PhysicalGroupManifest physical_group_manifest_;
   QString project_path_;
   QString input_mode_ = QStringLiteral("structured");
+  QString structured_input_;
+  QString custom_blocks_text_;
+  QString generation_report_text_;
+  bool workflow_ready_ = false;
+  QStringList workflow_blockers_;
   // W-03a：显式文件来源表（材料 CSV 等），见 set_extra_file_sources。
   QMap<QString, QString> extra_file_sources_;
   // 监控请求归属：日志/下载请求对应的 job_id（响应异步返回时回填）。

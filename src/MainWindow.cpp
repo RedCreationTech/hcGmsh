@@ -61,6 +61,7 @@
 #include <QSettings>
 #include <QStandardPaths>
 #include <QSignalBlocker>
+#include <QRegularExpression>
 #include <QLabel>
 #include <QTextStream>
 #include <QDateTime>
@@ -119,6 +120,64 @@ QVariantList volume_tags_to_variant(const QList<int>& tags) {
     }
   }
   return values;
+}
+
+QVariantMap normalize_remote_job_params(QVariantMap params) {
+  if (!params.value("remote").toBool()) {
+    return params;
+  }
+  // Phase 2 的旧实现把远程 Job Snapshot 目录误存进 mesh。远程任务
+  // 选择只用于监控，不应改变当前项目的 Mesh；加载旧项目时迁移到独立
+  // snapshot 字段，保存后即可永久清除错误的 mesh 值。
+  if (params.value("snapshot").toString().trimmed().isEmpty()) {
+    const QString legacy_snapshot = params.value("mesh").toString().trimmed();
+    if (!legacy_snapshot.isEmpty()) {
+      params.insert("snapshot", legacy_snapshot);
+    }
+  }
+  params.remove("mesh");
+  return params;
+}
+
+QString project_case_work_dir(const QString& project_path) {
+  if (project_path.trimmed().isEmpty()) {
+    return {};
+  }
+  const QFileInfo project_info(project_path);
+  QString project_name = project_info.fileName();
+  if (project_name.endsWith(".gmp.yaml", Qt::CaseInsensitive)) {
+    project_name.chop(QString(".gmp.yaml").size());
+  } else {
+    project_name = project_info.completeBaseName();
+  }
+  project_name.replace(QRegularExpression("[\\\\/:*?\"<>|]"), "_");
+  if (project_name.isEmpty()) {
+    return {};
+  }
+  return QDir(project_info.absolutePath())
+      .absoluteFilePath(".work/case/" + project_name);
+}
+
+QString default_mesh_output_path(const QString& project_path,
+                                 const QString& mesh_name) {
+  const QString file_name =
+      (mesh_name.trimmed().isEmpty() ? QStringLiteral("mesh")
+                                     : mesh_name.trimmed()) +
+      QStringLiteral(".msh");
+  const QString project_dir = project_case_work_dir(project_path);
+  return project_dir.isEmpty()
+             ? QDir::current().absoluteFilePath("out/" + file_name)
+             : QDir(project_dir).absoluteFilePath(file_name);
+}
+
+bool is_legacy_default_mesh_path(const QString& path) {
+  if (path.trimmed().isEmpty()) {
+    return false;
+  }
+  const QString clean_path = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+  const QString legacy_dir =
+      QDir::cleanPath(QDir::current().absoluteFilePath("out"));
+  return clean_path.startsWith(legacy_dir + QDir::separator());
 }
 
 // QStackedWidget 默认以所有页面的最大 size hint 作为自身尺寸，复杂的 Mesh
@@ -1175,6 +1234,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* job_page = new MoosePanel(property_stack_);
   moose_panel_ = job_page;
   gmsh_panel_ = mesh_page;
+  connect(job_page, &MoosePanel::workflow_validation_requested, this,
+          [this]() { validate_workflow_for_submit(true); });
   // W-00c：首次注入档案/单位/清单/项目路径上下文（当前均为空态）。
   push_context_to_moose_panel();
 
@@ -2936,8 +2997,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                            {"Open Job Workspace", [this, show_workspace]() {
                              show_workspace(job_work_window_);
                            }},
-                           {"Prepare Workflow Defaults",
-                            [this]() { ensure_basic_workflow_nodes(); }},
+                           {"Validate Workflow",
+                            [this]() { validate_workflow_for_submit(true); }},
                            {"Sync to Input", [this]() { sync_model_to_input(); }},
                            {"Submit (Mesh + Sync + Run)", [this]() {
                              start_submit_workflow();
@@ -3045,7 +3106,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                              if (!moose_panel_) {
                                return;
                              }
-                             QDialog dialog(this);
+                             QDialog dialog(dialog_parent());
                              dialog.setWindowTitle("Job Log");
                              dialog.resize(800, 500);
                              auto* layout = new QVBoxLayout(&dialog);
@@ -3648,6 +3709,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             QVariantMap params =
                 item ? item->data(0, PropertyEditor::kParamsRole).toMap()
                      : QVariantMap();
+            params = normalize_remote_job_params(params);
             const QString raw_state = info.value("state").toString();
             // LIMS/C06 状态词汇映射到列表状态列；树状态图标按关键词匹配。
             static const QHash<QString, QString> kStateMap = {
@@ -3674,7 +3736,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             }
             const QString snapshot = info.value("snapshot").toString();
             if (!snapshot.isEmpty()) {
-              params.insert("mesh", snapshot);
+              params.insert("snapshot", snapshot);
             }
             const QString created = info.value("created_at").toString();
             if (params.value("start_time").toString().isEmpty()) {
@@ -3727,7 +3789,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
           });
   connect(job_page, &MoosePanel::remote_log, this,
           [this](const QString& job_id, const QString& text) {
-            QDialog dialog(this);
+            QDialog dialog(dialog_parent());
             dialog.setWindowTitle("Remote Job Log — " + job_id);
             dialog.resize(820, 520);
             auto* layout = new QVBoxLayout(&dialog);
@@ -3880,7 +3942,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     if (!moose_panel_) {
       return;
     }
-    QDialog dialog(this);
+    QDialog dialog(dialog_parent());
     dialog.setWindowTitle("Job Log");
     dialog.resize(800, 500);
     auto* layout = new QVBoxLayout(&dialog);
@@ -3942,7 +4004,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       moose_panel_->request_job_log(selected_job_id_);
       return;
     }
-    QDialog dialog(this);
+    QDialog dialog(dialog_parent());
     dialog.setWindowTitle("Job Log");
     dialog.resize(800, 500);
     auto* layout = new QVBoxLayout(&dialog);
@@ -4144,8 +4206,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
           const QVariantMap params =
               item->data(0, PropertyEditor::kParamsRole).toMap();
           const QString path = params.value("path").toString().isEmpty()
-                                   ? QDir::current().absoluteFilePath(
-                                         "out/" + item->text(0) + ".msh")
+                                   ? default_mesh_output_path(project_path_,
+                                                              item->text(0))
                                    : params.value("path").toString();
           gmsh_panel_->set_mesh_output_path(path);
           gmsh_panel_->select_external_model(
@@ -4153,9 +4215,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         }
       }
       if (item->parent() && kind == "Jobs" && moose_panel_) {
-        const QVariantMap params =
-            item->data(0, PropertyEditor::kParamsRole).toMap();
-        moose_panel_->set_mesh_path(params.value("mesh").toString());
+        const QVariantMap params = normalize_remote_job_params(
+            item->data(0, PropertyEditor::kParamsRole).toMap());
+        if (!params.value("remote").toBool()) {
+          const QString mesh = params.value("mesh").toString().trimmed();
+          if (!mesh.isEmpty()) {
+            moose_panel_->set_mesh_path(mesh);
+          }
+        }
       }
     }
     refresh_work_context();
@@ -4887,6 +4954,11 @@ void MainWindow::build_menu() {
 
   auto* job_menu = menuBar()->addMenu("&Job");
   job_menu->setObjectName("jobMenu");
+  auto* validate_workflow_action = job_menu->addAction("Validate Workflow");
+  validate_workflow_action->setObjectName("validateWorkflowAction");
+  connect(validate_workflow_action, &QAction::triggered, this,
+          [this]() { validate_workflow_for_submit(true); });
+  job_menu->addSeparator();
   action_run_ = job_menu->addAction("Run");
   action_check_ = job_menu->addAction("Check Input");
   action_stop_ = job_menu->addAction("Stop");
@@ -4971,6 +5043,9 @@ void MainWindow::build_menu() {
       mesh_snapshot_ = PhysicalGroupManifest();
       input_snapshots_.clear();
       clear_model_tree_children();
+      if (moose_panel_) {
+        moose_panel_->reset_project_state();
+      }
       refresh_job_table();
       property_editor_->set_item(nullptr);
       refresh_module_pages();
@@ -5029,7 +5104,7 @@ void MainWindow::build_menu() {
     // 新项目对话框：项目名称 + 存储目录（默认取上次项目目录）。
     QSettings settings("gmp-ise", "gmp_ise");
     const QString last_dir = settings.value("ui/last_project_dir").toString();
-    QDialog dialog(this);
+    QDialog dialog(dialog_parent());
     dialog.setObjectName("newProjectDialog");
     dialog.setWindowTitle(chinese ? QString::fromUtf8("新建项目")
                                   : QString("New Project"));
@@ -5986,7 +6061,25 @@ void MainWindow::build_model_tree() {
           });
 }
 
-void MainWindow::open_property_form(QTreeWidgetItem* item) {
+QWidget* MainWindow::dialog_parent(QWidget* preferred) const {
+  auto usable_window = [](QWidget* candidate) -> QWidget* {
+    if (!candidate) {
+      return nullptr;
+    }
+    QWidget* window = candidate->window();
+    return window && window->isVisible() ? window : nullptr;
+  };
+  if (QWidget* owner = usable_window(preferred)) {
+    return owner;
+  }
+  if (QWidget* owner = usable_window(QApplication::activeWindow())) {
+    return owner;
+  }
+  return const_cast<MainWindow*>(this);
+}
+
+void MainWindow::open_property_form(QTreeWidgetItem* item,
+                                    QWidget* transient_parent) {
   if (!item || !item->parent()) {
     return;
   }
@@ -6001,7 +6094,9 @@ void MainWindow::open_property_form(QTreeWidgetItem* item) {
       property_editor_ ? property_editor_->boundary_groups() : QStringList();
   const QStringList volumes =
       property_editor_ ? property_editor_->volume_groups() : QStringList();
-  auto* form = new FloatingPropertyForm(item, boundaries, volumes, this);
+  auto* form = new FloatingPropertyForm(
+      item, boundaries, volumes,
+      dialog_parent(transient_parent ? transient_parent : this));
   floating_property_form_ = form;
   form->set_display_unit_factors(display_unit_factors());
   l10n::apply(form);
@@ -6034,10 +6129,14 @@ void MainWindow::open_property_form(QTreeWidgetItem* item) {
             update_command_availability();
           });
   form->open();
+  form->raise();
+  form->activateWindow();
   update_command_availability();
   QTimer::singleShot(0, form, [this, form]() {
     if (form) {
       form->place_over_stage(viewer_);
+      form->raise();
+      form->activateWindow();
     }
   });
 }
@@ -7410,110 +7509,480 @@ void MainWindow::refresh_workflow_status() {
   segments << format_state(meshes, "Mesh");
   segments << format_state(jobs, "Jobs");
 
-  workflow_status_label_->setText(QString("Workflow status: ") + segments.join(" | "));
+  const QVariantList issues = collect_workflow_issues();
+  int errors = 0;
+  int warnings = 0;
+  for (const auto& value : issues) {
+    if (value.toMap().value("severity").toString() == "error") {
+      ++errors;
+    } else {
+      ++warnings;
+    }
+  }
+  if (moose_panel_) {
+    QStringList blockers;
+    for (const auto& value : issues) {
+      const QVariantMap issue = value.toMap();
+      if (issue.value("severity").toString() != "error") {
+        continue;
+      }
+      const QString object = issue.value("object").toString().trimmed();
+      const QString root = issue.value("root").toString().trimmed();
+      blockers.append(QString("%1: %2")
+                          .arg(object.isEmpty() ? root : object,
+                               issue.value("message").toString()));
+    }
+    moose_panel_->set_workflow_preflight(errors == 0, blockers);
+  }
+  const QString readiness =
+      errors == 0
+          ? QString("Workflow ready%1")
+                .arg(warnings > 0 ? QString(" (%1 warning)").arg(warnings)
+                                  : QString())
+          : QString("Workflow blocked: %1 error(s), %2 warning(s)")
+                .arg(errors)
+                .arg(warnings);
+  workflow_status_label_->setText(readiness + " | " + segments.join(" | "));
+  workflow_status_label_->setToolTip(
+      errors == 0
+          ? QString("All blocking workflow checks passed.")
+          : QString("Use Job > Validate Workflow to locate blocking issues."));
   refresh_tree_statuses();
   refresh_results_navigation();
 }
 
-void MainWindow::ensure_basic_workflow_nodes() {
-  auto make_name = [](const QString& base, QTreeWidgetItem* root) -> QString {
-    if (!root) {
-      return base;
-    }
-    QString cand = base;
-    QSet<QString> existing;
-    for (int i = 0; i < root->childCount(); ++i) {
-      if (auto* c = root->child(i)) {
-        existing.insert(c->text(0));
-      }
-    }
-    if (!existing.contains(cand)) {
-      return cand;
-    }
-    int seq = 1;
-    while (true) {
-      cand = QString("%1_%2").arg(base).arg(seq++);
-      if (!existing.contains(cand)) {
-        return cand;
-      }
+QVariantList MainWindow::collect_workflow_issues() const {
+  QVariantList issues;
+  auto add_issue = [&issues](const QString& severity, const QString& root,
+                             const QString& object, const QString& field,
+                             const QString& message) {
+    issues.append(QVariantMap{{"severity", severity},
+                              {"root", root},
+                              {"object", object},
+                              {"field", field},
+                              {"message", message}});
+  };
+  auto require_children = [this, &add_issue](const QString& root,
+                                              const QString& message) {
+    if (child_count(root) == 0) {
+      add_issue("error", root, QString(), QString(), message);
     }
   };
 
-  const bool existed_parts = child_count("Parts") > 0;
-  const bool existed_materials = child_count("Materials") > 0;
-  const bool existed_sections = child_count("Sections") > 0;
-  const bool existed_steps = child_count("Steps") > 0;
-  const bool existed_bc = child_count("BC") > 0;
-  const bool existed_loads = child_count("Loads") > 0;
-
-  if (!existed_parts) {
-    auto* root = find_root_item("Parts");
-    if (root) {
-      add_child_item(root, make_name("part_1", root), "Parts",
-                     {{"type", "Part"}, {"description", "Auto-created for quick submit."}});
-    }
+  if (application_profile_.value("id").toString().trimmed().isEmpty()) {
+    add_issue("error", "Application Profile", QString(), "profile",
+              "Select an application profile before generating or submitting.");
+  }
+  if (!mapping_registry_.is_loaded()) {
+    add_issue("error", "Application Profile", QString(), "mapping_registry",
+              "The application mapping registry is not loaded.");
   }
 
-  if (!existed_materials) {
-    auto* root = find_root_item("Materials");
-    if (root) {
-      add_child_item(root, make_name("material_1", root), "Materials",
-                     {{"type", "GenericConstantMaterial"},
-                      {"prop_names", "prop"},
-                      {"prop_values", "1.0"}});
-    }
+  require_children("Materials", "At least one material is required.");
+  require_children("Sections", "Assign a material to a physical volume.");
+  require_children("Physics", "Configure a supported Physics action.");
+  require_children("Steps", "Configure at least one analysis Step.");
+  require_children("Outputs", "Configure field/history output before submission.");
+  if (child_count("BC") == 0 && child_count("Loads") == 0) {
+    add_issue("error", "BC", QString(), QString(),
+              "Configure at least one BC or Load; no placeholder is created automatically.");
   }
 
-  if (!existed_sections) {
-    auto* root = find_root_item("Sections");
-    if (root) {
-      auto* materials = find_root_item("Materials");
-      QString material_name = "material_1";
-      if (materials && materials->childCount() > 0 && materials->child(0)) {
-        material_name = materials->child(0)->text(0);
+  QString mesh_path;
+  if (const auto* mesh_root = find_root_item("Mesh")) {
+    for (int row = mesh_root->childCount() - 1; row >= 0; --row) {
+      const auto* item = mesh_root->child(row);
+      if (!item) {
+        continue;
       }
-      add_child_item(root, make_name("section_1", root), "Sections",
-                     {{"type", "SolidSection"},
-                      {"material", material_name},
-                      {"block", "solid"}});
+      const QString candidate =
+          item->data(0, PropertyEditor::kParamsRole).toMap().value("path").toString();
+      if (!candidate.trimmed().isEmpty()) {
+        mesh_path = candidate;
+        break;
+      }
+    }
+  }
+  if (mesh_path.isEmpty() && moose_panel_) {
+    mesh_path = moose_panel_->moose_settings().value("mesh_path").toString();
+  }
+  if (mesh_path.trimmed().isEmpty()) {
+    add_issue("error", "Mesh", QString(), "path",
+              "Generate or import a mesh before submission.");
+  } else if (!QFileInfo::exists(mesh_path)) {
+    add_issue("error", "Mesh", QFileInfo(mesh_path).fileName(), "path",
+              "The selected mesh file does not exist: " + mesh_path);
+  }
+  if (mesh_snapshot_.groups.isEmpty()) {
+    add_issue("error", "Mesh", QString(), "physical_groups",
+              "The mesh has no persisted Physical Group manifest.");
+  } else {
+    for (const auto& group : mesh_snapshot_.groups) {
+      if (!group.is_valid()) {
+        add_issue("error", "Mesh", group.name, "physical_groups",
+                  "Physical Group is empty or invalid.");
+      }
+    }
+  }
+  if (mesh_snapshot_.mesh_dim < 1 || mesh_snapshot_.mesh_dim > 3) {
+    add_issue("error", "Mesh", QString(), "mesh_dim",
+              "The persisted mesh dimension is missing or invalid.");
+  }
+  static const QRegularExpression sha256_re("^[0-9a-fA-F]{64}$");
+  if (!sha256_re.match(mesh_snapshot_.mesh_sha256).hasMatch()) {
+    add_issue("error", "Mesh", QString(), "mesh_sha256",
+              "The persisted mesh fingerprint is missing; regenerate the mesh.");
+  }
+  if (!mesh_path.isEmpty() && !mesh_snapshot_.mesh_path.isEmpty() &&
+      QFileInfo(mesh_path).canonicalFilePath() !=
+          QFileInfo(mesh_snapshot_.mesh_path).canonicalFilePath()) {
+    add_issue("error", "Mesh", QString(), "physical_groups",
+              "The Physical Group manifest belongs to a different mesh file; "
+              "regenerate or re-import the selected mesh.");
+  }
+
+  const QStringList roots_to_validate = {
+      "Materials", "Sections", "Physics", "Functions",
+      "Steps",     "BC",       "Loads",   "Outputs"};
+  for (const auto& root_name : roots_to_validate) {
+    const auto* root = find_root_item(root_name);
+    if (!root) {
+      continue;
+    }
+    QSet<QString> names;
+    for (int row = 0; row < root->childCount(); ++row) {
+      const auto* child = root->child(row);
+      if (!child) {
+        continue;
+      }
+      const QString name = child->text(0).trimmed();
+      if (name.isEmpty()) {
+        add_issue("error", root_name, QString(), "name",
+                  "Object name must not be empty.");
+      } else if (names.contains(name)) {
+        add_issue("error", root_name, name, "name",
+                  "Object name must be unique within its category.");
+      }
+      names.insert(name);
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      if (property_editor_) {
+        const QStringList fields = property_editor_->validate_params(root_name, params);
+        for (const auto& field : fields) {
+          add_issue("error", root_name, name, field,
+                    QString("Required or invalid field: %1").arg(field));
+        }
+      }
+      const QString status =
+          child->data(0, PropertyEditor::kStatusRole).toString().toLower();
+      if (status.contains("stale") || status.contains("invalid") ||
+          status.contains("outdated")) {
+        add_issue("error", root_name, name, "status",
+                  "Object is stale or invalid; refresh its upstream dependency.");
+      }
     }
   }
 
-  if (!existed_steps) {
-    auto* root = find_root_item("Steps");
-    if (root) {
-      add_child_item(root, make_name("steady_step", root), "Steps",
-                     {{"type", "Steady"}, {"dt", "1.0"}, {"end_time", "1.0"}});
+  const int volume_dim = mesh_snapshot_.mesh_dim;
+  const int boundary_dim = volume_dim > 0 ? volume_dim - 1 : -1;
+  auto check_group = [this, &add_issue](const QString& root,
+                                        const QString& object,
+                                        const QString& field,
+                                        const QString& name, int dim) {
+    if (!name.trimmed().isEmpty() && !mesh_snapshot_.has_group(name, dim)) {
+      add_issue("error", root, object, field,
+                QString("Physical Group '%1' (dimension %2) is not present in the mesh.")
+                    .arg(name)
+                    .arg(dim));
+    }
+  };
+
+  QSet<QString> material_names;
+  if (const auto* materials = find_root_item("Materials")) {
+    for (int row = 0; row < materials->childCount(); ++row) {
+      if (materials->child(row)) {
+        material_names.insert(materials->child(row)->text(0));
+      }
     }
   }
 
-  if (!existed_bc && !existed_loads) {
-    auto* root = find_root_item("BC");
-    if (root) {
-      add_child_item(root, make_name("bc_1", root), "BC",
-                     {{"type", "DirichletBC"},
-                      {"variable", "u"},
-                      {"boundary", "left"},
-                      {"value", "0"}});
+  if (const auto* root = find_root_item("Sections")) {
+    for (int row = 0; row < root->childCount(); ++row) {
+      const auto* child = root->child(row);
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      const QStringList groups = params.value("block").toString().split(
+          QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+      if (groups.isEmpty()) {
+        add_issue("error", "Sections", child->text(0), "block",
+                  "Select at least one physical volume and apply it.");
+      }
+      for (const auto& group : groups) {
+        check_group("Sections", child->text(0), "block", group, volume_dim);
+      }
+      const QString material = params.value("material").toString().trimmed();
+      if (!material.isEmpty() && !material_names.contains(material)) {
+        add_issue("error", "Sections", child->text(0), "material",
+                  QString("Referenced Material '%1' does not exist.")
+                      .arg(material));
+      }
     }
-    auto* loads_root = find_root_item("Loads");
-    if (loads_root) {
-      add_child_item(loads_root, make_name("load_1", loads_root), "Loads",
-                     {{"type", "BodyForce"},
-                      {"variable", "u"},
-                      {"value", "0"}});
+  }
+  if (const auto* root = find_root_item("Physics")) {
+    for (int row = 0; row < root->childCount(); ++row) {
+      const auto* child = root->child(row);
+      const QString group = child->data(0, PropertyEditor::kParamsRole)
+                                .toMap().value("block").toString();
+      if (group.trimmed().isEmpty()) {
+        add_issue("error", "Physics", child->text(0), "block",
+                  "Select a physical volume for the Physics action.");
+      } else {
+        check_group("Physics", child->text(0), "block", group, volume_dim);
+      }
     }
   }
 
-  refresh_module_pages();
-  if (!existed_parts || !existed_materials || !existed_sections || !existed_steps ||
-      (!existed_bc && !existed_loads)) {
-    set_project_dirty(true);
-    if (statusBar()) {
-      statusBar()->showMessage("Auto-created missing workflow nodes for quick submit.",
-                               2000);
+  QSet<QString> function_names;
+  if (const auto* functions = find_root_item("Functions")) {
+    for (int row = 0; row < functions->childCount(); ++row) {
+      if (functions->child(row)) {
+        function_names.insert(functions->child(row)->text(0));
+      }
     }
   }
+  QSet<QString> variable_names;
+  const QStringList displacement_names = resolve_displacements().split(
+      QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+  for (const auto& name : displacement_names) {
+    variable_names.insert(name);
+  }
+  if (const auto* variables = find_root_item("Variables")) {
+    for (int row = 0; row < variables->childCount(); ++row) {
+      if (variables->child(row)) {
+        variable_names.insert(variables->child(row)->text(0));
+      }
+    }
+  }
+  if (const auto* root = find_root_item("BC")) {
+    for (int row = 0; row < root->childCount(); ++row) {
+      const auto* child = root->child(row);
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      check_group("BC", child->text(0), "boundary",
+                  params.value("boundary").toString(), boundary_dim);
+      const QString variable = params.value("variable").toString();
+      if (!variable.isEmpty() && !variable_names.contains(variable)) {
+        add_issue("error", "BC", child->text(0), "variable",
+                  QString("Referenced Variable '%1' does not exist.")
+                      .arg(variable));
+      }
+      if (params.value("type").toString() == "FunctionDirichletBC") {
+        const QString function = params.value("function").toString();
+        if (!function.isEmpty() && !function_names.contains(function)) {
+          add_issue("error", "BC", child->text(0), "function",
+                    QString("Referenced Function '%1' does not exist.").arg(function));
+        }
+      }
+    }
+  }
+  if (const auto* root = find_root_item("Loads")) {
+    for (int row = 0; row < root->childCount(); ++row) {
+      const auto* child = root->child(row);
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      const QString function = params.value("function").toString();
+      if (!function.isEmpty() && !function_names.contains(function)) {
+        add_issue("error", "Loads", child->text(0), "function",
+                  QString("Referenced Function '%1' does not exist.").arg(function));
+      }
+      const QString boundary = params.value("boundary").toString();
+      if (!boundary.isEmpty()) {
+        check_group("Loads", child->text(0), "boundary", boundary, boundary_dim);
+      }
+      const QString variable = params.value("variable").toString();
+      if (!variable.isEmpty() && !variable_names.contains(variable)) {
+        add_issue("error", "Loads", child->text(0), "variable",
+                  QString("Referenced Variable '%1' does not exist.")
+                      .arg(variable));
+      }
+    }
+  }
+  if (const auto* root = find_root_item("Outputs")) {
+    for (int row = 0; row < root->childCount(); ++row) {
+      const auto* child = root->child(row);
+      const QString boundary = child->data(0, PropertyEditor::kParamsRole)
+                                   .toMap().value("hist_boundary").toString();
+      if (!boundary.isEmpty()) {
+        check_group("Outputs", child->text(0), "hist_boundary", boundary,
+                    boundary_dim);
+      }
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      if (params.value("hist_disp_avg").toString() == "true") {
+        const QString variable = params.value("hist_disp_variable").toString();
+        if (!variable.isEmpty() && !variable_names.contains(variable)) {
+          add_issue("error", "Outputs", child->text(0),
+                    "hist_disp_variable",
+                    QString("Referenced Variable '%1' does not exist.")
+                        .arg(variable));
+        }
+      }
+    }
+  }
+  if (child_count("Steps") > 1) {
+    add_issue("warning", "Steps", QString(), "sequence",
+              "Multiple Steps are saved, but this phase generates only the first Step.");
+  }
+
+  const auto sources = collect_material_file_sources();
+  if (const auto* materials = find_root_item("Materials")) {
+    const QStringList file_keys = {"compression_hardening_file",
+                                   "compression_damage_file",
+                                   "tension_stiffening_file",
+                                   "tension_damage_file"};
+    for (int row = 0; row < materials->childCount(); ++row) {
+      const auto* child = materials->child(row);
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      if (params.value("type").toString() != "AbaqusCDP") {
+        continue;
+      }
+      for (const auto& key : file_keys) {
+        const QString path = params.value(key).toString();
+        if (!path.isEmpty() && !QFileInfo::exists(path) &&
+            !sources.contains(QFileInfo(path).fileName())) {
+          add_issue("error", "Materials", child->text(0), key,
+                    "Material data file does not exist: " + path);
+        }
+      }
+    }
+  }
+  return issues;
+}
+
+void MainWindow::focus_workflow_issue(const QVariantMap& issue,
+                                      QWidget* transient_parent) {
+  auto* root = find_root_item(issue.value("root").toString());
+  if (!root || !model_tree_) {
+    statusBar()->showMessage(issue.value("message").toString(), 5000);
+    return;
+  }
+  QTreeWidgetItem* target = root;
+  const QString object = issue.value("object").toString();
+  for (int row = 0; row < root->childCount() && !object.isEmpty(); ++row) {
+    if (root->child(row) && root->child(row)->text(0) == object) {
+      target = root->child(row);
+      break;
+    }
+  }
+  root->setExpanded(true);
+  model_tree_->setCurrentItem(target);
+  model_tree_->scrollToItem(target);
+  if (target != root) {
+    open_property_form(target, transient_parent);
+  }
+}
+
+void MainWindow::show_workflow_validation_report(const QVariantList& issues) {
+  QWidget* owner = dialog_parent(
+      job_work_window_ && job_work_window_->isVisible() ? job_work_window_
+                                                        : nullptr);
+  QDialog dialog(owner);
+  dialog.setObjectName("workflowValidationReport");
+  dialog.setWindowTitle("Workflow Validation Report");
+  dialog.resize(920, 560);
+  auto* layout = new QVBoxLayout(&dialog);
+  int errors = 0;
+  int warnings = 0;
+  for (const auto& value : issues) {
+    value.toMap().value("severity").toString() == "error" ? ++errors : ++warnings;
+  }
+  auto* summary = new QLabel(
+      issues.isEmpty()
+          ? "Workflow ready: no blocking issue found."
+          : QString("%1 error(s), %2 warning(s). Double-click an item to locate it.")
+                .arg(errors)
+                .arg(warnings));
+  layout->addWidget(summary);
+  auto* table = new QTreeWidget(&dialog);
+  table->setObjectName("workflowValidationIssues");
+  table->setColumnCount(4);
+  table->setHeaderLabels({"Severity", "Object", "Field", "Message"});
+  table->setRootIsDecorated(false);
+  table->setAlternatingRowColors(true);
+  for (const auto& value : issues) {
+    const QVariantMap issue = value.toMap();
+    auto* row = new QTreeWidgetItem(table);
+    row->setText(0, issue.value("severity").toString().toUpper());
+    const QString object = issue.value("object").toString();
+    row->setText(1, object.isEmpty()
+                        ? issue.value("root").toString()
+                        : issue.value("root").toString() + "/" + object);
+    row->setText(2, issue.value("field").toString());
+    row->setText(3, issue.value("message").toString());
+    row->setData(0, Qt::UserRole, issue);
+  }
+  table->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+  table->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+  table->header()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+  table->header()->setSectionResizeMode(3, QHeaderView::Stretch);
+  layout->addWidget(table, 1);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
+  auto* locate = buttons->addButton("Locate", QDialogButtonBox::ActionRole);
+  locate->setObjectName("workflowValidationLocateButton");
+  locate->setEnabled(!issues.isEmpty());
+  QVariantMap selected_issue;
+  auto locate_current = [table, &dialog, &selected_issue]() {
+    auto* current = table->currentItem();
+    if (!current) {
+      return;
+    }
+    selected_issue = current->data(0, Qt::UserRole).toMap();
+    dialog.accept();
+  };
+  connect(locate, &QPushButton::clicked, &dialog, locate_current);
+  connect(table, &QTreeWidget::itemDoubleClicked, &dialog,
+          [locate_current](QTreeWidgetItem*, int) { locate_current(); });
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  layout->addWidget(buttons);
+  const int result = dialog.exec();
+  if (result == QDialog::Accepted && !selected_issue.isEmpty()) {
+    focus_workflow_issue(selected_issue, owner);
+  }
+}
+
+bool MainWindow::validate_workflow_for_submit(bool show_report) {
+  const QVariantList issues = collect_workflow_issues();
+  int errors = 0;
+  QStringList blockers;
+  for (const auto& value : issues) {
+    const QVariantMap issue = value.toMap();
+    if (issue.value("severity").toString() != "error") {
+      continue;
+    }
+    ++errors;
+    const QString object = issue.value("object").toString().trimmed();
+    const QString root = issue.value("root").toString().trimmed();
+    blockers.append(QString("%1: %2")
+                        .arg(object.isEmpty() ? root : object,
+                             issue.value("message").toString()));
+  }
+  // “校验工作流”既生成报告，也必须立即刷新快照/远程提交门禁。
+  // 之前这里只返回 bool，若按钮保留了旧的 blocked 状态，即使当前
+  // 已是 0 error（仅 warning），导出任务快照仍会错误地保持禁用。
+  if (moose_panel_) {
+    moose_panel_->set_workflow_preflight(errors == 0, blockers);
+  }
+  if (show_report || errors > 0) {
+    show_workflow_validation_report(issues);
+  }
+  if (statusBar()) {
+    statusBar()->showMessage(
+        errors == 0 ? "Workflow ready."
+                    : QString("Workflow blocked by %1 error(s).").arg(errors),
+        4000);
+  }
+  return errors == 0;
 }
 
 void MainWindow::start_submit_workflow() {
@@ -7524,7 +7993,11 @@ void MainWindow::start_submit_workflow() {
     return;
   }
 
-  ensure_basic_workflow_nodes();
+  // G0：提交入口不得补造任何模型对象。先做无副作用预检，错误时展示
+  // 可定位报告并立即返回。
+  if (!validate_workflow_for_submit(false)) {
+    return;
+  }
 
   auto latest_mesh_from_project = [this]() -> QString {
     const auto* root = find_root_item("Mesh");
@@ -7580,7 +8053,9 @@ void MainWindow::start_submit_workflow() {
     moose_panel_->set_template_by_key("tm_filemesh");
   }
 
-  sync_model_to_input();
+  if (!sync_model_to_input()) {
+    return;
+  }
   moose_panel_->set_mesh_path(mesh_path);
   moose_panel_->run_job();
   if (statusBar()) {
@@ -7663,7 +8138,7 @@ bool MainWindow::prompt_unique_child_name(QTreeWidgetItem* root,
     return false;
   }
 
-  QDialog dialog(this);
+  QDialog dialog(dialog_parent());
   dialog.setObjectName("uniqueObjectNameDialog");
   dialog.setWindowTitle(title);
   dialog.setModal(true);
@@ -9567,10 +10042,128 @@ QString MainWindow::build_times_block(QString* header) const {
   return out;
 }
 
-void MainWindow::sync_model_to_input(const QString& project_path_override) {
-  if (!moose_panel_) {
-    return;
+QString MainWindow::build_generation_report() const {
+  QStringList lines;
+  lines << "GMP-ISE Model Tree Generation Report";
+  lines << QString("Application profile: %1")
+               .arg(application_profile_.value("id").toString().isEmpty()
+                        ? QString("(not selected)")
+                        : application_profile_.value("id").toString());
+  lines << QString("Mapping registry: %1")
+               .arg(mapping_registry_.is_loaded() ? mapping_registry_.version()
+                                                  : QString("(not loaded)"));
+  lines << QString("Input mode: %1")
+               .arg(moose_panel_ ? moose_panel_->input_mode()
+                                 : QString("structured"));
+  lines << QString();
+
+  auto append_children = [this, &lines](const QString& root_name,
+                                         const QString& block_root) {
+    const auto* root = find_root_item(root_name);
+    if (!root) {
+      return;
+    }
+    for (int row = 0; row < root->childCount(); ++row) {
+      const auto* child = root->child(row);
+      if (!child) {
+        continue;
+      }
+      lines << QString("[%1/%2] <- Model Tree %3/%2")
+                   .arg(block_root, child->text(0), root_name);
+    }
+  };
+
+  if (moose_panel_) {
+    const QString mesh_path =
+        moose_panel_->moose_settings().value("mesh_path").toString();
+    if (!mesh_path.isEmpty()) {
+      lines << QString("[Mesh/file] <- Mesh path %1").arg(mesh_path);
+    }
   }
+  if (const auto* materials = find_root_item("Materials")) {
+    for (int row = 0; row < materials->childCount(); ++row) {
+      const auto* child = materials->child(row);
+      if (!child) {
+        continue;
+      }
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      if (params.value("type").toString() == "AbaqusCDP") {
+        lines << QString("[Materials/%1_elasticity] <- Model Tree Materials/%1")
+                     .arg(child->text(0));
+        lines << QString("[Materials/%1_stress] <- Model Tree Materials/%1")
+                     .arg(child->text(0));
+        lines << QString("[Materials/%1_cdp_stress_update] <- Model Tree Materials/%1")
+                     .arg(child->text(0));
+      } else {
+        lines << QString("[Materials/%1] <- Model Tree Materials/%1")
+                     .arg(child->text(0));
+      }
+    }
+  }
+  if (const auto* sections = find_root_item("Sections")) {
+    for (int row = 0; row < sections->childCount(); ++row) {
+      const auto* child = sections->child(row);
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      lines << QString("Section %1: material=%2 -> Physical Volume(s)=%3")
+                   .arg(child->text(0), params.value("material").toString(),
+                        params.value("block").toString());
+    }
+  }
+  if (const auto* physics = find_root_item("Physics")) {
+    for (int row = 0; row < physics->childCount(); ++row) {
+      QString header;
+      build_physics_action_block(physics->child(row), &header);
+      if (!header.isEmpty()) {
+        lines << QString("[%1] <- Model Tree Physics/%2")
+                     .arg(header, physics->child(row)->text(0));
+      }
+    }
+  }
+  append_children("Functions", "Functions");
+  append_children("Variables", "Variables");
+  append_children("BC", "BCs");
+  append_children("Loads", "Kernels");
+  if (const auto* steps = find_root_item("Steps"); steps && steps->childCount() > 0) {
+    lines << QString("[Executioner] <- Model Tree Steps/%1")
+                 .arg(steps->child(0)->text(0));
+    lines << QString("[TimeStepper] <- Model Tree Steps/%1")
+                 .arg(steps->child(0)->text(0));
+    lines << QString("[Preconditioning/smp] <- Model Tree Steps/%1")
+                 .arg(steps->child(0)->text(0));
+    if (steps->childCount() > 1) {
+      lines << QString("WARNING: %1 Steps saved; only the first is generated in this phase.")
+                   .arg(steps->childCount());
+    }
+  }
+  if (const auto* outputs = find_root_item("Outputs");
+      outputs && outputs->childCount() > 0) {
+    for (int row = 0; row < outputs->childCount(); ++row) {
+      lines << QString("[Outputs] package <- Model Tree Outputs/%1")
+                   .arg(outputs->child(row)->text(0));
+    }
+    lines << "[AuxVariables]/[AuxKernels]/[Postprocessors]/[Times] <- Outputs package";
+  }
+  if (!mesh_snapshot_.groups.isEmpty()) {
+    lines << QString();
+    lines << "Physical Groups:";
+    for (const auto& group : mesh_snapshot_.groups) {
+      lines << QString("- %1 (dim=%2, entities=%3, elements=%4)")
+                   .arg(group.name)
+                   .arg(group.dim)
+                   .arg(group.entity_count)
+                   .arg(group.element_count);
+    }
+  }
+  return lines.join("\n");
+}
+
+bool MainWindow::sync_model_to_input(const QString& project_path_override) {
+  if (!moose_panel_) {
+    return false;
+  }
+  moose_panel_->begin_model_sync();
   // 材料 CSV 等相对输入文件可能刚由属性表单更新；每次装配前刷新来源表，
   // 供项目工作目录物化与后续快照打包共同使用。
   moose_panel_->set_extra_file_sources(collect_material_file_sources());
@@ -9664,11 +10257,22 @@ void MainWindow::sync_model_to_input(const QString& project_path_override) {
       moose_panel_->apply_moose_settings({{"input_text", input}});
     }
   }
+  QString merge_error;
+  if (!moose_panel_->finalize_model_sync(build_generation_report(),
+                                         &merge_error)) {
+    statusBar()->showMessage("Model sync blocked: " + merge_error, 6000);
+    QMessageBox::warning(this, "Model Sync Blocked", merge_error);
+    return false;
+  }
   const QString artifact_project_path = project_path_override.isEmpty()
                                             ? project_path_
                                             : project_path_override;
   if (!artifact_project_path.isEmpty()) {
-    moose_panel_->materialize_project_input(artifact_project_path);
+    if (!moose_panel_->materialize_project_input(artifact_project_path)) {
+      statusBar()->showMessage("Failed to materialize the generated input.",
+                               5000);
+      return false;
+    }
   }
   const QVariantMap settings = moose_panel_->moose_settings();
   const QString input_path = settings.value("input_path").toString();
@@ -9708,9 +10312,10 @@ void MainWindow::sync_model_to_input(const QString& project_path_override) {
             : QString("Model synced to MOOSE input (no application profile "
                       "selected)."),
         4000);
-    return;
+    return true;
   }
   statusBar()->showMessage("Model synced to MOOSE input.", 2000);
+  return true;
 }
 
 void MainWindow::load_demo_diffusion(bool run) {
@@ -10002,7 +10607,7 @@ void MainWindow::prompt_new_selection_from_group() {
   if (!root) {
     return;
   }
-  QDialog dialog(this);
+  QDialog dialog(dialog_parent());
   dialog.setWindowTitle("New Selection from Physical Group");
   auto* layout = new QFormLayout(&dialog);
   auto* dim_combo = new QComboBox(&dialog);
@@ -10226,8 +10831,12 @@ void MainWindow::refresh_job_table() {
     if (!child) {
       continue;
     }
-    const QVariantMap params =
+    const QVariantMap saved_params =
         child->data(0, PropertyEditor::kParamsRole).toMap();
+    const QVariantMap params = normalize_remote_job_params(saved_params);
+    if (params != saved_params) {
+      child->setData(0, PropertyEditor::kParamsRole, params);
+    }
     // 作业监控状态筛选：按映射后的状态列匹配。
     if (filter != "all" &&
         params.value("status").toString() != filter) {
@@ -10326,13 +10935,15 @@ void MainWindow::update_job_detail(int row) {
     job_detail_->clear();
     return;
   }
-  const QVariantMap params = item->data(Qt::UserRole).toMap();
+  const QVariantMap params =
+      normalize_remote_job_params(item->data(Qt::UserRole).toMap());
   QStringList lines;
   lines << QString("Name: %1").arg(item->text());
   lines << QString("Status: %1").arg(params.value("status").toString());
   lines << QString("Start: %1").arg(params.value("start_time").toString());
   lines << QString("Duration: %1").arg(params.value("duration").toString());
   lines << QString("Mesh: %1").arg(params.value("mesh").toString());
+  lines << QString("Snapshot: %1").arg(params.value("snapshot").toString());
   lines << QString("Exec: %1").arg(params.value("exec").toString());
   lines << QString("Args: %1").arg(params.value("args").toString());
   lines << QString("Workdir: %1").arg(params.value("workdir").toString());
@@ -10359,8 +10970,9 @@ void MainWindow::apply_job_selection(int row) {
     return;
   }
   auto* item = job_table_->item(row, 0);
-  const QVariantMap params = item ? item->data(Qt::UserRole).toMap()
-                                  : QVariantMap();
+  const QVariantMap params =
+      normalize_remote_job_params(item ? item->data(Qt::UserRole).toMap()
+                                       : QVariantMap());
   selected_job_id_ = params.value("job_id").toString();
   selected_job_remote_ = params.value("remote").toBool() &&
                          !selected_job_id_.isEmpty();
@@ -10368,8 +10980,11 @@ void MainWindow::apply_job_selection(int row) {
   selected_job_running_ =
       selected_job_remote_ &&
       (status == "Queued" || status == "Running");
-  if (moose_panel_) {
-    moose_panel_->set_mesh_path(params.value("mesh").toString());
+  if (moose_panel_ && !selected_job_remote_) {
+    const QString mesh = params.value("mesh").toString().trimmed();
+    if (!mesh.isEmpty()) {
+      moose_panel_->set_mesh_path(mesh);
+    }
   }
   if (job_detail_stack_) {
     job_detail_stack_->setCurrentIndex(1);
@@ -10532,6 +11147,100 @@ void MainWindow::update_remote_job_files(const QVariantMap& body) {
   }
 }
 
+void MainWindow::migrate_project_mesh_paths(const QString& project_path) {
+  // 旧版本把自动生成网格默认写进应用工作目录 out/，多个项目会共享
+  // 同一文件。项目获得保存路径后，把这种“旧默认路径”迁移到自己的
+  // .work/case/<项目名>/；用户明确选择的其他外部路径保持不变。
+  QStringList project_mesh_paths;
+  QString migrated_active_mesh;
+  QList<QPair<QString, QString>> migrated_paths;
+  const auto same_path = [](const QString& lhs, const QString& rhs) {
+    if (lhs.trimmed().isEmpty() || rhs.trimmed().isEmpty()) {
+      return false;
+    }
+    return QDir::cleanPath(QFileInfo(lhs).absoluteFilePath()) ==
+           QDir::cleanPath(QFileInfo(rhs).absoluteFilePath());
+  };
+  const QString gmsh_output =
+      gmsh_panel_
+          ? gmsh_panel_->gmsh_settings().value("output_path").toString()
+          : QString();
+  if (auto* mesh_root = find_root_item("Mesh")) {
+    for (int row = 0; row < mesh_root->childCount(); ++row) {
+      auto* mesh_item = mesh_root->child(row);
+      if (!mesh_item) {
+        continue;
+      }
+      QVariantMap params =
+          mesh_item->data(0, PropertyEditor::kParamsRole).toMap();
+      const QString source = params.value("path").toString();
+      QString effective = source;
+      if (is_legacy_default_mesh_path(source)) {
+        const QString target = QDir(project_case_work_dir(project_path))
+                                   .filePath(QFileInfo(source).fileName().isEmpty()
+                                                 ? mesh_item->text(0) + ".msh"
+                                                 : QFileInfo(source).fileName());
+        bool target_ready = QDir().mkpath(QFileInfo(target).absolutePath());
+        if (target_ready && QFileInfo::exists(source) &&
+            !QFileInfo::exists(target)) {
+          target_ready = QFile::copy(source, target);
+        }
+        if (target_ready) {
+          effective = target;
+          migrated_paths.append(qMakePair(source, target));
+          params.insert("path", target);
+          mesh_item->setData(0, PropertyEditor::kParamsRole, params);
+          if (same_path(mesh_snapshot_.mesh_path, source)) {
+            mesh_snapshot_.mesh_path = target;
+          }
+          if (same_path(gmsh_output, source)) {
+            migrated_active_mesh = target;
+          }
+          gmp::log_operation(
+              "project",
+              QString("Mesh output migrated into project workspace: %1")
+                  .arg(target));
+        }
+      }
+      if (!effective.trimmed().isEmpty()) {
+        project_mesh_paths.append(effective);
+      }
+    }
+  }
+  if (gmsh_panel_ && !migrated_active_mesh.isEmpty()) {
+    gmsh_panel_->set_mesh_output_path(migrated_active_mesh);
+  }
+  if (moose_panel_ && !project_mesh_paths.isEmpty()) {
+    const QString current_mesh =
+        moose_panel_->moose_settings().value("mesh_path").toString();
+    bool current_is_project_mesh = false;
+    for (const QString& candidate : project_mesh_paths) {
+      current_is_project_mesh =
+          current_is_project_mesh || same_path(current_mesh, candidate);
+    }
+    // 也修复已被远程 snapshot 目录污染的 moose.mesh_path。
+    if (!current_is_project_mesh) {
+      moose_panel_->set_mesh_path(project_mesh_paths.front());
+    }
+    // set_mesh_path 会更新当前可见输入，但结构化基线和已保存生成报告
+    // 仍可能保留旧路径。三者必须一起迁移，否则切换输入模式或查看报告
+    // 会再次显示仓库 out/*.msh。
+    if (!migrated_paths.isEmpty()) {
+      QVariantMap derived = moose_panel_->moose_settings();
+      for (const QString& key : {QStringLiteral("input_text"),
+                                 QStringLiteral("structured_input"),
+                                 QStringLiteral("generation_report")}) {
+        QString text = derived.value(key).toString();
+        for (const auto& migration : migrated_paths) {
+          text.replace(migration.first, migration.second);
+        }
+        derived.insert(key, text);
+      }
+      moose_panel_->apply_moose_settings(derived);
+    }
+  }
+}
+
 bool MainWindow::load_project(const QString& path) {
   try {
     suppress_dirty_ = true;
@@ -10675,12 +11384,31 @@ bool MainWindow::load_project(const QString& path) {
     }
 
     YAML::Node moose_node = root["moose"];
+    // 打开项目前先清理上一项目的路径、输入与快照上下文。
+    // 这样旧项目即使缺少某个 moose 字段，也会回落到干净默认值，
+    // 而不是沿用上一项目的当前控件值。
+    if (moose_panel_) {
+      moose_panel_->reset_project_state();
+    }
     if (moose_node && moose_node.IsMap() && moose_panel_) {
       const QSet<QString> force_string = {"exec_path", "input_path", "workdir",
                                           "mesh_path", "template_key",
-                                          "extra_args", "input_text"};
+                                          "extra_args", "input_text",
+                                          "input_mode", "structured_input",
+                                          "custom_blocks", "generation_report",
+                                          "last_snapshot_dir"};
       const QVariantMap moose_settings = parse_map(moose_node, force_string);
       moose_panel_->apply_moose_settings(moose_settings);
+      // input_text/structured_input 表明这是由模型树装配并由项目拥有的
+      // 输入。旧版本可能保存了其他工程的 diffusion.i/workdir；加载时
+      // 按当前项目名重算派生制品路径，外部 mesh_path 仍按 YAML 保留。
+      if (!moose_settings.value("input_text").toString().trimmed().isEmpty() ||
+          !moose_settings.value("structured_input")
+               .toString()
+               .trimmed()
+               .isEmpty()) {
+        moose_panel_->rebase_project_artifact_paths(path);
+      }
     }
     input_snapshots_.clear();
     if (moose_node && moose_node.IsMap() && moose_node["input_snapshots"] &&
@@ -10702,6 +11430,8 @@ bool MainWindow::load_project(const QString& path) {
     application_profile_ = loaded_application_profile;
     unit_contract_ = loaded_unit_contract;
     mesh_snapshot_ = loaded_mesh_snapshot;
+
+    migrate_project_mesh_paths(path);
     // 项目保存时 physical groups 已进入 mesh_snapshot；加载后还必须按
     // 网格维度重新喂给 PropertyEditor，否则 BC/Outputs 的边界候选与
     // Section/Physics/Loads 的体组候选只在本次网格生成信号触发后才有值。
@@ -10731,6 +11461,13 @@ bool MainWindow::load_project(const QString& path) {
     update_app_profile_display();
     // W-00c：档案/单位/清单/项目路径恢复后同步注入 MoosePanel。
     push_context_to_moose_panel();
+    // 生成报告是模型树的派生产物。旧项目可能保存了已迁移前的路径，
+    // 加载上下文和 mapping 后立即重建，避免报告与当前输入互相矛盾。
+    if (moose_panel_ &&
+        !moose_panel_->generation_report().trimmed().isEmpty()) {
+      moose_panel_->apply_moose_settings(
+          {{"generation_report", build_generation_report()}});
+    }
     refresh_job_table();
     refresh_results_panel();
     refresh_module_pages();
@@ -10748,6 +11485,9 @@ bool MainWindow::load_project(const QString& path) {
 
 bool MainWindow::save_project(const QString& path) {
   try {
+    // 临时项目首次保存时此刻才获得项目目录；在生成输入和序列化前完成
+    // 网格归属迁移，确保 YAML、生成报告与 .i 都写入同一个项目路径。
+    migrate_project_mesh_paths(path);
     // 工程文件中的 moose.input_text 是模型树的派生产物。保存前统一同步，
     // 避免 Material/Section 已就绪而工程仍持久化旧输入文本。
     sync_model_to_input(path);
@@ -14003,6 +14743,9 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       params.value("status").toString() != "Running" ||
                       params.value("progress").toString() !=
                           "percent=4.9, step=31" ||
+                      params.value("snapshot").toString() !=
+                          "/tmp/tour_snapshot" ||
+                      !params.value("mesh").toString().isEmpty() ||
                       params.value("exec").toString() !=
                           "remote: http://127.0.0.1:8200") {
                     throw std::runtime_error("Remote job status merge contract failed");
@@ -14022,6 +14765,21 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       merged.value("duration").toString() != "40s" ||
                       merged.value("case").toString() != "tpl-demo") {
                     throw std::runtime_error("Remote job list state mapping contract failed");
+                  }
+                  // 旧项目曾把 snapshot 错存为 mesh；刷新列表时必须迁移，
+                  // 不能再把 case-* 目录暴露为可选网格。
+                  QVariantMap legacy = merged;
+                  legacy.remove("snapshot");
+                  legacy.insert("mesh", "/tmp/case-legacy-snapshot");
+                  item->setData(0, PropertyEditor::kParamsRole, legacy);
+                  refresh_job_table();
+                  const QVariantMap migrated =
+                      item->data(0, PropertyEditor::kParamsRole).toMap();
+                  if (migrated.value("snapshot").toString() !=
+                          "/tmp/case-legacy-snapshot" ||
+                      !migrated.value("mesh").toString().isEmpty()) {
+                    throw std::runtime_error(
+                        "Legacy remote snapshot/mesh migration failed");
                   }
                 },
                 job_work_window_});
@@ -14046,12 +14804,15 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     throw std::runtime_error("Jobs root fixture is missing");
                   }
                   const QString job_id = "tour_remote_job_2";
+                  const QString mesh_before =
+                      moose_panel_->moose_settings().value("mesh_path").toString();
                   QVariantMap submit;
                   submit.insert("event", "submitted");
                   submit.insert("job_id", job_id);
                   submit.insert("state", "running");
                   submit.insert("server", "http://127.0.0.1:8200");
                   submit.insert("case_name", "tour-case");
+                  submit.insert("snapshot", "/tmp/case-tour-snapshot");
                   emit moose_panel_->remote_job_event(submit);
                   int target_row = -1;
                   for (int row = 0; row < job_table_->rowCount(); ++row) {
@@ -14067,6 +14828,9 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   job_table_->setCurrentCell(target_row, 0);
                   if (selected_job_id_ != job_id || !selected_job_remote_ ||
                       !selected_job_running_ ||
+                      moose_panel_->moose_settings()
+                              .value("mesh_path")
+                              .toString() != mesh_before ||
                       job_detail_stack_->currentIndex() != 1 ||
                       (job_cancel_button_ &&
                        !job_cancel_button_->isEnabled())) {
@@ -14696,8 +15460,8 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     }
                     names << added->text(0);
                     const QString expected_path =
-                        QDir::current().absoluteFilePath(
-                            "out/" + added->text(0) + ".msh");
+                        default_mesh_output_path(project_path_,
+                                                 added->text(0));
                     if (gmsh_panel_->gmsh_settings()
                             .value("output_path")
                             .toString() != expected_path) {
@@ -15851,6 +16615,512 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       materials_root->indexOfChild(material));
                   property_editor_->set_boundary_groups(saved_boundaries);
                   refresh_module_pages();
+                },
+                this});
+  steps.append({"workflow_preflight_contract",
+                [this]() {
+                  // G0 / W-05：预检必须是无副作用的，只报告问题，不再创建
+                  // material_1/u/left 等默认对象；不存在的边界引用需被定位。
+                  const QStringList roots = {"Parts", "Materials", "Sections",
+                                             "Physics", "Steps", "BC", "Loads",
+                                             "Outputs", "Mesh"};
+                  QMap<QString, int> before;
+                  for (const auto& root : roots) {
+                    before.insert(root, child_count(root));
+                  }
+                  const QString input_before =
+                      moose_panel_ ? moose_panel_->input_text() : QString();
+                  auto* bc_root = find_root_item("BC");
+                  if (!bc_root) {
+                    throw std::runtime_error("G0 preflight BC root is missing");
+                  }
+                  auto* probe = add_child_item(
+                      bc_root, "tour_invalid_boundary", "BC",
+                      {{"type", "DirichletBC"},
+                       {"variable", "disp_x"},
+                       {"boundary", "__missing_boundary__"},
+                       {"value", "0"}});
+                  auto* section_probe = add_child_item(
+                      find_root_item("Sections"), "tour_invalid_material",
+                      "Sections", {{"type", "SolidSection"},
+                                   {"material", "__missing_material__"},
+                                   {"block", "solid"}});
+                  const QVariantList issues = collect_workflow_issues();
+                  bool found_boundary = false;
+                  bool found_material = false;
+                  QVariantMap material_issue;
+                  for (const auto& value : issues) {
+                    const QVariantMap issue = value.toMap();
+                    if (issue.value("object").toString() ==
+                            "tour_invalid_boundary" &&
+                        issue.value("field").toString() == "boundary") {
+                      found_boundary = true;
+                    }
+                    if (issue.value("object").toString() ==
+                            "tour_invalid_material" &&
+                        issue.value("field").toString() == "material") {
+                      found_material = true;
+                      material_issue = issue;
+                    }
+                  }
+                  refresh_workflow_status();
+                  auto* validate_button = moose_panel_->findChild<QPushButton*>(
+                      "mooseValidateWorkflowButton");
+                  auto* export_button = moose_panel_->findChild<QPushButton*>(
+                      "mooseExportSnapshotButton");
+                  auto* submit_button = moose_panel_->findChild<QPushButton*>(
+                      "mooseSubmitRemoteJobButton");
+                  const bool submit_blocked =
+                      export_button && submit_button &&
+                      !export_button->isEnabled() &&
+                      !submit_button->isEnabled();
+                  bool report_opened = false;
+                  if (job_work_window_) {
+                    job_work_window_->show();
+                    job_work_window_->raise();
+                    job_work_window_->activateWindow();
+                  }
+                  if (validate_button) {
+                    QTimer::singleShot(
+                        0, this, [this, &report_opened]() {
+                      QWidget* modal = findChild<QDialog*>(
+                          "workflowValidationReport");
+                      if (!modal) {
+                        modal = QApplication::activeModalWidget();
+                      }
+                      if (modal) {
+                        report_opened = true;
+                        if (auto* dialog = qobject_cast<QDialog*>(modal)) {
+                          dialog->reject();
+                        }
+                      }
+                    });
+                    validate_button->click();
+                  }
+                  focus_workflow_issue(material_issue, job_work_window_);
+                  const bool located_form_above_workspace =
+                      floating_property_form_ &&
+                      floating_property_form_->isVisible() &&
+                      floating_property_form_->parentWidget() ==
+                          job_work_window_;
+                  if (floating_property_form_) {
+                    floating_property_form_->reject();
+                    QCoreApplication::sendPostedEvents(
+                        nullptr, QEvent::DeferredDelete);
+                  }
+                  delete bc_root->takeChild(bc_root->indexOfChild(probe));
+                  auto* sections_root = find_root_item("Sections");
+                  if (sections_root && section_probe) {
+                    delete sections_root->takeChild(
+                        sections_root->indexOfChild(section_probe));
+                  }
+                  refresh_workflow_status();
+                  if (!found_boundary || !found_material || !submit_blocked ||
+                      !report_opened || !located_form_above_workspace) {
+                    throw std::runtime_error(
+                        "G0 Job Workspace preflight did not open its report, "
+                        "locate the issue above the workspace, report "
+                        "references, or disable snapshot/submit actions");
+                  }
+                  for (const auto& root : roots) {
+                    if (child_count(root) != before.value(root)) {
+                      throw std::runtime_error(
+                          QString("G0 preflight mutated Model Tree root: %1")
+                              .arg(root)
+                              .toStdString());
+                    }
+                  }
+                  const QString input =
+                      moose_panel_ ? moose_panel_->input_text() : QString();
+                  if (input != input_before) {
+                    throw std::runtime_error(
+                        "G0 preflight unexpectedly changed the generated input");
+                  }
+                },
+                this});
+  steps.append({"project_context_isolation_contract",
+                [this]() {
+                  // G0 回归：新建项目必须丢弃上一项目的
+                  // input/workdir/mesh、快照和专家扩展；运行器偏好
+                  // 仍属于用户级设置。
+                  if (!moose_panel_ || !action_new_) {
+                    throw std::runtime_error(
+                        "Project context isolation fixture is missing");
+                  }
+                  auto* materials = find_root_item("Materials");
+                  if (!materials ||
+                      !add_child_item(materials, "leaked_material",
+                                      "Materials",
+                                      {{"type", "GenericConstantMaterial"}})) {
+                    throw std::runtime_error(
+                        "Project context isolation probe was not created");
+                  }
+
+                  QVariantMap leaked = moose_panel_->moose_settings();
+                  leaked.insert("input_path", "/tmp/previous/case.i");
+                  leaked.insert("workdir", "/tmp/previous");
+                  leaked.insert("mesh_path", "/tmp/previous/mesh.msh");
+                  leaked.insert("template_key", "tm_generated");
+                  leaked.insert("input_mode", "expert");
+                  leaked.insert("input_text", "[LeakedProject]\n[]\n");
+                  leaked.insert("structured_input",
+                                "[LeakedProject]\n[]\n");
+                  leaked.insert("custom_blocks", "[LeakedCustom]\n[]\n");
+                  leaked.insert("generation_report", "leaked report");
+                  leaked.insert("last_snapshot_dir",
+                                "/tmp/previous/case-20000101-000000");
+                  moose_panel_->apply_moose_settings(leaked);
+
+                  // 巡览环境中 New 为静默新建，直接走真实
+                  // create_fresh_project 接线，不绕过 UI 入口。
+                  action_new_->trigger();
+                  QCoreApplication::sendPostedEvents(
+                      nullptr, QEvent::DeferredDelete);
+                  const QVariantMap fresh = moose_panel_->moose_settings();
+                  const QString fresh_input =
+                      fresh.value("input_text").toString();
+                  QSettings global("gmp-ise", "gmp_ise");
+                  const QStringList forbidden_global_keys = {
+                      "moose/input_path", "moose/workdir", "moose/mesh_path",
+                      "moose/template_kind", "moose/input_mode",
+                      "moose/custom_blocks", "moose/last_snapshot_dir"};
+                  bool global_leak = false;
+                  for (const auto& key : forbidden_global_keys) {
+                    global_leak = global_leak || global.contains(key);
+                  }
+                  if (!fresh.value("input_path").toString().isEmpty() ||
+                      !fresh.value("workdir").toString().isEmpty() ||
+                      !fresh.value("mesh_path").toString().isEmpty() ||
+                      fresh.value("template_key").toString() != "generated" ||
+                      fresh.value("input_mode").toString() != "structured" ||
+                      !fresh.value("custom_blocks").toString().isEmpty() ||
+                      !fresh.value("generation_report").toString().isEmpty() ||
+                      !fresh.value("last_snapshot_dir").toString().isEmpty() ||
+                      fresh_input.contains("LeakedProject") ||
+                      !fresh_input.isEmpty() ||
+                      child_count("Materials") != 0 || global_leak) {
+                    throw std::runtime_error(
+                        "New project retained project-scoped MOOSE state");
+                  }
+
+                  // 模板仅在用户明确点击“应用模板”后写入。
+                  auto* apply_template =
+                      moose_panel_->findChild<QPushButton*>(
+                          "mooseApplyTemplateButton");
+                  if (!apply_template) {
+                    throw std::runtime_error(
+                        "Apply-template button is missing");
+                  }
+                  apply_template->click();
+                  if (!moose_panel_->input_text().contains(
+                          "type = GeneratedMesh")) {
+                    throw std::runtime_error(
+                        "Explicit template application did not populate input");
+                  }
+                  moose_panel_->reset_project_state();
+
+                  // 旧项目可能没有 moose 节点或缺少新字段。
+                  // 打开这类项目也必须以干净默认值为基线，
+                  // 不能从上一个项目的控件状态补齐。
+                  QVariantMap leaked_before_open =
+                      moose_panel_->moose_settings();
+                  leaked_before_open.insert("input_path",
+                                            "/tmp/previous/open.i");
+                  leaked_before_open.insert("workdir", "/tmp/previous/open");
+                  leaked_before_open.insert("mesh_path",
+                                            "/tmp/previous/open.msh");
+                  leaked_before_open.insert("input_text",
+                                            "[LeakedOnOpen]\n[]\n");
+                  leaked_before_open.insert("structured_input",
+                                            "[LeakedOnOpen]\n[]\n");
+                  moose_panel_->apply_moose_settings(leaked_before_open);
+                  const QString legacy_path =
+                      QDir::temp().absoluteFilePath(
+                          "gmp_tour_project_context_legacy.gmp.yaml");
+                  QFile legacy_file(legacy_path);
+                  if (!legacy_file.open(QIODevice::WriteOnly |
+                                        QIODevice::Truncate | QIODevice::Text)) {
+                    throw std::runtime_error(
+                        "Could not write project context legacy fixture");
+                  }
+                  legacy_file.write(
+                      QString("schema_version: %1\nversion: 2\nmodel: {}\n")
+                          .arg(project_schema::kCurrentVersion)
+                          .toUtf8());
+                  legacy_file.close();
+                  const bool opened = load_project(legacy_path);
+                  QFile::remove(legacy_path);
+                  QStringList recent =
+                      global.value("recent_projects").toStringList();
+                  recent.removeAll(legacy_path);
+                  global.setValue("recent_projects", recent);
+                  const QVariantMap opened_settings =
+                      moose_panel_->moose_settings();
+                  if (!opened ||
+                      !opened_settings.value("input_path").toString().isEmpty() ||
+                      !opened_settings.value("workdir").toString().isEmpty() ||
+                      !opened_settings.value("mesh_path").toString().isEmpty() ||
+                      opened_settings.value("input_text")
+                          .toString()
+                          .contains("LeakedOnOpen")) {
+                    throw std::runtime_error(
+                        "Project load retained previous project MOOSE state");
+                  }
+
+                  // 有生成输入的旧项目必须把 input/workdir 迁移到当前
+                  // 项目自己的 .work/case/<项目名>，不能继续使用历史
+                  // diffusion.i；外部网格路径仍由项目值保持。
+                  const QString generated_path =
+                      QDir::temp().absoluteFilePath(
+                          "gmp_tour_project_context_generated.gmp.yaml");
+                  QFile generated_file(generated_path);
+                  if (!generated_file.open(QIODevice::WriteOnly |
+                                           QIODevice::Truncate |
+                                           QIODevice::Text)) {
+                    throw std::runtime_error(
+                        "Could not write generated project context fixture");
+                  }
+                  generated_file.write(
+                      QString("schema_version: %1\nversion: 2\nmodel: {}\n"
+                              "moose:\n"
+                              "  input_path: /tmp/old/diffusion.i\n"
+                              "  workdir: /tmp/old/case\n"
+                              "  mesh_path: /tmp/external/mesh.msh\n"
+                              "  input_text: |\n"
+                              "    [Mesh]\n"
+                              "      type = GeneratedMesh\n"
+                              "    []\n")
+                          .arg(project_schema::kCurrentVersion)
+                          .toUtf8());
+                  generated_file.close();
+                  // 旧项目尚未保存 last_snapshot_dir 时，应从项目目录
+                  // 自动找回属于当前项目的最新 contract v2 快照。
+                  const QString recovered_snapshot_dir =
+                      QDir(QFileInfo(generated_path).absolutePath())
+                          .absoluteFilePath(
+                              "case-gmp-tour-project-context-recovery");
+                  QDir(recovered_snapshot_dir).removeRecursively();
+                  if (!QDir().mkpath(recovered_snapshot_dir)) {
+                    throw std::runtime_error(
+                        "Could not create snapshot recovery fixture");
+                  }
+                  QFile recovered_input(
+                      QDir(recovered_snapshot_dir).filePath("case.i"));
+                  if (!recovered_input.open(QIODevice::WriteOnly |
+                                            QIODevice::Truncate |
+                                            QIODevice::Text)) {
+                    throw std::runtime_error(
+                        "Could not write snapshot recovery input");
+                  }
+                  recovered_input.write("[Mesh]\n[]\n");
+                  recovered_input.close();
+                  QFile recovered_manifest(
+                      QDir(recovered_snapshot_dir).filePath("manifest.json"));
+                  if (!recovered_manifest.open(QIODevice::WriteOnly |
+                                               QIODevice::Truncate |
+                                               QIODevice::Text)) {
+                    throw std::runtime_error(
+                        "Could not write snapshot recovery manifest");
+                  }
+                  recovered_manifest.write(
+                      QString("{\"contract\":\"CONTRACT-JOB\","
+                              "\"input_snapshot\":{\"input_file\":"
+                              "\"case.i\"},\"traceability\":{"
+                              "\"project_path\":\"%1\"}}")
+                          .arg(generated_path)
+                          .toUtf8());
+                  recovered_manifest.close();
+                  const bool generated_opened = load_project(generated_path);
+                  const QVariantMap generated_settings =
+                      moose_panel_->moose_settings();
+                  const QString expected_case_dir =
+                      QDir(QFileInfo(generated_path).absolutePath())
+                          .absoluteFilePath(
+                              ".work/case/gmp_tour_project_context_generated");
+                  const QString expected_input =
+                      QDir(expected_case_dir)
+                          .absoluteFilePath(
+                              "gmp_tour_project_context_generated.i");
+                  QFile::remove(generated_path);
+                  QDir(recovered_snapshot_dir).removeRecursively();
+                  recent = global.value("recent_projects").toStringList();
+                  recent.removeAll(generated_path);
+                  global.setValue("recent_projects", recent);
+                  if (!generated_opened ||
+                      generated_settings.value("input_path").toString() !=
+                          expected_input ||
+                      generated_settings.value("workdir").toString() !=
+                          expected_case_dir ||
+                      generated_settings.value("mesh_path").toString() !=
+                          "/tmp/external/mesh.msh" ||
+                      generated_settings.value("last_snapshot_dir").toString() !=
+                          recovered_snapshot_dir) {
+                    throw std::runtime_error(
+                        "Generated project paths or latest snapshot were not "
+                        "restored");
+                  }
+
+                  // 应用旧默认 out/*.msh 的已保存项目在打开时迁移到项目
+                  // 自有工作区；远程快照目录不得继续占据 MOOSE 网格字段。
+                  const QString owned_path =
+                      QDir::temp().absoluteFilePath(
+                          "gmp_tour_project_mesh_owned.gmp.yaml");
+                  const QString legacy_mesh =
+                      QDir::current().absoluteFilePath("out/box.msh");
+                  if (!QFileInfo::exists(legacy_mesh)) {
+                    throw std::runtime_error(
+                        "Legacy mesh migration fixture is missing");
+                  }
+                  QFile owned_file(owned_path);
+                  if (!owned_file.open(QIODevice::WriteOnly |
+                                       QIODevice::Truncate |
+                                       QIODevice::Text)) {
+                    throw std::runtime_error(
+                        "Could not write project-owned mesh fixture");
+                  }
+                  owned_file.write(
+                      QString("schema_version: %1\nversion: 2\n"
+                              "model:\n"
+                              "  Mesh:\n"
+                              "    - name: mesh_owned\n"
+                              "      kind: Mesh\n"
+                              "      status: Ready\n"
+                              "      params:\n"
+                              "        path: '%2'\n"
+                              "gmsh:\n"
+                              "  output_path: '%2'\n"
+                              "moose:\n"
+                              "  mesh_path: /tmp/case-stale-snapshot\n"
+                              "  input_mode: structured\n"
+                              "  input_text: \"[Mesh/file]\\n  file = %2\\n[]\\n\"\n"
+                              "  structured_input: \"[Mesh/file]\\n  file = %2\\n[]\\n\"\n"
+                              "  generation_report: \"[Mesh/file] <- Mesh path %2\"\n")
+                          .arg(project_schema::kCurrentVersion)
+                          .arg(legacy_mesh)
+                          .toUtf8());
+                  owned_file.close();
+                  const QString owned_case_dir = project_case_work_dir(owned_path);
+                  const QString expected_owned_mesh =
+                      QDir(owned_case_dir).absoluteFilePath("box.msh");
+                  QDir(owned_case_dir).removeRecursively();
+                  const bool owned_opened = load_project(owned_path);
+                  auto* owned_mesh_root = find_root_item("Mesh");
+                  auto* owned_mesh_item =
+                      owned_mesh_root && owned_mesh_root->childCount() > 0
+                          ? owned_mesh_root->child(0)
+                          : nullptr;
+                  const QString tree_mesh =
+                      owned_mesh_item
+                          ? owned_mesh_item
+                                ->data(0, PropertyEditor::kParamsRole)
+                                .toMap()
+                                .value("path")
+                                .toString()
+                          : QString();
+                  const QString active_moose_mesh =
+                      moose_panel_->moose_settings()
+                          .value("mesh_path")
+                          .toString();
+                  const QVariantMap migrated_moose =
+                      moose_panel_->moose_settings();
+                  const QString migrated_input =
+                      migrated_moose.value("input_text").toString();
+                  const QString migrated_structured =
+                      migrated_moose.value("structured_input").toString();
+                  const QString migrated_report =
+                      migrated_moose.value("generation_report").toString();
+                  const QString active_gmsh_mesh =
+                      gmsh_panel_->gmsh_settings()
+                          .value("output_path")
+                          .toString();
+                  auto* mesh_selector =
+                      moose_panel_->findChild<QComboBox*>("jobMeshSelector");
+                  const bool stale_selector_entry =
+                      mesh_selector &&
+                      mesh_selector->findText("/tmp/case-stale-snapshot") >= 0;
+                  const bool copied_mesh_exists =
+                      QFileInfo::exists(expected_owned_mesh);
+                  QFile::remove(owned_path);
+                  QDir(owned_case_dir).removeRecursively();
+                  recent = global.value("recent_projects").toStringList();
+                  recent.removeAll(owned_path);
+                  global.setValue("recent_projects", recent);
+                  if (!owned_opened || tree_mesh != expected_owned_mesh ||
+                      active_moose_mesh != expected_owned_mesh ||
+                      active_gmsh_mesh != expected_owned_mesh ||
+                      !migrated_input.contains(expected_owned_mesh) ||
+                      migrated_input.contains(legacy_mesh) ||
+                      !migrated_structured.contains(expected_owned_mesh) ||
+                      migrated_structured.contains(legacy_mesh) ||
+                      !migrated_report.contains(expected_owned_mesh) ||
+                      migrated_report.contains(legacy_mesh) ||
+                      !copied_mesh_exists ||
+                      stale_selector_entry) {
+                    throw std::runtime_error(
+                        "Legacy mesh path was not migrated into the project "
+                        "workspace");
+                  }
+                },
+                this});
+  steps.append({"expert_input_contract",
+                [this]() {
+                  // G0 / W-04：系统生成区只读；专家区独立保存、合并并记录
+                  // input_mode；与受管根冲突时拒绝，不污染结构化输入。
+                  if (!moose_panel_) {
+                    throw std::runtime_error("G0 expert input panel is missing");
+                  }
+                  const QVariantMap original = moose_panel_->moose_settings();
+                  const QString structured =
+                      "[Mesh]\n  type = GeneratedMesh\n  dim = 2\n[]\n\n"
+                      "[Outputs]\n  [field]\n    type = Exodus\n  []\n[]\n";
+                  const QString custom =
+                      "[Outputs/checkpoint]\n  type = Checkpoint\n"
+                      "  execute_on = 'timestep_end'\n[]\n";
+                  moose_panel_->apply_moose_settings(
+                      {{"input_mode", "expert"},
+                       {"structured_input", structured},
+                       {"input_text", structured},
+                       {"custom_blocks", custom}});
+                  moose_panel_->begin_model_sync();
+                  QString error;
+                  if (!moose_panel_->finalize_model_sync(
+                          "[Mesh] <- tour fixture", &error) ||
+                      !moose_panel_->input_text().contains(
+                          "[Outputs/checkpoint]") ||
+                      !moose_panel_->input_text().contains(
+                          "GMP EXPERT CUSTOM BLOCKS BEGIN") ||
+                      moose_panel_->input_mode() != "expert" ||
+                      moose_panel_->custom_blocks_text().trimmed() !=
+                          custom.trimmed() ||
+                      !moose_panel_->generation_report().contains(
+                          "[Mesh] <- tour fixture")) {
+                    throw std::runtime_error(
+                        QString("G0 expert merge contract failed: %1")
+                            .arg(error)
+                            .toStdString());
+                  }
+                  auto* generated = moose_panel_->findChild<QPlainTextEdit*>(
+                      "mooseGeneratedInputEditor");
+                  auto* custom_editor =
+                      moose_panel_->findChild<QPlainTextEdit*>(
+                          "mooseCustomBlocksEditor");
+                  if (!generated || !generated->isReadOnly() || !custom_editor ||
+                      custom_editor->isReadOnly()) {
+                    throw std::runtime_error(
+                        "G0 structured/expert editor ownership contract failed");
+                  }
+                  moose_panel_->apply_moose_settings(
+                      {{"custom_blocks", "[Mesh]\n  dim = 3\n[]\n"}});
+                  moose_panel_->begin_model_sync();
+                  error.clear();
+                  if (moose_panel_->finalize_model_sync("conflict fixture",
+                                                         &error) ||
+                      !error.contains("conflict") ||
+                      moose_panel_->input_text().contains("dim = 3")) {
+                    throw std::runtime_error(
+                        "G0 managed-root conflict was not rejected");
+                  }
+                  moose_panel_->apply_moose_settings(original);
                 },
                 this});
   steps.append({"main_window_maximize_expands",

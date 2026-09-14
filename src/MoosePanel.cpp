@@ -3,6 +3,8 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
+#include <QDialog>
+#include <QDialogButtonBox>
 #include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -13,6 +15,8 @@
 #include <QLineEdit>
 #include <QMap>
 #include <QMessageBox>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QRegularExpression>
 #include <QSaveFile>
 #include <QPlainTextEdit>
@@ -67,6 +71,115 @@ RunnerKind RunnerKindFromIndex(int idx) {
     default:
       return RunnerKind::kLocal;
   }
+}
+
+QPair<QString, QString> project_artifact_paths(const QString& project_path) {
+  const QFileInfo project_info(project_path.trimmed());
+  if (project_path.trimmed().isEmpty() ||
+      project_info.absolutePath().trimmed().isEmpty()) {
+    return {};
+  }
+
+  QString project_name = project_info.fileName();
+  if (project_name.endsWith(".gmp.yaml", Qt::CaseInsensitive)) {
+    project_name.chop(QString(".gmp.yaml").size());
+  } else {
+    project_name = project_info.completeBaseName();
+  }
+  if (project_name.trimmed().isEmpty()) {
+    project_name = "generated_input";
+  }
+  project_name.replace(QRegularExpression("[\\\\/:*?\"<>|]"), "_");
+
+  const QString case_dir = project_info.absoluteDir().absoluteFilePath(
+      ".work/case/" + project_name);
+  return {case_dir, QDir(case_dir).absoluteFilePath(project_name + ".i")};
+}
+
+bool read_snapshot_manifest(const QString& snapshot_dir,
+                            QJsonObject* manifest,
+                            QString* error = nullptr) {
+  const QString requested_dir = snapshot_dir.trimmed();
+  if (requested_dir.isEmpty()) {
+    if (error) {
+      *error = QStringLiteral("No exported Job Snapshot is selected.");
+    }
+    return false;
+  }
+  const QString clean_dir = QDir::cleanPath(requested_dir);
+  const QString manifest_path = QDir(clean_dir).filePath("manifest.json");
+  QFile file(manifest_path);
+  if (!file.open(QIODevice::ReadOnly)) {
+    if (error) {
+      *error = QString("The selected directory is not an exported Job "
+                       "Snapshot (manifest.json is missing): %1")
+                   .arg(manifest_path);
+    }
+    return false;
+  }
+  QJsonParseError parse_error;
+  const QJsonDocument document =
+      QJsonDocument::fromJson(file.readAll(), &parse_error);
+  if (!document.isObject()) {
+    if (error) {
+      *error = QString("The snapshot manifest is not valid JSON: %1 (%2)")
+                   .arg(manifest_path, parse_error.errorString());
+    }
+    return false;
+  }
+  const QJsonObject object = document.object();
+  const QString input_file =
+      object.value("input_snapshot").toObject().value("input_file").toString();
+  if (object.value("contract").toString() != "CONTRACT-JOB" ||
+      input_file.trimmed().isEmpty() ||
+      !QFileInfo::exists(QDir(clean_dir).filePath(input_file))) {
+    if (error) {
+      *error = QString("The selected directory does not contain a complete "
+                       "CONTRACT-JOB snapshot: %1")
+                   .arg(clean_dir);
+    }
+    return false;
+  }
+  if (manifest) {
+    *manifest = object;
+  }
+  return true;
+}
+
+QString normalized_existing_path(const QString& path) {
+  const QFileInfo info(path);
+  const QString canonical = info.canonicalFilePath();
+  return canonical.isEmpty() ? QDir::cleanPath(info.absoluteFilePath())
+                             : canonical;
+}
+
+bool snapshot_matches_project(const QJsonObject& manifest,
+                              const QString& project_path) {
+  const QString manifest_project =
+      manifest.value("traceability").toObject().value("project_path").toString();
+  if (project_path.trimmed().isEmpty() || manifest_project.trimmed().isEmpty()) {
+    return true;
+  }
+  return normalized_existing_path(manifest_project) ==
+         normalized_existing_path(project_path);
+}
+
+QString latest_project_snapshot(const QString& project_path) {
+  if (project_path.trimmed().isEmpty()) {
+    return {};
+  }
+  const QDir project_dir(QFileInfo(project_path).absolutePath());
+  const QFileInfoList candidates = project_dir.entryInfoList(
+      {QStringLiteral("case-*")}, QDir::Dirs | QDir::NoDotAndDotDot,
+      QDir::Time);
+  for (const QFileInfo& candidate : candidates) {
+    QJsonObject manifest;
+    if (read_snapshot_manifest(candidate.absoluteFilePath(), &manifest) &&
+        snapshot_matches_project(manifest, project_path)) {
+      return candidate.absoluteFilePath();
+    }
+  }
+  return {};
 }
 
 }  // namespace
@@ -137,7 +250,6 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
 
   input_path_ = new QLineEdit();
   input_path_->setPlaceholderText("Input file path (*.i)");
-  input_path_->setText(QDir::currentPath() + "/out/sample.i");
   auto* pick_input = new QPushButton("Pick");
   connect(pick_input, &QPushButton::clicked, this, &MoosePanel::on_pick_input);
   auto* input_row = new QHBoxLayout();
@@ -149,7 +261,6 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
 
   workdir_path_ = new QLineEdit();
   workdir_path_->setPlaceholderText("Working directory (optional)");
-  workdir_path_->setText(QDir::currentPath());
   auto* pick_workdir = new QPushButton("Pick");
   connect(pick_workdir, &QPushButton::clicked, this, &MoosePanel::on_pick_workdir);
   auto* workdir_row = new QHBoxLayout();
@@ -241,16 +352,19 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   sim_project_->setPlaceholderText("gmp-ise");
   remote_form->addRow("Project ID", sim_project_);
   auto* sim_btn_row = new QHBoxLayout();
-  auto* submit_btn = new QPushButton("Submit Job");
-  submit_btn->setToolTip("Submit latest exported snapshot via LIMS Facade");
+  submit_remote_btn_ = new QPushButton("Submit Job");
+  submit_remote_btn_->setObjectName("mooseSubmitRemoteJobButton");
+  submit_remote_btn_->setToolTip(
+      "Submit latest exported snapshot via LIMS Facade");
   auto* refresh_btn = new QPushButton("Refresh Status");
   auto* artifacts_btn = new QPushButton("Open Remote Artifact");
-  connect(submit_btn, &QPushButton::clicked, this, &MoosePanel::on_submit_job);
+  connect(submit_remote_btn_, &QPushButton::clicked, this,
+          &MoosePanel::on_submit_job);
   connect(refresh_btn, &QPushButton::clicked, this,
           &MoosePanel::on_refresh_job);
   connect(artifacts_btn, &QPushButton::clicked, this,
           &MoosePanel::on_open_artifacts);
-  sim_btn_row->addWidget(submit_btn);
+  sim_btn_row->addWidget(submit_remote_btn_);
   sim_btn_row->addWidget(refresh_btn);
   sim_btn_row->addWidget(artifacts_btn);
   sim_btn_row->addStretch(1);
@@ -377,6 +491,7 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   template_kind_->addItem("北京混凝土 CDP 参考等效损伤静力对标（prototype）",
                           "tpl-bj-concrete-cdp-static");
   auto* apply_template = new QPushButton("Apply Template");
+  apply_template->setObjectName("mooseApplyTemplateButton");
   connect(apply_template, &QPushButton::clicked, this,
           &MoosePanel::on_apply_template);
   template_row->addWidget(new QLabel("Template"));
@@ -387,21 +502,68 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   template_row->addStretch(1);
   io_layout->addLayout(template_row);
 
+  auto* mode_row = new QHBoxLayout();
+  input_mode_selector_ = new QComboBox();
+  input_mode_selector_->setObjectName("mooseInputModeSelector");
+  install_combo_popup_fix(input_mode_selector_);
+  input_mode_selector_->addItem("Structured (read-only)", "structured");
+  input_mode_selector_->addItem("Expert (Custom Blocks)", "expert");
+  input_mode_selector_->addItem("Manual (legacy)", "manual");
+  input_mode_selector_->setToolTip(
+      "Structured input is generated from the Model Tree. Expert mode only "
+      "allows isolated Custom Blocks; Manual mode directly edits the input.");
+  auto* preview_merge = new QPushButton("Validate & Preview Merge");
+  preview_merge->setObjectName("moosePreviewExpertMergeButton");
+  connect(input_mode_selector_, QOverload<int>::of(&QComboBox::currentIndexChanged),
+          this, &MoosePanel::on_input_mode_changed);
+  connect(preview_merge, &QPushButton::clicked, this,
+          &MoosePanel::on_preview_expert_merge);
+  mode_row->addWidget(new QLabel("Input Mode"));
+  mode_row->addWidget(input_mode_selector_);
+  mode_row->addWidget(preview_merge);
+  mode_row->addStretch(1);
+  io_layout->addLayout(mode_row);
+
+  auto* input_tabs = new QTabWidget();
+  input_tabs->setObjectName("mooseInputDetailTabs");
   input_editor_ = new QPlainTextEdit();
-  input_editor_->setPlainText(template_generated_mesh());
-  io_layout->addWidget(input_editor_);
+  input_editor_->setObjectName("mooseGeneratedInputEditor");
+  input_editor_->setPlaceholderText(
+      "No generated input. Configure and sync the Model Tree, or apply a "
+      "template.");
+  input_tabs->addTab(input_editor_, "Generated Input");
+
+  custom_blocks_editor_ = new QPlainTextEdit();
+  custom_blocks_editor_->setObjectName("mooseCustomBlocksEditor");
+  custom_blocks_editor_->setPlaceholderText(
+      "Expert-only MOOSE blocks, for example:\n"
+      "[Checkpoint]\n  execute_on = 'timestep_end'\n[]");
+  connect(custom_blocks_editor_, &QPlainTextEdit::textChanged, this, [this]() {
+    custom_blocks_text_ = custom_blocks_editor_->toPlainText();
+  });
+  input_tabs->addTab(custom_blocks_editor_, "Custom Blocks");
+
+  generation_report_editor_ = new QPlainTextEdit();
+  generation_report_editor_->setObjectName("mooseGenerationReport");
+  generation_report_editor_->setReadOnly(true);
+  generation_report_editor_->setPlaceholderText(
+      "Sync the Model Tree to view block provenance and mapping details.");
+  input_tabs->addTab(generation_report_editor_, "Generation Report");
+
+  io_layout->addWidget(input_tabs, 1);
 
   auto* io_actions = new QHBoxLayout();
   auto* write_btn = new QPushButton("Write Input");
   connect(write_btn, &QPushButton::clicked, this, &MoosePanel::on_write_input);
   io_actions->addWidget(write_btn);
-  auto* export_btn = new QPushButton("Export Job Snapshot");
-  export_btn->setToolTip(
+  export_snapshot_btn_ = new QPushButton("Export Job Snapshot");
+  export_snapshot_btn_->setObjectName("mooseExportSnapshotButton");
+  export_snapshot_btn_->setToolTip(
       "Export .i + referenced mesh/extra files + manifest.json "
       "(CONTRACT-JOB input_snapshot)");
-  connect(export_btn, &QPushButton::clicked, this,
+  connect(export_snapshot_btn_, &QPushButton::clicked, this,
           &MoosePanel::on_export_snapshot);
-  io_actions->addWidget(export_btn);
+  io_actions->addWidget(export_snapshot_btn_);
   io_actions->addStretch(1);
   io_layout->addLayout(io_actions);
 
@@ -414,9 +576,14 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   layout->addWidget(workspace_tabs, 1);
 
   auto* action_row = new QHBoxLayout();
+  validate_workflow_btn_ = new QPushButton("Validate Workflow");
   run_btn_ = new QPushButton("Run");
   check_btn_ = new QPushButton("Check Input");
   stop_btn_ = new QPushButton("Stop");
+  validate_workflow_btn_->setObjectName("mooseValidateWorkflowButton");
+  validate_workflow_btn_->setToolTip(
+      "Validate Model Tree completeness and cross-object references. This "
+      "does not run the MOOSE executable.");
   run_btn_->setObjectName("mooseRunButton");
   check_btn_->setObjectName("mooseCheckButton");
   stop_btn_->setObjectName("mooseStopButton");
@@ -424,6 +591,9 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   connect(run_btn_, &QPushButton::clicked, this, &MoosePanel::on_run);
   connect(check_btn_, &QPushButton::clicked, this, &MoosePanel::on_check_input);
   connect(stop_btn_, &QPushButton::clicked, this, &MoosePanel::on_stop);
+  connect(validate_workflow_btn_, &QPushButton::clicked, this,
+          &MoosePanel::workflow_validation_requested);
+  action_row->addWidget(validate_workflow_btn_);
   action_row->addWidget(run_btn_);
   action_row->addWidget(check_btn_);
   action_row->addWidget(stop_btn_);
@@ -438,6 +608,10 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
 
   append_log("MOOSE panel ready.");
   load_settings();
+  if (structured_input_.isEmpty()) {
+    structured_input_ = input_editor_->toPlainText();
+  }
+  refresh_input_mode_ui();
 }
 
 void MoosePanel::on_pick_exec() {
@@ -642,6 +816,11 @@ QVariantMap MoosePanel::moose_settings() const {
              template_kind_ ? template_kind_->currentData().toString() : "");
   map.insert("extra_args", extra_args_ ? extra_args_->text() : "");
   map.insert("input_text", input_editor_ ? input_editor_->toPlainText() : "");
+  map.insert("input_mode", input_mode_);
+  map.insert("structured_input", structured_input_);
+  map.insert("custom_blocks", custom_blocks_text_);
+  map.insert("generation_report", generation_report_text_);
+  map.insert("last_snapshot_dir", last_snapshot_dir_);
   return map;
 }
 
@@ -690,6 +869,33 @@ void MoosePanel::apply_moose_settings(const QVariantMap& settings) {
   }
   if (input_editor_ && !input_text.isEmpty()) {
     input_editor_->setPlainText(input_text);
+  }
+  if (settings.contains("structured_input")) {
+    structured_input_ = settings.value("structured_input").toString();
+  } else if (!input_text.isEmpty()) {
+    // 旧项目没有独立结构化区；首次加载以其 input_text 为基线。
+    structured_input_ = input_text;
+  }
+  if (settings.contains("custom_blocks")) {
+    custom_blocks_text_ = settings.value("custom_blocks").toString();
+    if (custom_blocks_editor_) {
+      const QSignalBlocker blocker(custom_blocks_editor_);
+      custom_blocks_editor_->setPlainText(custom_blocks_text_);
+    }
+  }
+  if (settings.contains("generation_report")) {
+    generation_report_text_ = settings.value("generation_report").toString();
+    if (generation_report_editor_) {
+      generation_report_editor_->setPlainText(generation_report_text_);
+    }
+  }
+  if (settings.contains("last_snapshot_dir")) {
+    last_snapshot_dir_ = settings.value("last_snapshot_dir").toString();
+  }
+  if (settings.contains("input_mode")) {
+    set_input_mode(settings.value("input_mode").toString());
+  } else {
+    refresh_input_mode_ui();
   }
   save_settings();
 }
@@ -782,6 +988,18 @@ void MoosePanel::on_apply_template() {
       append_log("Thermo-mechanics template selected, but combined-opt was not found.");
     }
   }
+  structured_input_ = input_editor_->toPlainText();
+  if (input_mode_ == QStringLiteral("expert")) {
+    QString merged;
+    QString error;
+    if (merge_expert_blocks(structured_input_, custom_blocks_text_, &merged,
+                            &error)) {
+      input_editor_->setPlainText(merged);
+    } else {
+      append_log("Expert Custom Blocks rejected: " + error);
+    }
+  }
+  refresh_input_mode_ui();
   save_settings();
 }
 
@@ -802,6 +1020,17 @@ void MoosePanel::apply_library_template(const QString& key) {
     return;
   }
   input_editor_->setPlainText(QString::fromUtf8(file.readAll()));
+  structured_input_ = input_editor_->toPlainText();
+  if (input_mode_ == QStringLiteral("expert")) {
+    QString merged;
+    QString error;
+    if (merge_expert_blocks(structured_input_, custom_blocks_text_, &merged,
+                            &error)) {
+      input_editor_->setPlainText(merged);
+    } else {
+      append_log("Expert Custom Blocks rejected: " + error);
+    }
+  }
   current_template_ = info;
   update_template_status_label();
   append_log("Template loaded: " + key + " [" + info.status + "]");
@@ -850,6 +1079,81 @@ void MoosePanel::set_physical_group_manifest(
 
 void MoosePanel::set_project_context(const QString& project_path) {
   project_path_ = project_path;
+  QJsonObject manifest;
+  if (!read_snapshot_manifest(last_snapshot_dir_, &manifest) ||
+      !snapshot_matches_project(manifest, project_path_)) {
+    last_snapshot_dir_ = latest_project_snapshot(project_path_);
+    if (!last_snapshot_dir_.isEmpty()) {
+      append_log("Recovered latest exported Job Snapshot: " +
+                 last_snapshot_dir_);
+    }
+  }
+}
+
+void MoosePanel::rebase_project_artifact_paths(const QString& project_path) {
+  const auto paths = project_artifact_paths(project_path);
+  if (paths.first.isEmpty() || paths.second.isEmpty()) {
+    return;
+  }
+  project_path_ = project_path;
+  input_path_->setText(paths.second);
+  workdir_path_->setText(paths.first);
+}
+
+void MoosePanel::reset_project_state() {
+  project_path_.clear();
+  application_profile_map_.clear();
+  unit_contract_map_.clear();
+  physical_group_manifest_ = PhysicalGroupManifest();
+  extra_file_sources_.clear();
+
+  if (input_path_) {
+    input_path_->clear();
+  }
+  if (workdir_path_) {
+    workdir_path_->clear();
+  }
+  if (mesh_path_) {
+    const QSignalBlocker blocker(mesh_path_);
+    mesh_path_->clear();
+    mesh_path_->setCurrentText(QString());
+  }
+  boundary_names_.clear();
+  if (boundary_list_) {
+    boundary_list_->clear();
+  }
+
+  if (template_kind_) {
+    const QSignalBlocker blocker(template_kind_);
+    const int generated = template_kind_->findData(QStringLiteral("generated"));
+    template_kind_->setCurrentIndex(generated >= 0 ? generated : 0);
+  }
+  current_template_ = MooseTemplateInfo();
+  update_template_status_label();
+  structured_input_.clear();
+  custom_blocks_text_.clear();
+  generation_report_text_.clear();
+  if (input_editor_) {
+    input_editor_->clear();
+  }
+  if (custom_blocks_editor_) {
+    const QSignalBlocker blocker(custom_blocks_editor_);
+    custom_blocks_editor_->clear();
+  }
+  if (generation_report_editor_) {
+    generation_report_editor_->clear();
+  }
+  set_input_mode(QStringLiteral("structured"));
+
+  last_exodus_.clear();
+  last_snapshot_dir_.clear();
+  last_job_id_.clear();
+  log_job_id_.clear();
+  download_job_id_.clear();
+  if (sim_status_label_) {
+    sim_status_label_->setText(QStringLiteral("(no job submitted)"));
+  }
+  set_workflow_preflight(false, {});
 }
 
 void MoosePanel::set_input_mode(const QString& input_mode) {
@@ -861,6 +1165,14 @@ void MoosePanel::set_input_mode(const QString& input_mode) {
     return;
   }
   input_mode_ = input_mode;
+  if (input_mode_selector_) {
+    const int index = input_mode_selector_->findData(input_mode_);
+    if (index >= 0 && index != input_mode_selector_->currentIndex()) {
+      const QSignalBlocker blocker(input_mode_selector_);
+      input_mode_selector_->setCurrentIndex(index);
+    }
+  }
+  refresh_input_mode_ui();
 }
 
 void MoosePanel::set_extra_file_sources(
@@ -872,32 +1184,314 @@ QString MoosePanel::input_text() const {
   return input_editor_ ? input_editor_->toPlainText() : QString();
 }
 
-bool MoosePanel::materialize_project_input(const QString& project_path) {
-  const QFileInfo project_info(project_path.trimmed());
-  if (project_path.trimmed().isEmpty() ||
-      project_info.absolutePath().trimmed().isEmpty()) {
+QString MoosePanel::input_mode() const {
+  return input_mode_;
+}
+
+QString MoosePanel::custom_blocks_text() const {
+  return custom_blocks_text_;
+}
+
+QString MoosePanel::generation_report() const {
+  return generation_report_text_;
+}
+
+void MoosePanel::set_workflow_preflight(bool ready,
+                                        const QStringList& blockers) {
+  workflow_ready_ = ready;
+  workflow_blockers_ = blockers;
+  const QString tooltip =
+      ready
+          ? QStringLiteral("Workflow preflight passed.")
+          : QStringLiteral("Workflow preflight blocked:\n- %1")
+                .arg(blockers.isEmpty()
+                         ? QStringLiteral("Run Job > Validate Workflow for details.")
+                         : blockers.join(QStringLiteral("\n- ")));
+  if (export_snapshot_btn_) {
+    export_snapshot_btn_->setEnabled(ready);
+    export_snapshot_btn_->setToolTip(tooltip);
+  }
+  if (submit_remote_btn_) {
+    submit_remote_btn_->setEnabled(ready);
+    submit_remote_btn_->setToolTip(tooltip);
+  }
+}
+
+void MoosePanel::begin_model_sync() {
+  if (!input_editor_) {
+    return;
+  }
+  if (structured_input_.isEmpty()) {
+    structured_input_ = input_editor_->toPlainText();
+  }
+  // 专家扩展永远基于纯结构化输入重新装配，避免重复同步时把上一次附加区
+  // 当成系统生成区再次参与 upsert。
+  if (input_mode_ == QStringLiteral("structured") ||
+      input_mode_ == QStringLiteral("expert")) {
+    input_editor_->setPlainText(structured_input_);
+  }
+}
+
+bool MoosePanel::finalize_model_sync(const QString& generation_report,
+                                     QString* error) {
+  if (!input_editor_) {
+    if (error) {
+      *error = QStringLiteral("Input editor is unavailable.");
+    }
+    return false;
+  }
+  structured_input_ = input_editor_->toPlainText().trimmed() + "\n";
+  generation_report_text_ = generation_report;
+  if (generation_report_editor_) {
+    generation_report_editor_->setPlainText(generation_report_text_);
+  }
+  if (input_mode_ == QStringLiteral("expert")) {
+    QString merged;
+    QString merge_error;
+    if (!merge_expert_blocks(structured_input_, custom_blocks_text_, &merged,
+                             &merge_error)) {
+      input_editor_->setPlainText(structured_input_);
+      if (error) {
+        *error = merge_error;
+      }
+      append_log("Expert Custom Blocks rejected: " + merge_error);
+      return false;
+    }
+    input_editor_->setPlainText(merged);
+  } else if (input_mode_ == QStringLiteral("structured")) {
+    input_editor_->setPlainText(structured_input_);
+  }
+  refresh_input_mode_ui();
+  save_settings();
+  return true;
+}
+
+void MoosePanel::on_input_mode_changed(int index) {
+  if (!input_mode_selector_ || index < 0) {
+    return;
+  }
+  const QString mode = input_mode_selector_->itemData(index).toString();
+  if (mode.isEmpty() || mode == input_mode_) {
+    refresh_input_mode_ui();
+    return;
+  }
+  input_mode_ = mode;
+  if (input_mode_ == QStringLiteral("structured")) {
+    if (!structured_input_.isEmpty()) {
+      input_editor_->setPlainText(structured_input_);
+    }
+  } else if (input_mode_ == QStringLiteral("expert")) {
+    QString merged;
+    QString error;
+    if (merge_expert_blocks(structured_input_, custom_blocks_text_, &merged,
+                            &error)) {
+      input_editor_->setPlainText(merged);
+    } else {
+      input_editor_->setPlainText(structured_input_);
+      append_log("Expert Custom Blocks rejected: " + error);
+    }
+  }
+  refresh_input_mode_ui();
+  save_settings();
+}
+
+void MoosePanel::refresh_input_mode_ui() {
+  if (input_editor_) {
+    input_editor_->setReadOnly(input_mode_ != QStringLiteral("manual"));
+    input_editor_->setToolTip(
+        input_mode_ == QStringLiteral("manual")
+            ? QStringLiteral("Legacy manual input editing mode.")
+            : QStringLiteral(
+                  "Generated from the Model Tree. Switch to Expert mode and "
+                  "edit only the Custom Blocks tab to extend it."));
+  }
+  if (custom_blocks_editor_) {
+    const bool expert = input_mode_ == QStringLiteral("expert");
+    custom_blocks_editor_->setReadOnly(!expert);
+    custom_blocks_editor_->setEnabled(expert);
+  }
+}
+
+bool MoosePanel::merge_expert_blocks(const QString& structured,
+                                     const QString& custom_blocks,
+                                     QString* merged,
+                                     QString* error) const {
+  const QString custom = custom_blocks.trimmed();
+  if (custom.isEmpty()) {
+    if (merged) {
+      *merged = structured.trimmed() + "\n";
+    }
+    return true;
+  }
+
+  auto parse_paths = [](const QString& text, bool validate_balance,
+                        QString* parse_error) {
+    QSet<QString> paths;
+    QStringList context;
+    int depth = 0;
+    const QRegularExpression header_re(
+        QStringLiteral(R"(^\s*\[([^\]]*)\]\s*(?:#.*)?$)"));
+    const QStringList lines = text.split('\n');
+    for (int line_no = 0; line_no < lines.size(); ++line_no) {
+      const QString trimmed = lines.at(line_no).trimmed();
+      if (trimmed.isEmpty() || trimmed.startsWith('#')) {
+        continue;
+      }
+      const auto match = header_re.match(lines.at(line_no));
+      if (!match.hasMatch()) {
+        if (validate_balance && depth == 0) {
+          if (parse_error) {
+            *parse_error = QString("Line %1 is outside a MOOSE block: %2")
+                               .arg(line_no + 1)
+                               .arg(trimmed);
+          }
+          return QSet<QString>();
+        }
+        continue;
+      }
+      const QString token = match.captured(1).trimmed();
+      if (token.isEmpty() || token == QStringLiteral("../")) {
+        --depth;
+        if (!context.isEmpty()) {
+          context.removeLast();
+        }
+        if (validate_balance && depth < 0) {
+          if (parse_error) {
+            *parse_error = QString("Unexpected block close at line %1.")
+                               .arg(line_no + 1);
+          }
+          return QSet<QString>();
+        }
+        continue;
+      }
+      ++depth;
+      QString path;
+      if (token.startsWith("./")) {
+        const QString child = token.mid(2);
+        path = context.isEmpty() ? child : context.last() + "/" + child;
+      } else if (token.contains('/')) {
+        path = token;
+      } else {
+        path = context.isEmpty() ? token : context.last() + "/" + token;
+      }
+      if (validate_balance && paths.contains(path)) {
+        if (parse_error) {
+          *parse_error = QString("Duplicate Custom Block header: [%1]")
+                             .arg(path);
+        }
+        return QSet<QString>();
+      }
+      paths.insert(path);
+      context.append(path);
+    }
+    if (validate_balance && depth != 0) {
+      if (parse_error) {
+        *parse_error = QString("Custom Blocks are not balanced (%1 unclosed).")
+                           .arg(depth);
+      }
+      return QSet<QString>();
+    }
+    return paths;
+  };
+
+  QString parse_error;
+  const QSet<QString> custom_paths = parse_paths(custom, true, &parse_error);
+  if (!parse_error.isEmpty()) {
+    if (error) {
+      *error = parse_error;
+    }
+    return false;
+  }
+  if (custom_paths.isEmpty()) {
+    if (error) {
+      *error = QStringLiteral("Custom Blocks contain no top-level MOOSE block.");
+    }
+    return false;
+  }
+  const QSet<QString> managed_paths = parse_paths(structured, false, nullptr);
+  QStringList conflicts;
+  for (const auto& path : custom_paths) {
+    if (managed_paths.contains(path)) {
+      conflicts << path;
+    }
+  }
+  conflicts.sort();
+  if (!conflicts.isEmpty()) {
+    if (error) {
+      *error = QString("Custom Blocks conflict with Model Tree managed paths: %1")
+                   .arg(conflicts.join(", "));
+    }
     return false;
   }
 
-  QString project_name = project_info.fileName();
-  if (project_name.endsWith(".gmp.yaml", Qt::CaseInsensitive)) {
-    project_name.chop(QString(".gmp.yaml").size());
-  } else {
-    project_name = project_info.completeBaseName();
+  if (merged) {
+    *merged = structured.trimmed() +
+              QStringLiteral(
+                  "\n\n# --- GMP EXPERT CUSTOM BLOCKS BEGIN ---\n") +
+              custom +
+              QStringLiteral(
+                  "\n# --- GMP EXPERT CUSTOM BLOCKS END ---\n");
   }
-  if (project_name.trimmed().isEmpty()) {
-    project_name = "generated_input";
-  }
-  project_name.replace(QRegularExpression("[\\\\/:*?\"<>|]"), "_");
+  return true;
+}
 
-  const QString case_dir = project_info.absoluteDir().absoluteFilePath(
-      ".work/case/" + project_name);
+QString MoosePanel::expert_diff_preview(const QString& custom_blocks) const {
+  QString preview = QStringLiteral(
+      "--- Model Tree generated input\n"
+      "+++ Expert merged input\n"
+      "@@ Custom Blocks appended after managed input @@\n");
+  for (const auto& line : custom_blocks.trimmed().split('\n')) {
+    preview += "+ " + line + "\n";
+  }
+  return preview;
+}
+
+void MoosePanel::on_preview_expert_merge() {
+  if (input_mode_ != QStringLiteral("expert")) {
+    QMessageBox::information(
+        this, "Expert Merge",
+        "Switch Input Mode to Expert before editing Custom Blocks.");
+    return;
+  }
+  custom_blocks_text_ =
+      custom_blocks_editor_ ? custom_blocks_editor_->toPlainText() : QString();
+  QString merged;
+  QString error;
+  if (!merge_expert_blocks(structured_input_, custom_blocks_text_, &merged,
+                           &error)) {
+    QMessageBox::warning(this, "Expert Merge Rejected", error);
+    return;
+  }
+
+  QDialog dialog(this);
+  dialog.setWindowTitle("Expert Merge Preview");
+  dialog.resize(900, 680);
+  auto* layout = new QVBoxLayout(&dialog);
+  auto* tabs = new QTabWidget(&dialog);
+  auto* diff = new QPlainTextEdit(expert_diff_preview(custom_blocks_text_));
+  diff->setReadOnly(true);
+  auto* merged_view = new QPlainTextEdit(merged);
+  merged_view->setReadOnly(true);
+  tabs->addTab(diff, "Diff");
+  tabs->addTab(merged_view, "Merged Input");
+  layout->addWidget(tabs, 1);
+  auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close);
+  connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+  layout->addWidget(buttons);
+  dialog.exec();
+}
+
+bool MoosePanel::materialize_project_input(const QString& project_path) {
+  const auto paths = project_artifact_paths(project_path);
+  const QString case_dir = paths.first;
+  const QString target = paths.second;
+  if (case_dir.isEmpty() || target.isEmpty()) {
+    return false;
+  }
   if (!QDir().mkpath(case_dir)) {
     append_log("Failed to create project case directory: " + case_dir);
     return false;
   }
-  const QString target =
-      QDir(case_dir).absoluteFilePath(project_name + ".i");
   QSaveFile output(target);
   if (!output.open(QIODevice::WriteOnly) ||
       output.write(input_editor_->toPlainText().toUtf8()) < 0 ||
@@ -1033,6 +1627,14 @@ void MoosePanel::on_export_snapshot() {
       QMessageBox::warning(this, "Export Job Snapshot", reason);
     }
   };
+  if (!workflow_ready_) {
+    reject(QStringLiteral("Workflow preflight failed:\n- %1")
+               .arg(workflow_blockers_.isEmpty()
+                        ? QStringLiteral(
+                              "Run Job > Validate Workflow for details.")
+                        : workflow_blockers_.join(QStringLiteral("\n- "))));
+    return;
+  }
   // W-00c：快照合同 v2——缺活动档案或 Physical Groups 清单时拒绝导出，
   // 不产出半成品快照目录。
   const ApplicationProfile profile = snapshot_profile();
@@ -1162,17 +1764,46 @@ void MoosePanel::on_export_snapshot() {
 }
 
 void MoosePanel::on_submit_job() {
+  if (!workflow_ready_) {
+    const QString reason =
+        QStringLiteral("Workflow preflight failed:\n- %1")
+            .arg(workflow_blockers_.isEmpty()
+                     ? QStringLiteral(
+                           "Run Job > Validate Workflow for details.")
+                     : workflow_blockers_.join(QStringLiteral("\n- ")));
+    append_log("Remote submit rejected: " + reason);
+    if (!qEnvironmentVariableIsSet("GMP_SCREENSHOT_DIR")) {
+      QMessageBox::warning(this, "Submit Job", reason);
+    }
+    return;
+  }
   QString dir = last_snapshot_dir_;
-  if (dir.isEmpty() || !QFileInfo::exists(dir + "/manifest.json")) {
+  QString snapshot_error;
+  if (!read_snapshot_manifest(dir, nullptr, &snapshot_error)) {
+    dir = latest_project_snapshot(project_path_);
+  }
+  if (!read_snapshot_manifest(dir, nullptr, &snapshot_error)) {
+    const QString start_dir =
+        project_path_.isEmpty()
+            ? (workdir_path_ && !workdir_path_->text().isEmpty()
+                   ? workdir_path_->text()
+                   : QDir::currentPath())
+            : QFileInfo(project_path_).absolutePath();
     dir = QFileDialog::getExistingDirectory(
-        this, "Select exported snapshot directory",
-        workdir_path_ && !workdir_path_->text().isEmpty()
-            ? workdir_path_->text()
-            : QDir::currentPath());
+        this, "Select exported case-* directory containing manifest.json",
+        start_dir);
     if (dir.isEmpty()) {
       return;
     }
   }
+  if (!read_snapshot_manifest(dir, nullptr, &snapshot_error)) {
+    append_log("Remote submit rejected: " + snapshot_error);
+    if (!qEnvironmentVariableIsSet("GMP_SCREENSHOT_DIR")) {
+      QMessageBox::warning(this, "Submit Job", snapshot_error);
+    }
+    return;
+  }
+  last_snapshot_dir_ = QDir::cleanPath(dir);
   const QString server = sim_server_->text().trimmed().isEmpty()
                              ? sim_server_->placeholderText()
                              : sim_server_->text().trimmed();
@@ -2405,21 +3036,12 @@ void MoosePanel::load_settings() {
   } else if (!history.isEmpty()) {
     exec_path_->setCurrentText(history.front());
   }
-  input_path_->setText(
-      settings.value("moose/input_path", input_path_->text()).toString());
-  workdir_path_->setText(
-      settings.value("moose/workdir", workdir_path_->text()).toString());
-  mesh_path_->setCurrentText(
-      settings.value("moose/mesh_path", mesh_path_->currentText()).toString());
   use_mpi_->setChecked(
       settings.value("moose/use_mpi", use_mpi_->isChecked()).toBool());
   mpi_ranks_->setValue(
       settings.value("moose/mpi_ranks", mpi_ranks_->value()).toInt());
   runner_kind_->setCurrentIndex(
       settings.value("moose/runner_kind", runner_kind_->currentIndex()).toInt());
-  template_kind_->setCurrentIndex(
-      settings.value("moose/template_kind", template_kind_->currentIndex())
-          .toInt());
   extra_args_->setText(
       settings.value("moose/extra_args", extra_args_->text()).toString());
   const QString env_sim_server =
@@ -2430,6 +3052,22 @@ void MoosePanel::load_settings() {
           : env_sim_server);
   sim_project_->setText(
       settings.value("moose/sim_project", sim_project_->text()).toString());
+  // 输入/工作目录、网格、模板与专家扩展都属于项目合同，
+  // 不得通过全局 QSettings 泄漏到新建或下一个项目。删除历史键
+  // 同时完成旧版本迁移。
+  settings.remove("moose/input_path");
+  settings.remove("moose/workdir");
+  settings.remove("moose/mesh_path");
+  settings.remove("moose/template_kind");
+  settings.remove("moose/custom_blocks");
+  settings.remove("moose/input_mode");
+  settings.remove("moose/last_snapshot_dir");
+  custom_blocks_text_.clear();
+  if (custom_blocks_editor_) {
+    const QSignalBlocker blocker(custom_blocks_editor_);
+    custom_blocks_editor_->setPlainText(custom_blocks_text_);
+  }
+  set_input_mode(QStringLiteral("structured"));
 
   if (exec_path_->currentText().trimmed().isEmpty()) {
     const QString detected = auto_detect_exec();
@@ -2442,16 +3080,20 @@ void MoosePanel::load_settings() {
 void MoosePanel::save_settings() const {
   QSettings settings("gmp-ise", "gmp_ise");
   settings.setValue("moose/exec_last", exec_path_->currentText());
-  settings.setValue("moose/input_path", input_path_->text());
-  settings.setValue("moose/workdir", workdir_path_->text());
-  settings.setValue("moose/mesh_path", mesh_path_->currentText());
   settings.setValue("moose/use_mpi", use_mpi_->isChecked());
   settings.setValue("moose/mpi_ranks", mpi_ranks_->value());
   settings.setValue("moose/runner_kind", runner_kind_->currentIndex());
-  settings.setValue("moose/template_kind", template_kind_->currentIndex());
   settings.setValue("moose/extra_args", extra_args_->text());
   settings.setValue("moose/sim_server", sim_server_->text());
   settings.setValue("moose/sim_project", sim_project_->text());
+  // 项目专属字段只通过 moose_settings() 写入项目 YAML。
+  settings.remove("moose/input_path");
+  settings.remove("moose/workdir");
+  settings.remove("moose/mesh_path");
+  settings.remove("moose/template_kind");
+  settings.remove("moose/input_mode");
+  settings.remove("moose/custom_blocks");
+  settings.remove("moose/last_snapshot_dir");
   QStringList history;
   for (int i = 0; i < exec_path_->count(); ++i) {
     history << exec_path_->itemText(i);

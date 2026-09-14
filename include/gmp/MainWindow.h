@@ -123,9 +123,14 @@ class MainWindow : public QMainWindow {
   void remove_item(QTreeWidgetItem* item);
   void duplicate_item(QTreeWidgetItem* item);
   void rename_item(QTreeWidgetItem* item);
-  void open_property_form(QTreeWidgetItem* item);
+  // 浮动工作窗也是独立顶层窗口；新对话框必须以当前工作窗为瞬态父窗，
+  // 否则 macOS 上可能被工作窗覆盖却仍阻塞其输入。
+  QWidget* dialog_parent(QWidget* preferred = nullptr) const;
+  void open_property_form(QTreeWidgetItem* item,
+                          QWidget* transient_parent = nullptr);
   bool load_project(const QString& path);
   bool save_project(const QString& path);
+  void migrate_project_mesh_paths(const QString& project_path);
   void set_project_dirty(bool dirty);
   void update_window_title();
   void update_project_status();
@@ -155,7 +160,13 @@ class MainWindow : public QMainWindow {
                                             bool physical_group);
   void invalidate_downstream_from(const QString& source_kind);
   void start_submit_workflow();
-  void ensure_basic_workflow_nodes();
+  // G0 / W-05：收集并展示无副作用的工作流预检结果。错误阻止快照与提交，
+  // 警告仅提示；定位时选中模型树对象并打开对应属性表单。
+  QVariantList collect_workflow_issues() const;
+  bool validate_workflow_for_submit(bool show_report = true);
+  void show_workflow_validation_report(const QVariantList& issues);
+  void focus_workflow_issue(const QVariantMap& issue,
+                            QWidget* transient_parent = nullptr);
   int append_job_row(const QString& name, const QVariantMap& params);
   void update_job_row(int row, const QString& name, const QVariantMap& params);
   void update_job_detail(int row);
@@ -235,7 +246,9 @@ class MainWindow : public QMainWindow {
   QString build_aux_kernels_block() const;
   QString build_postprocessors_block() const;
   QString build_times_block(QString* header) const;
-  void sync_model_to_input(const QString& project_path_override = QString());
+  // W-04：生成报告记录 block 到模型树对象/Physical Group/mapping 的来源。
+  QString build_generation_report() const;
+  bool sync_model_to_input(const QString& project_path_override = QString());
   void load_demo_diffusion(bool run);
   void load_demo_thermo(bool run);
   void load_demo_nonlinear_heat(bool run);
