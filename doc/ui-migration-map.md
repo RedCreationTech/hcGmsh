@@ -41,7 +41,7 @@
 | 1 | Part | Part 页签；部件清单与 PartFeaturePanel | 模块工作窗 | 顶部/舞台命令 + 创建向导/编辑表单 | 草图转部件、拉伸/旋转/扫掠/放样、节点 CRUD | ✅ I-01A 四类特征页签验收通过 |
 | 2 | Material | Material 页签；材料清单与快捷动作 | 模块工作窗 | 模态材料编辑表单 | 新建、复制、删除、参数模板、材料引用 | 已临时迁移 |
 | 3 | Section | Section 页签；截面清单与指派 | 模块工作窗 | 模态截面/指派表单 | 材料引用、Physical Volume 指派 | 已临时迁移 |
-| 4 | Assembly | Assembly 页签；当前以 Parts 中兼容节点承载 | 模块工作窗 | 装配工作窗 + 实例变换向导 | 实例创建、平移、持久化 | 已临时迁移 |
+| 4 | Assembly | Assembly 独立根节点、实例表单与 Build Assembly | 模块工作窗 + Mesh 工作窗 | 装配实例变换与网格前 Gmsh 落实 | Part 引用、平移/旋转/缩放、可见性/顺序、保存重开、物理组 | Phase 5 / G1 实施中 |
 | 5 | Step | Step 页签；分析步清单和序列预览 | 模块工作窗 | 模态 Step 表单 + 序列工作窗 | 新建静力/瞬态步、顺序、参数预览 | 已临时迁移 |
 | 6 | Interaction | Interaction 页签；接触/相互作用清单 | 模块工作窗 | 模态 Interaction/Contact 表单 | 主从面、摩擦属性、支持级别 | 已临时迁移 |
 | 7 | Load | Load 页签；Load/BC 快捷动作 | 模块工作窗 | 模态 Load/BC 表单 | 载荷、边界条件、Step 关联 | 已临时迁移 |

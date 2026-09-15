@@ -608,9 +608,11 @@ Materials 子块、Section、Physics、Functions/BCs、首个 Step、Outputs 套
 生成报告均不再保留旧路径。提交前 106 步真实点击巡览及 CTest `1/1` 全部通过。
 
 **本节结论：** `TEST-P4-G0-04` 已完成并关闭。G0 新增收口用例
-`TEST-P4-G0-01`～`TEST-P4-G0-04` 已全部关闭；继续执行 §13.5 所列原 Phase 4 人工准出项。
+`TEST-P4-G0-01`～`TEST-P4-G0-04` 已全部关闭；原 Phase 4 人工准出项的最终结果见 §13.5。
 
-### 13.5 G0 剩余人工准出顺序（TEST-P4-W01-02 / GEN-04～08）
+### 13.5 G0 原剩余人工准出（TEST-P4-W01-02 / GEN-04～08）
+
+**本节状态：通过（已关闭，2026-09-14）。** 以下步骤保留为验收过程记录：
 
 1. 按 `doc/UI重构Phase4人工验收清单.md` 的 `TEST-P4-W01-02` 验证 Selection 创建、引用
    和保存重开。
@@ -621,3 +623,7 @@ Materials 子块、Section、Physics、Functions/BCs、首个 Step、Outputs 套
 6. 按 `TEST-P4-GEN-08` 验证多个 Job 独立选择并恢复各自网格。
 7. 全部通过后运行一次全量真实点击巡览与 CTest，并将日期、结果和缺陷编号回填到
    `doc/UI重构Phase4人工验收清单.md`。
+
+**验收记录：** 用户已完成上述 1～6 项人工操作并明确确认全部通过；G0 提交前自动证据为
+106 步真实点击巡览全部 `ok=1`、CTest `1/1` 通过。Phase 4 / G0 最终准出，可以按既定
+顺序进入 Phase 5 的 G1～G3 开发。

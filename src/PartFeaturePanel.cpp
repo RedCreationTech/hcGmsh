@@ -147,6 +147,16 @@ void PartFeaturePanel::set_sketch_names(const QStringList& names) {
   refresh_combo(sweep_path_, names);
 }
 
+void PartFeaturePanel::set_selected_sketch(const QString& name) {
+  if (!sketch_combo_ || name.trimmed().isEmpty()) {
+    return;
+  }
+  const int index = sketch_combo_->findText(name);
+  if (index >= 0) {
+    sketch_combo_->setCurrentIndex(index);
+  }
+}
+
 QString PartFeaturePanel::selected_sketch() const {
   return sketch_combo_->currentText();
 }

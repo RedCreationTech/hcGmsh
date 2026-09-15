@@ -129,6 +129,22 @@ viewer:
 | Selection/Set | `Selections` | 命名的节点/面/体集合 |
 | Input Snapshot | `InputSnapshots` | 历史输入快照引用 |
 
+Assembly 子项使用稳定的 `params` 合同：
+
+| 字段 | 类型/缺省值 | 语义 |
+|---|---|---|
+| `type` | `PartInstance` | 当前实例类型 |
+| `part` | string，必填 | 对 `Parts` 子项名称的引用 |
+| `translate_x/y/z` | number，`0` | 模型单位下的平移 |
+| `rotate_x/y/z` | number，`0` | 角度制欧拉旋转，按 X → Y → Z 顺序应用 |
+| `scale_x/y/z` | positive number，`1` | 各轴缩放，必须大于 0 |
+| `visible` | boolean，`true` | 是否参与装配模型和后续网格生成 |
+| `order` | number | 实例应用顺序；相同值保持模型树顺序 |
+
+实例名称用于生成 Gmsh 顶维物理组 `<instance>`，其边界使用
+`<instance>_surface`。Part 几何或实例参数修改后，Assembly 及其下游 Mesh、输入、快照和
+Job 必须标记为过期；项目保存重开不得丢失引用和变换。
+
 ### 3.2 状态字段
 
 节点 `status` 用于表达其与上游依赖的关系：

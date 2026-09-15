@@ -55,6 +55,7 @@
 #include <QPainter>
 #include <QPainterPath>
 #include <QScreen>
+#include <QImage>
 #include <QVariantMap>
 #include <QMetaType>
 #include <QSet>
@@ -209,6 +210,7 @@ enum class IconGlyph {
   NewFile,
   OpenFolder,
   SaveDisk,
+  SaveAsDisk,
   Sync,
   Mesh,
   Run,
@@ -304,6 +306,23 @@ QIcon MakeIcon(IconGlyph glyph, int size = 18) {
       p.drawRect(r);
       p.drawLine(m + 3, m + 5, s - m - 3, m + 5);
       p.drawRect(QRect(m + 4, m + 8, s - 2 * m - 8, 5));
+      break;
+    }
+    case IconGlyph::SaveAsDisk: {
+      // 另存为：磁盘主体 + 蓝色加号徽标，和普通保存保持同族但可一眼区分。
+      const QRect disk(m, m, s - 2 * m - 2, s - 2 * m);
+      p.drawRect(disk);
+      p.drawLine(m + 3, m + 5, disk.right() - 2, m + 5);
+      p.drawRect(QRect(m + 4, m + 8, disk.width() - 7, 4));
+      p.setPen(Qt::NoPen);
+      p.setBrush(QColor("#ffffff"));
+      p.drawEllipse(QPoint(s - 4, s - 4), 4, 4);
+      QPen plus_pen(QColor("#2f6fed"));
+      plus_pen.setWidthF(1.8);
+      p.setPen(plus_pen);
+      p.setBrush(Qt::NoBrush);
+      p.drawLine(s - 7, s - 4, s - 1, s - 4);
+      p.drawLine(s - 4, s - 7, s - 4, s - 1);
       break;
     }
     case IconGlyph::Sync: {
@@ -1895,22 +1914,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* assembly_page = make_module_node_page(
       "Assembly",
       "Combine and instantiate parts into assembly-level units, then map mesh/topology for job-level binding.",
-      "Parts",
+      "Assembly",
       module_assembly_list_,
-      "No parts available for assembly yet.",
-      "part",
+      "No assembly instances yet.",
+      "instance",
       {
-          {"Open Mesh Root", [this]() {
-             if (auto* root = find_root_item("Mesh")) {
+          {"Open Assembly Root", [this]() {
+             if (auto* root = find_root_item("Assembly")) {
                model_tree_->setCurrentItem(root);
+               root->setExpanded(true);
              }
            }},
-          {"Create Assembly Alias", [this]() {
-             if (auto* root = find_root_item("Parts")) {
-               const QVariantMap preset{{"type", "Assembly"}, {"description", ""}};
-               add_child_item(root, "assembly_1", "Parts", preset);
+          {"Create Instance", [this]() {
+             if (auto* root = find_root_item("Assembly")) {
+               add_child_item(root, "instance_1", "Assembly",
+                              default_params_for_kind("Assembly"));
              }
            }},
+          {"Build Assembly", [this]() { build_assembly_model(); }},
       });
 
   auto* step_page = make_module_node_page(
@@ -2862,18 +2883,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   assign_module_actions(assembly_tab,
                        {
-                           {"Open Assembly", [this, module_tab_index]() {
-                             const int mesh_tab = module_tab_index("Mesh");
-                             if (mesh_tab >= 0) {
-                               module_tabs_->setCurrentIndex(mesh_tab);
+                           {"Open Assembly Root", [this]() {
+                             if (auto* root = find_root_item("Assembly")) {
+                               model_tree_->setCurrentItem(root);
+                               root->setExpanded(true);
                              }
                            }},
-                           {"Create Assembly Alias", [this]() {
-                             if (auto* root = find_root_item("Parts")) {
-                               add_child_item(root, "assembly_1", "Parts",
-                                             {{"type", "Assembly"},
-                                              {"description", ""}});
+                           {"Create Instance", [this]() {
+                             if (auto* root = find_root_item("Assembly")) {
+                               add_child_item(root, "instance_1", "Assembly",
+                                              default_params_for_kind(
+                                                  "Assembly"));
                              }
+                           }},
+                           {"Build Assembly", [this]() {
+                             build_assembly_model();
                            }},
                        });
 
@@ -4074,6 +4098,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   connect(model_tree_, &QTreeWidget::itemSelectionChanged, this,
           [this, sketch_tab, part_tab, property_tab, material_tab, section_tab,
+           assembly_tab,
            step_tab, interaction_tab, load_tab, mesh_tab, job_tab,
            results_tab, preview_sketch]() {
     auto* item = model_tree_->currentItem();
@@ -4113,7 +4138,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                  kind == "Input Cases") {
         tab = property_tab;
       } else if (kind == "Assembly") {
-        tab = item->parent() ? property_tab : -1;
+        tab = assembly_tab;
       }
       // 模块切换触发的程序化树选择恢复（restore_active_object_for_module）
       // 只同步树选中与视口，不得反向覆盖用户刚选择的模块页签；否则首次切到
@@ -4137,6 +4162,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         } else if (may_switch_tab && tab != module_tabs_->currentIndex()) {
           module_tabs_->setCurrentIndex(tab);
         }
+      }
+
+      if (kind == "Parts" && item->parent() && part_feature_panel_) {
+        const QString source_sketch =
+            item->data(0, PropertyEditor::kParamsRole)
+                .toMap()
+                .value("sketch")
+                .toString();
+        part_feature_panel_->set_selected_sketch(source_sketch);
       }
 
       if (item->parent() && viewer_) {
@@ -4202,6 +4236,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       if (item->parent() && gmsh_panel_) {
         if (kind == "Parts") {
           gmsh_panel_->select_external_model("part: " + item->text(0));
+        } else if (kind == "Assembly") {
+          gmsh_panel_->select_external_model("assembly: active");
         } else if (kind == "Mesh") {
           const QVariantMap params =
               item->data(0, PropertyEditor::kParamsRole).toMap();
@@ -4255,6 +4291,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 module_tabs_->setCurrentIndex(part_tab);
               }
               open_part_editor(item);
+            } else if (kind == "Assembly") {
+              open_property_form(item);
             } else if (kind == "Mesh" && mesh_work_window_) {
               mesh_work_window_->show();
               mesh_work_window_->raise();
@@ -4864,6 +4902,7 @@ void MainWindow::resizeEvent(QResizeEvent* event) {
   if (viewer_) {
     viewer_->update();
   }
+  position_project_saved_feedback();
 }
 
 void MainWindow::closeEvent(QCloseEvent* event) {
@@ -5216,10 +5255,11 @@ void MainWindow::build_menu() {
     }
     if (save_project(project_path_)) {
       gmp::log_operation("project", "Project saved: " + project_path_);
-      statusBar()->showMessage("Project saved.", 2000);
+      statusBar()->showMessage(l10n::tr("Project saved."), 4000);
       add_recent_project(project_path_);
       set_project_dirty(false);
       push_context_to_moose_panel();
+      show_project_saved_feedback(project_path_);
     }
   });
   connect(action_save_as_, &QAction::triggered, this, [this]() {
@@ -5232,11 +5272,12 @@ void MainWindow::build_menu() {
     project_path_ = path;
     if (save_project(project_path_)) {
       gmp::log_operation("project", "Project saved: " + project_path_);
-      statusBar()->showMessage("Project saved.", 2000);
+      statusBar()->showMessage(l10n::tr("Project saved as."), 4000);
       add_recent_project(project_path_);
       set_project_dirty(false);
       update_project_status();
       push_context_to_moose_panel();
+      show_project_saved_feedback(project_path_, true);
     }
   });
   if (action_export_bundle_) {
@@ -5395,7 +5436,7 @@ void MainWindow::build_toolbar() {
     project_toolbar->addAction(action_save_);
   }
   if (action_save_as_) {
-    action_save_as_->setIcon(MakeIcon(IconGlyph::SaveDisk));
+    action_save_as_->setIcon(MakeIcon(IconGlyph::SaveAsDisk));
     project_toolbar->addAction(action_save_as_);
   }
   if (action_screenshot_) {
@@ -6218,8 +6259,8 @@ void MainWindow::refresh_module_pages() {
   refresh_module_node_list(module_part_list_, "Parts", "No parts yet.");
   refresh_module_node_list(module_material_list_, "Materials", "No materials yet.");
   refresh_module_node_list(module_section_list_, "Sections", "No sections yet.");
-  refresh_module_node_list(module_assembly_list_, "Parts",
-                          "No part entries available for assembly.");
+  refresh_module_node_list(module_assembly_list_, "Assembly",
+                           "No assembly instances yet.");
   refresh_module_node_list(module_step_list_, "Steps", "No steps yet.");
   refresh_module_node_list(module_interaction_list_, "Interactions",
                           "No interactions yet.");
@@ -6255,6 +6296,9 @@ void MainWindow::refresh_module_pages() {
     }
     moose_panel_->set_mesh_paths(mesh_paths);
   }
+  if (gmsh_panel_) {
+    gmsh_panel_->set_assembly_instances(assembly_instance_specs());
+  }
   if (module_part_list_) {
     const QSignalBlocker blocker(module_part_list_);
     auto* part = active_part_item();
@@ -6283,7 +6327,7 @@ QString MainWindow::context_root_for_module(int module_index) const {
     case 4:
       return "Sections";
     case 5:
-      return "Parts";  // Assembly 当前以部件实例为工作对象
+      return "Assembly";
     case 6:
       return "Steps";
     case 7:
@@ -7445,13 +7489,18 @@ void MainWindow::invalidate_downstream_from(const QString& source_kind) {
   }
 
   QStringList targets;
-  if (source_kind == "Mesh") {
-    targets = {"Input Cases", "Jobs"};
-  } else if (source_kind == "Input Cases") {
-    targets = {"Jobs"};
-  } else {
-    targets = {"Mesh", "Input Cases", "Jobs"};
+  if (source_kind == "Parts" || source_kind == "Features" ||
+      source_kind == "Sketches") {
+    targets << "Assembly";
   }
+  if (source_kind == "Mesh") {
+    targets << "Input Cases" << "Jobs";
+  } else if (source_kind == "Input Cases") {
+    targets << "Jobs";
+  } else {
+    targets << "Mesh" << "Input Cases" << "Jobs";
+  }
+  targets.removeDuplicates();
 
   const QSignalBlocker blocker(model_tree_);
   for (const QString& target_kind : targets) {
@@ -7642,8 +7691,8 @@ QVariantList MainWindow::collect_workflow_issues() const {
   }
 
   const QStringList roots_to_validate = {
-      "Materials", "Sections", "Physics", "Functions",
-      "Steps",     "BC",       "Loads",   "Outputs"};
+      "Materials", "Sections", "Assembly", "Physics", "Functions",
+      "Steps",     "BC",       "Loads",    "Outputs"};
   for (const auto& root_name : roots_to_validate) {
     const auto* root = find_root_item(root_name);
     if (!root) {
@@ -8235,6 +8284,110 @@ QTreeWidgetItem* MainWindow::active_part_item() const {
   }
 
   return nullptr;
+}
+
+QVariantList MainWindow::assembly_instance_specs() const {
+  QVariantList specs;
+  auto* assembly_root = find_root_item("Assembly");
+  auto* parts_root = find_root_item("Parts");
+  for (int row = 0; assembly_root && row < assembly_root->childCount(); ++row) {
+    auto* instance = assembly_root->child(row);
+    if (!instance) {
+      continue;
+    }
+    QVariantMap spec =
+        instance->data(0, PropertyEditor::kParamsRole).toMap();
+    spec.insert("name", instance->text(0));
+    const QString part_name = spec.value("part").toString().trimmed();
+    for (int part_row = 0; parts_root && part_row < parts_root->childCount();
+         ++part_row) {
+      auto* part = parts_root->child(part_row);
+      if (!part || part->text(0) != part_name) {
+        continue;
+      }
+      spec.insert("source_path",
+                  part->data(0, PropertyEditor::kParamsRole)
+                      .toMap()
+                      .value("brep")
+                      .toString());
+      break;
+    }
+    specs.append(spec);
+  }
+  return specs;
+}
+
+bool MainWindow::build_assembly_model(bool show_error) {
+  if (!gmsh_panel_) {
+    return false;
+  }
+  const QVariantList specs = assembly_instance_specs();
+  gmsh_panel_->set_assembly_instances(specs);
+  QString error;
+  if (!gmsh_panel_->build_assembly(&error)) {
+    if (show_error) {
+      QMessageBox::warning(dialog_parent(mesh_work_window_), "Build Assembly",
+                           error);
+    }
+    statusBar()->showMessage("Assembly build failed: " + error, 5000);
+    return false;
+  }
+#ifdef GMP_ENABLE_GMSH_GUI
+  // The central stage is a VTK mesh view, not a CAD renderer. Building the
+  // OCC assembly therefore has to create a lightweight surface mesh and load
+  // it explicitly; otherwise the stage keeps showing the last Part preview
+  // even though Gmsh already owns the correct multi-volume assembly.
+  const QString preview_dir = project_path_.isEmpty()
+                                  ? QDir(QDir::tempPath())
+                                        .absoluteFilePath("gmp_ise_previews")
+                                  : project_case_work_dir(project_path_);
+  const QString preview_path =
+      QDir(preview_dir).absoluteFilePath("assembly_preview.msh");
+  QString preview_error;
+  try {
+    QDir().mkpath(preview_dir);
+    gmsh::model::mesh::clear();
+    gmsh::model::mesh::generate(2);
+    gmsh::write(preview_path.toStdString());
+    if (viewer_) {
+      viewer_->set_mesh_file_from_current_model(preview_path);
+      viewer_->apply_stage_view(4);
+    }
+  } catch (const std::exception& ex) {
+    preview_error = QString::fromUtf8(ex.what());
+  }
+  if (!preview_error.isEmpty()) {
+    if (viewer_) {
+      viewer_->clear_stage_data();
+    }
+    const QString message =
+        "Assembly was built, but its viewport preview failed: " +
+        preview_error;
+    if (show_error) {
+      QMessageBox::warning(dialog_parent(mesh_work_window_),
+                           "Assembly Preview", message);
+    }
+    gmp::log_operation("assembly", message);
+    statusBar()->showMessage(message, 5000);
+    return false;
+  }
+#endif
+  if (auto* root = find_root_item("Assembly")) {
+    const QSignalBlocker blocker(model_tree_);
+    for (int row = 0; row < root->childCount(); ++row) {
+      root->child(row)->setData(0, PropertyEditor::kStatusRole, "Ready");
+    }
+  }
+  if (mesh_work_window_) {
+    mesh_work_window_->show();
+    mesh_work_window_->raise();
+    mesh_work_window_->activateWindow();
+  }
+  set_project_dirty(true);
+  refresh_module_pages();
+  statusBar()->showMessage(
+      QString("Assembly built from %1 instance(s).").arg(specs.size()), 3000);
+  return true;
 }
 
 QTreeWidgetItem* MainWindow::attach_feature_to_part(
@@ -8940,6 +9093,50 @@ QVariantMap MainWindow::default_params_for_kind(const QString& kind) const {
   }
   if (kind == "Parts") {
     return {{"type", "Part"}, {"description", ""}};
+  }
+  if (kind == "Assembly") {
+    // Prefer a Part that is not referenced by an existing instance.  Reusing
+    // a Part remains available in the form, but the common "one instance per
+    // Part" workflow no longer silently creates every instance from Part 1.
+    QSet<QString> referenced_parts;
+    if (auto* assembly = find_root_item("Assembly")) {
+      for (int row = 0; row < assembly->childCount(); ++row) {
+        if (auto* instance = assembly->child(row)) {
+          referenced_parts.insert(
+              instance->data(0, PropertyEditor::kParamsRole)
+                  .toMap()
+                  .value("part")
+                  .toString());
+        }
+      }
+    }
+    QString part;
+    if (auto* root = find_root_item("Parts")) {
+      for (int row = 0; row < root->childCount(); ++row) {
+        if (auto* candidate = root->child(row);
+            candidate && !referenced_parts.contains(candidate->text(0))) {
+          part = candidate->text(0);
+          break;
+        }
+      }
+      if (part.isEmpty() && root->childCount() > 0) {
+        part = root->child(0)->text(0);
+      }
+    }
+    const int order = child_count("Assembly") + 1;
+    return {{"type", "PartInstance"},
+            {"part", part},
+            {"translate_x", "0"},
+            {"translate_y", "0"},
+            {"translate_z", "0"},
+            {"rotate_x", "0"},
+            {"rotate_y", "0"},
+            {"rotate_z", "0"},
+            {"scale_x", "1"},
+            {"scale_y", "1"},
+            {"scale_z", "1"},
+            {"visible", "true"},
+            {"order", QString::number(order)}};
   }
   if (kind == "Interactions") {
     return {{"type", "Interaction"}};
@@ -10722,6 +10919,19 @@ void MainWindow::remove_item(QTreeWidgetItem* item) {
       }
     }
     clear_stage_data = current_is_mesh;
+    // Keep the dangling reference visible. Silent rebinding to another Part
+    // could produce a valid-looking but semantically different assembly.
+    if (auto* assembly_root = find_root_item("Assembly")) {
+      for (int row = 0; row < assembly_root->childCount(); ++row) {
+        auto* instance = assembly_root->child(row);
+        if (instance && instance->data(0, PropertyEditor::kParamsRole)
+                            .toMap()
+                            .value("part")
+                            .toString() == name) {
+          instance->setData(0, PropertyEditor::kStatusRole, "Invalid");
+        }
+      }
+    }
   } else if (kind == "Features") {
     // 删除 Feature 后清除所属 Part 上的派生结果引用。
     auto* parts_root = find_root_item("Parts");
@@ -11382,6 +11592,15 @@ bool MainWindow::load_project(const QString& path) {
       gmsh_panel_->restore_external_models(
           part_sources, gmsh_settings.value("model_source").toString());
     }
+    if (gmsh_panel_) {
+      gmsh_panel_->set_assembly_instances(assembly_instance_specs());
+      if (gmsh_settings.value("model_source")
+              .toString()
+              .startsWith("assembly: ")) {
+        QString ignored_error;
+        gmsh_panel_->build_assembly(&ignored_error);
+      }
+    }
 
     YAML::Node moose_node = root["moose"];
     // 打开项目前先清理上一项目的路径、输入与快照上下文。
@@ -11622,6 +11841,61 @@ bool MainWindow::save_project(const QString& path) {
                          QString("Failed to save: %1").arg(e.what()));
   }
   return false;
+}
+
+void MainWindow::show_project_saved_feedback(const QString& path,
+                                             bool saved_as) {
+  if (!project_saved_toast_) {
+    project_saved_toast_ = new QLabel(this);
+    project_saved_toast_->setObjectName("projectSavedToast");
+    project_saved_toast_->setTextFormat(Qt::PlainText);
+    project_saved_toast_->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    project_saved_toast_->setMargin(12);
+    project_saved_toast_->setMinimumWidth(260);
+    project_saved_toast_->setMaximumWidth(420);
+    project_saved_toast_->setAttribute(Qt::WA_TransparentForMouseEvents);
+    project_saved_toast_->setStyleSheet(
+        "QLabel#projectSavedToast {"
+        "  background: #eaf8ee; color: #185b2d;"
+        "  border: 1px solid #55a86b; border-radius: 6px;"
+        "  font-weight: 600;"
+        "}");
+    project_saved_toast_->hide();
+  }
+  if (!project_saved_toast_timer_) {
+    project_saved_toast_timer_ = new QTimer(this);
+    project_saved_toast_timer_->setSingleShot(true);
+    connect(project_saved_toast_timer_, &QTimer::timeout,
+            project_saved_toast_, &QLabel::hide);
+  }
+
+  const bool chinese = l10n::current_language() == l10n::Language::Chinese;
+  const QString title =
+      saved_as ? (chinese ? QString::fromUtf8("✓ 项目另存为成功")
+                          : QString("✓ Project saved as"))
+               : (chinese ? QString::fromUtf8("✓ 项目保存成功")
+                          : QString("✓ Project saved"));
+  const QString file_name = QFileInfo(path).fileName();
+  project_saved_toast_->setText(file_name.isEmpty()
+                                    ? title
+                                    : title + "\n" + file_name);
+  project_saved_toast_->setAccessibleName(title);
+  project_saved_toast_->adjustSize();
+  project_saved_toast_->show();
+  project_saved_toast_->raise();
+  position_project_saved_feedback();
+  project_saved_toast_timer_->start(3500);
+}
+
+void MainWindow::position_project_saved_feedback() {
+  if (!project_saved_toast_ || !project_saved_toast_->isVisible()) {
+    return;
+  }
+  const QRect anchor = centralWidget() ? centralWidget()->geometry() : rect();
+  const int x = qMax(anchor.left() + 12,
+                     anchor.right() - project_saved_toast_->width() - 20);
+  project_saved_toast_->move(x, anchor.top() + 16);
+  project_saved_toast_->raise();
 }
 
 void MainWindow::set_project_dirty(bool dirty) {
@@ -11887,6 +12161,48 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                                         : 1000);
                     if (top_height > 100) {
                       throw std::runtime_error("L-04 top three-layer height exceeds 100 px");
+                    }
+                  },
+                  this});
+    steps.append({"project_save_feedback_contract",
+                  [this]() {
+                    if (!action_save_ || !action_save_as_ ||
+                        action_save_->icon().isNull() ||
+                        action_save_as_->icon().isNull()) {
+                      throw std::runtime_error(
+                          "Project save actions or icons are missing");
+                    }
+                    const QImage save_icon =
+                        action_save_->icon().pixmap(18, 18).toImage();
+                    const QImage save_as_icon =
+                        action_save_as_->icon().pixmap(18, 18).toImage();
+                    if (save_icon == save_as_icon) {
+                      throw std::runtime_error(
+                          "Save and Save As icons must be visually distinct");
+                    }
+
+                    show_project_saved_feedback(
+                        "/tmp/phase5-save-feedback.gmp.yaml");
+                    auto* toast =
+                        findChild<QLabel*>("projectSavedToast");
+                    if (!toast || !toast->isVisible() ||
+                        !toast->text().contains(
+                            "phase5-save-feedback.gmp.yaml") ||
+                        (!toast->text().contains(QString::fromUtf8("保存成功")) &&
+                         !toast->text().contains("Project saved"))) {
+                      throw std::runtime_error(
+                          "Project save success feedback is not visible");
+                    }
+
+                    show_project_saved_feedback(
+                        "/tmp/phase5-save-as-feedback.gmp.yaml", true);
+                    if (!toast->isVisible() ||
+                        !toast->text().contains(
+                            "phase5-save-as-feedback.gmp.yaml") ||
+                        (!toast->text().contains(QString::fromUtf8("另存为")) &&
+                         !toast->text().contains("saved as"))) {
+                      throw std::runtime_error(
+                          "Project Save As success feedback is not visible");
                     }
                   },
                   this});
@@ -13688,6 +14004,44 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   set_project_dirty(saved_dirty);
                 },
                 this});
+  steps.append({"mesh_property_summary_contract",
+                [this]() {
+                  if (!property_editor_) {
+                    throw std::runtime_error(
+                        "Mesh property summary editor is missing");
+                  }
+                  const QString summary =
+                      QString::fromUtf8("3D · 节点 10 · 单元 20 "
+                                        "(Hexahedron 8) · 物理组 4");
+                  const QString sha256(64, QLatin1Char('a'));
+                  const QStringList groups = {
+                      "instance_plate_surface", "instance_concrete_surface",
+                      "instance_plate", "instance_concrete"};
+                  QVariantMap params{{"summary", summary},
+                                     {"physical_group_names", groups},
+                                     {"sha256", sha256}};
+                  QTreeWidgetItem mesh_item;
+                  mesh_item.setText(0, "mesh_summary_fixture");
+                  mesh_item.setData(0, PropertyEditor::kKindRole, "Mesh");
+                  mesh_item.setData(0, PropertyEditor::kParamsRole, params);
+                  auto* selected = model_tree_ ? model_tree_->currentItem()
+                                               : nullptr;
+                  property_editor_->set_item(&mesh_item);
+                  auto* label = property_editor_->findChild<QLabel*>(
+                      "propertySummaryLabel");
+                  const QString rendered = label ? label->text() : QString();
+                  property_editor_->set_item(selected);
+                  bool complete = rendered.contains(summary) &&
+                                  rendered.contains(sha256);
+                  for (const QString& group : groups) {
+                    complete = complete && rendered.contains(group);
+                  }
+                  if (!complete) {
+                    throw std::runtime_error(
+                        "Mesh property summary is not visible on General tab");
+                  }
+                },
+                this});
 #ifdef GMP_ENABLE_GMSH_GUI
   steps.append({"mesh_manifest_summary",
                 [this]() {
@@ -13714,6 +14068,18 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       params.value("sha256").toString() !=
                           mesh_snapshot_.mesh_sha256) {
                     throw std::runtime_error("W-00b Mesh tree node summary contract failed");
+                  }
+                  auto* selected = model_tree_ ? model_tree_->currentItem()
+                                               : nullptr;
+                  property_editor_->set_item(item);
+                  auto* label = property_editor_->findChild<QLabel*>(
+                      "propertySummaryLabel");
+                  const QString rendered = label ? label->text() : QString();
+                  property_editor_->set_item(selected);
+                  if (!rendered.contains(params.value("summary").toString()) ||
+                      !rendered.contains(mesh_snapshot_.mesh_sha256)) {
+                    throw std::runtime_error(
+                        "W-00b Mesh summary is not rendered on General tab");
                   }
                 },
                 this});
@@ -17062,6 +17428,228 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                 },
                 this});
+  steps.append({"assembly_instance_contract",
+                [this, dir]() {
+                  // Phase 5 / W-01d: Assembly owns real instance nodes (not
+                  // aliases under Parts), persists their transforms, and
+                  // builds a shared Gmsh model with per-instance volume and
+                  // surface groups.
+                  auto* parts = find_root_item("Parts");
+                  auto* sketches = find_root_item("Sketches");
+                  auto* assembly = find_root_item("Assembly");
+                  if (!parts || !sketches || !assembly || !property_editor_ ||
+                      !part_feature_panel_ || !gmsh_panel_) {
+                    throw std::runtime_error(
+                        "Assembly instance fixture is missing");
+                  }
+                  SketchDocument concrete_doc;
+                  SketchEntity concrete_circle;
+                  concrete_circle.type = SketchEntityType::Circle;
+                  concrete_circle.center = {0.0, 0.0};
+                  concrete_circle.radius = 0.5;
+                  concrete_doc.add_entity(concrete_circle);
+                  SketchDocument plate_doc;
+                  SketchEntity plate_circle = concrete_circle;
+                  plate_circle.radius = 1.0;
+                  plate_doc.add_entity(plate_circle);
+                  const QString concrete_brep =
+                      dir + "/assembly_instance_concrete.brep";
+                  const QString plate_brep =
+                      dir + "/assembly_instance_plate.brep";
+                  const FeatureResult concrete_feature =
+                      extrude_sketch(concrete_doc, 1.0, concrete_brep);
+                  const FeatureResult plate_feature =
+                      extrude_sketch(plate_doc, 0.25, plate_brep);
+                  if (!concrete_feature.ok || !plate_feature.ok ||
+                      !QFileInfo::exists(concrete_brep) ||
+                      !QFileInfo::exists(plate_brep)) {
+                    throw std::runtime_error(
+                        "Distinct Assembly Part BREP fixtures could not be created");
+                  }
+                  auto* concrete_sketch = add_child_item(
+                      sketches, "assembly_sketch_concrete", "Sketches",
+                      {{"type", "Sketch2D"},
+                       {"plane", "XY"},
+                       {"data", concrete_doc.to_yaml_string()}});
+                  auto* plate_sketch = add_child_item(
+                      sketches, "assembly_sketch_plate", "Sketches",
+                      {{"type", "Sketch2D"},
+                       {"plane", "XY"},
+                       {"data", plate_doc.to_yaml_string()}});
+                  if (!concrete_sketch || !plate_sketch) {
+                    throw std::runtime_error(
+                        "Assembly sketch fixtures could not be created");
+                  }
+                  auto* concrete_part = add_child_item(
+                      parts, "assembly_part_concrete", "Parts",
+                      {{"type", "Part"},
+                       {"sketch", concrete_sketch->text(0)},
+                       {"brep", concrete_brep}});
+                  auto* plate_part = add_child_item(
+                      parts, "assembly_part_plate", "Parts",
+                      {{"type", "Part"},
+                       {"sketch", plate_sketch->text(0)},
+                       {"brep", plate_brep}});
+                  if (!concrete_part || !plate_part) {
+                    throw std::runtime_error(
+                        "Assembly Part fixtures could not be created");
+                  }
+                  refresh_module_pages();
+                  model_tree_->setCurrentItem(plate_part);
+                  qApp->processEvents();
+                  if (part_feature_panel_->selected_sketch() !=
+                      plate_sketch->text(0)) {
+                    throw std::runtime_error(
+                        "Part feature sketch selector did not follow the active Part");
+                  }
+                  QVariantMap first = default_params_for_kind("Assembly");
+                  first.insert("part", concrete_part->text(0));
+                  first.insert("order", "1");
+                  QVariantMap second = first;
+                  second.insert("part", plate_part->text(0));
+                  second.insert("translate_x", "3");
+                  second.insert("rotate_z", "30");
+                  second.insert("order", "2");
+                  auto* instance_a = add_child_item(
+                      assembly, "assembly_instance_a", "Assembly", first);
+                  auto* instance_b = add_child_item(
+                      assembly, "assembly_instance_b", "Assembly", second);
+                  if (!instance_a || !instance_b ||
+                      !property_editor_->validate_params("Assembly", first)
+                           .isEmpty() ||
+                      !property_editor_->validate_params("Assembly", second)
+                           .isEmpty() ||
+                      assembly_instance_specs().size() < 2 ||
+                      !build_assembly_model(/*show_error=*/false)) {
+                    throw std::runtime_error(
+                        "Assembly instance data or build contract failed");
+                  }
+#ifdef GMP_ENABLE_GMSH_GUI
+                  if (!viewer_ || !viewer_->has_stage_data() ||
+                      !viewer_->current_file().endsWith(
+                          "assembly_preview.msh") ||
+                      viewer_->current_mesh_dimension() != 2 ||
+                      viewer_->visible_mesh_entity_count(2) < 6) {
+                    throw std::runtime_error(
+                        "Assembly build did not replace the Part viewport preview");
+                  }
+                  QSet<QString> group_names;
+                  std::vector<std::pair<int, int>> groups;
+                  gmsh::model::getPhysicalGroups(groups);
+                  bool translated_instance = false;
+                  bool distinct_part_dimensions = false;
+                  double concrete_dx = -1.0;
+                  double concrete_dy = -1.0;
+                  double concrete_dz = -1.0;
+                  double plate_dx = -1.0;
+                  double plate_dy = -1.0;
+                  double plate_dz = -1.0;
+                  for (const auto& group : groups) {
+                    std::string name;
+                    gmsh::model::getPhysicalName(group.first, group.second,
+                                                 name);
+                    const QString group_name = QString::fromStdString(name);
+                    group_names.insert(group_name);
+                    if (group.first == 3 &&
+                        (group_name == "assembly_instance_a" ||
+                         group_name == "assembly_instance_b")) {
+                      std::vector<int> tags;
+                      gmsh::model::getEntitiesForPhysicalGroup(
+                          group.first, group.second, tags);
+                      for (int tag : tags) {
+                        double xmin = 0.0, ymin = 0.0, zmin = 0.0;
+                        double xmax = 0.0, ymax = 0.0, zmax = 0.0;
+                        gmsh::model::getBoundingBox(3, tag, xmin, ymin, zmin,
+                                                    xmax, ymax, zmax);
+                        if (group_name == "assembly_instance_a") {
+                          concrete_dx = xmax - xmin;
+                          concrete_dy = ymax - ymin;
+                          concrete_dz = zmax - zmin;
+                        } else {
+                          plate_dx = xmax - xmin;
+                          plate_dy = ymax - ymin;
+                          plate_dz = zmax - zmin;
+                          translated_instance =
+                              translated_instance || xmin > 1.9;
+                        }
+                      }
+                    }
+                  }
+                  distinct_part_dimensions =
+                      concrete_dx > 0.0 && plate_dx > concrete_dx * 1.5 &&
+                      plate_dy > concrete_dy * 1.5 &&
+                      plate_dz < concrete_dz * 0.5;
+                  if (!group_names.contains("assembly_instance_a") ||
+                      !group_names.contains("assembly_instance_a_surface") ||
+                      !group_names.contains("assembly_instance_b") ||
+                      !group_names.contains("assembly_instance_b_surface") ||
+                      !translated_instance || !distinct_part_dimensions) {
+                    throw std::runtime_error(
+                        "Assembly Part sources, transforms, or physical groups are incomplete");
+                  }
+#endif
+                  const QString project = dir + "/assembly_instance.gmp.yaml";
+                  if (!save_project(project) || !load_project(project)) {
+                    throw std::runtime_error(
+                        "Assembly project did not save and reopen");
+                  }
+                  auto* restored = find_root_item("Assembly");
+                  QTreeWidgetItem* restored_b = nullptr;
+                  for (int row = 0; restored && row < restored->childCount();
+                       ++row) {
+                    if (restored->child(row)->text(0) ==
+                        "assembly_instance_b") {
+                      restored_b = restored->child(row);
+                      break;
+                    }
+                  }
+                  const QVariantMap restored_params =
+                      restored_b
+                          ? restored_b->data(0, PropertyEditor::kParamsRole)
+                                .toMap()
+                          : QVariantMap();
+                  if (!restored_b ||
+                      restored_params.value("part").toString() !=
+                          "assembly_part_plate" ||
+                      restored_params.value("translate_x").toString() != "3" ||
+                      restored_params.value("rotate_z").toString() != "30" ||
+                      gmsh_panel_->gmsh_settings()
+                              .value("model_source")
+                              .toString() != "assembly: active") {
+                    throw std::runtime_error(
+                        "Assembly instance transform did not survive reopen");
+                  }
+                  QTreeWidgetItem* restored_part = nullptr;
+                  auto* restored_parts = find_root_item("Parts");
+                  for (int row = 0;
+                       restored_parts && row < restored_parts->childCount();
+                       ++row) {
+                    if (restored_parts->child(row)->text(0) ==
+                        "assembly_part_plate") {
+                      restored_part = restored_parts->child(row);
+                      break;
+                    }
+                  }
+                  if (!restored_part) {
+                    throw std::runtime_error(
+                        "Assembly source Part did not survive reopen");
+                  }
+                  QVariantMap changed_part =
+                      restored_part->data(0, PropertyEditor::kParamsRole)
+                          .toMap();
+                  changed_part.insert("description", "stale propagation probe");
+                  restored_part->setData(0, PropertyEditor::kParamsRole,
+                                         changed_part);
+                  qApp->processEvents();
+                  if (restored_b->data(0, PropertyEditor::kStatusRole)
+                          .toString()
+                          .compare("Stale", Qt::CaseInsensitive) != 0) {
+                    throw std::runtime_error(
+                        "Part edit did not invalidate its Assembly instance");
+                  }
+                  QFile::remove(project);
+                },
+                mesh_work_window_});
   steps.append({"expert_input_contract",
                 [this]() {
                   // G0 / W-04：系统生成区只读；专家区独立保存、合并并记录

@@ -18,6 +18,9 @@ class PartFeaturePanel : public QWidget {
 
   // 由 MainWindow 喂入当前可选草图名列表 (模型树 Sketches 根子节点名)
   void set_sketch_names(const QStringList& names);
+  // 切换 Part 时让特征面板跟随该 Part 的来源草图，避免沿用上一 Part
+  // 的下拉选择并把错误轮廓写回当前 Part。
+  void set_selected_sketch(const QString& name);
   QString selected_sketch() const;
   // 放样第二截面的 Z 抬升 (mm); loft_requested 信号只带截面名,
   // 接线方在收到信号后经此接口取抬升值 (WS3 新增, 契约补充)

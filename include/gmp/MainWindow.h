@@ -7,6 +7,7 @@
 #include <QPair>
 #include <QStringList>
 #include <QVariantMap>
+#include <QVariantList>
 
 #include "gmp/ApplicationProfile.h"
 #include "gmp/MooseMappingRegistry.h"
@@ -105,6 +106,8 @@ class MainWindow : public QMainWindow {
                                   const QString& kind,
                                   const QVariantMap& params);
   QTreeWidgetItem* active_part_item() const;
+  QVariantList assembly_instance_specs() const;
+  bool build_assembly_model(bool show_error = true);
   QTreeWidgetItem* attach_feature_to_part(QTreeWidgetItem* part,
                                           const QString& type,
                                           const QVariantMap& params,
@@ -130,6 +133,9 @@ class MainWindow : public QMainWindow {
                           QWidget* transient_parent = nullptr);
   bool load_project(const QString& path);
   bool save_project(const QString& path);
+  // 用户主动保存后的非模态确认：主工作区右上角短暂显示，不阻塞连续编辑。
+  void show_project_saved_feedback(const QString& path, bool saved_as = false);
+  void position_project_saved_feedback();
   void migrate_project_mesh_paths(const QString& project_path);
   void set_project_dirty(bool dirty);
   void update_window_title();
@@ -347,6 +353,8 @@ class MainWindow : public QMainWindow {
   bool suppress_dirty_ = false;
   QLabel* project_status_label_ = nullptr;
   QLabel* dirty_status_label_ = nullptr;
+  QLabel* project_saved_toast_ = nullptr;
+  QTimer* project_saved_toast_timer_ = nullptr;
   QLabel* active_context_status_label_ = nullptr;
   QLabel* workflow_status_label_ = nullptr;
   QTreeWidgetItem* active_job_item_ = nullptr;

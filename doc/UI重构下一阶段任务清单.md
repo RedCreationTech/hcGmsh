@@ -1,8 +1,8 @@
 # GMP-ISE UI 重构下一阶段任务清单
 
 > 编制日期：2026-09-13
-> 代码基线：`f5bb3b9`
-> 依据：`doc/UI重构需求记录.md`、`doc/UI重构开发任务清单.md`、`doc/UI重构Phase4方案设计.md`、`doc/UI重构Phase4人工验收清单.md` 与 `manual/test04.md`
+> 启动基线：`e9df9ef`（Phase 4 / G0 收口提交）
+> 依据：`doc/UI重构需求记录.md`、`doc/UI重构开发任务清单.md`、`doc/UI重构Phase4方案设计.md`、`doc/UI重构Phase4人工验收清单.md`、`manual/test04.md` 与 `manual/test05.md`
 > 范围：Phase 4 收口、Phase 5 真实装配/接触算例、Phase 6 多 Step 串联
 
 ---
@@ -11,8 +11,8 @@
 
 下一阶段不再重复开发已经人工通过的 Section、CDP 材料、Physics、单 Step、BC/Function、Outputs 与快照上传能力，而按以下顺序推进：
 
-1. **Phase 4 收口**：补齐安全校验、专家扩展，并关闭剩余人工准出项。
-2. **Phase 5 真实前处理语义**：实现 Assembly、Load、Contact、Reference Point/Coupling，完成混凝土块 + 钢板端到端算例。
+1. **Phase 4 收口**：已于 2026-09-14 完成人工准出并关闭 G0。
+2. **Phase 5 真实前处理语义**：已进入 G1，先实现 Assembly，再推进 Load、Contact、Reference Point/Coupling 与混凝土块 + 钢板端到端算例。
 3. **Phase 6 多 Step**：在 BC/Load/Constraint/Contact 已具备真实激活语义后，实现阶段顺序与求解状态继承。
 
 多 Step 可以在项目中保存，但当前生成器只使用第一个 Step 并告警。这是已验收的阶段性限制，不是最终产品行为。
@@ -22,7 +22,7 @@
 | 能力域 | 关联需求/任务 | 当前结论 | 下一阶段处理 |
 |---|---|---|---|
 | CDP 材料与 Section | REQ-011/013，W-01b、W-03a | 已人工通过；删除材料后失效、同名恢复已通过 | 仅做回归，不重做 |
-| Physical Groups 与 Mesh | REQ-012，W-02a~c | `solid/fixed/load`、FileMeshGenerator 与快照网格已通过 | 补剩余通用网格人工巡检 |
+| Physical Groups 与 Mesh | REQ-012，W-02a~c | `solid/fixed/load`、FileMeshGenerator、快照网格及通用网格人工巡检均已通过 | Phase 5 装配网格回归 |
 | Physics、单 Step、BC/Function、Outputs | REQ-013，W-03b~e | 已人工通过；重复同步无重复受管块 | 作为 Phase 5 新对象映射的基线 |
 | 确定性装配 | REQ-014，W-04 | 结构化只读、专家扩展、来源追踪及保存重开均已人工通过 | 仅做回归，不重做 |
 | 生成前校验 | REQ-015，W-05 | 统一阻断、问题定位及安全入口已人工通过 | 仅做回归，不重做 |
@@ -82,7 +82,9 @@
 
 ### TASK-P4-CLOSE-04 关闭 Phase 4 剩余人工准出项
 
-> **实施状态（2026-09-14）**：新增定向合同及 106 步全量真实点击巡览、CTest `1/1` 均已通过；以下 6 项仍等待人工逐项执行，全部关闭前 G0 尚未最终准出。
+> **完成状态（2026-09-14）**：新增定向合同、106 步全量真实点击巡览与 CTest `1/1`
+> 均已通过；用户已完成人工操作并明确确认下列 6 项全部通过。Phase 4 / G0 最终准出，
+> 当前无未登记的 G0 阻断缺陷。
 
 - **优先级**：P0
 - **关联**：REQ-010、REQ-012、M-P4
@@ -94,10 +96,21 @@
   - `TEST-P4-GEN-07`：多个 Mesh/Part 的下拉、菜单与重开恢复。
   - `TEST-P4-GEN-08`：多个 Job 的独立网格引用与重开恢复。
 - **准出标准**：定向巡览通过后执行全量真实点击巡览与 CTest；上述人工项全部有结论，无未登记 P0 缺陷。
+- **准出结论**：通过。`TEST-P4-W01-02`、`TEST-P4-GEN-04`～`08` 已于
+  2026-09-14 由用户统一确认完成人工验证。
 
 ## 4. Stage B：Phase 5 真实装配、接触与耦合（发布闸门 G1～G3）
 
+逐条人工操作、负向检查、证据要求和闸门回填见 `manual/test05.md`。
+
 ### TASK-P5-01 Assembly 实例与变换
+
+> **实施状态（2026-09-15）**：已完成。Assembly 独立根节点、Part 实例引用、变换、
+> 可见性/顺序、保存重开、上游过期传播、Gmsh 实例化和装配网格均已交付；
+> `TEST-P5-G1-02`～`05` 已由用户完成人工验证。`TEST-P5-G1-05` 证据包含项目自有 3D
+> 装配网格、两个实例体组、两个实例面组、节点/单元/质量摘要和完整 SHA-256。
+> 下一步先补齐 `manual/test05.md` §4.2 专用作用面组的项目级持久化与 Assembly 重绑定，
+> 再进入 `TASK-P5-02` Load 与 Interaction/Contact 真实映射。
 
 - **优先级**：P0
 - **关联**：REQ-011、REQ-012、W-01d

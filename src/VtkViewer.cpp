@@ -1617,6 +1617,23 @@ void VtkViewer::set_mesh_file_impl(const QString& path,
   pipeline_ready_ = true;
   first_render_ = true;
   mode_ = DataMode::Mesh;
+  // A newly loaded mesh must not inherit entity/type filters from the
+  // previously displayed Part.  The indices refer to different Gmsh models
+  // and can otherwise hide an otherwise valid assembly preview.
+  selected_group_dim_ = -1;
+  selected_group_id_ = -1;
+  selected_entity_dim_ = -1;
+  selected_entity_tag_ = -1;
+  if (mesh_entity_) {
+    mesh_entity_->blockSignals(true);
+    mesh_entity_->setCurrentIndex(0);
+    mesh_entity_->blockSignals(false);
+  }
+  if (mesh_type_) {
+    mesh_type_->blockSignals(true);
+    mesh_type_->setCurrentIndex(0);
+    mesh_type_->blockSignals(false);
+  }
   time_steps_.clear();
   time_slider_->setEnabled(false);
   time_slider_->setRange(0, 0);
@@ -3443,8 +3460,21 @@ void VtkViewer::update_mesh_controls() {
 
   if (mesh_dim_) {
     int highest_dim = -1;
-    for (const auto& ent : mesh_entities_) {
-      highest_dim = std::max(highest_dim, ent.dim);
+    // OCC may still contain 3-D volume entities when only a lightweight 2-D
+    // surface preview has been meshed.  Derive the default dimension from
+    // cells that actually exist, instead of from the geometric entity list.
+    if (mesh_grid_ && mesh_grid_->GetCellData()) {
+      if (auto* dims = vtkIntArray::SafeDownCast(
+              mesh_grid_->GetCellData()->GetArray("phys_dim"))) {
+        for (vtkIdType cell = 0; cell < dims->GetNumberOfTuples(); ++cell) {
+          highest_dim = std::max(highest_dim, dims->GetValue(cell));
+        }
+      }
+    }
+    if (highest_dim < 0) {
+      for (const auto& ent : mesh_entities_) {
+        highest_dim = std::max(highest_dim, ent.dim);
+      }
     }
     mesh_dim_->blockSignals(true);
     const int highest_index = mesh_dim_->findData(highest_dim);

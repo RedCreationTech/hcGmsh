@@ -76,6 +76,7 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   name_edit_ = new QLineEdit(general_tab_);
   name_edit_->setObjectName("propertyNameEdit");
   summary_label_ = new QLabel("-", general_tab_);
+  summary_label_->setObjectName("propertySummaryLabel");
   summary_label_->setWordWrap(true);
   general_layout->addRow("Kind", kind_label_);
   general_layout->addRow("Status", status_label_);
@@ -1063,6 +1064,23 @@ QStringList PropertyEditor::validate_params(const QString& kind,
     if (enabled("hist_extremum")) {
       require_key("hist_extremum_variables");
     }
+  } else if (kind == "Assembly") {
+    require_key("part");
+    const QString part = params.value("part").toString().trimmed();
+    if (!part.isEmpty() && !collect_model_names("Parts").contains(part)) {
+      missing << "part reference";
+    }
+    for (const QString& key : {"translate_x", "translate_y", "translate_z",
+                               "rotate_x", "rotate_y", "rotate_z", "scale_x",
+                               "scale_y", "scale_z", "order"}) {
+      bool ok = false;
+      const double value = params.value(key).toString().toDouble(&ok);
+      if (!ok) {
+        missing << key + " must be numeric";
+      } else if (key.startsWith("scale_") && value <= 0.0) {
+        missing << key + " must be > 0";
+      }
+    }
   }
   return missing;
 }
@@ -1449,6 +1467,35 @@ void PropertyEditor::refresh_preview() {
 
 QString PropertyEditor::build_node_summary(const QString& kind,
                                            const QVariantMap& params) const {
+  if (kind == "Mesh") {
+    QStringList lines;
+    const QString summary = params.value("summary").toString().trimmed();
+    if (!summary.isEmpty()) {
+      lines << summary;
+    }
+
+    QStringList group_names =
+        params.value("physical_group_names").toStringList();
+    if (group_names.isEmpty()) {
+      for (const QVariant& value :
+           params.value("physical_group_names").toList()) {
+        const QString name = value.toString().trimmed();
+        if (!name.isEmpty()) {
+          group_names << name;
+        }
+      }
+    }
+    if (!group_names.isEmpty()) {
+      lines << QString("%1: %2")
+                   .arg(l10n::tr("Physical Groups"), group_names.join(", "));
+    }
+
+    const QString sha256 = params.value("sha256").toString().trimmed();
+    if (!sha256.isEmpty()) {
+      lines << QString("SHA-256: %1").arg(sha256);
+    }
+    return lines.isEmpty() ? QString("-") : lines.join("\n");
+  }
   if (kind == "Features") {
     // 特征 = 建模历史: 操作类型 + 来源草图 + 关键参数
     QStringList parts;
@@ -1488,6 +1535,19 @@ QString PropertyEditor::build_node_summary(const QString& kind,
     }
     return parts.isEmpty() ? QString("-") : parts.join(", ");
   }
+  if (kind == "Assembly") {
+    return QString("part: %1 | T=(%2, %3, %4) | R=(%5, %6, %7) | %8")
+        .arg(params.value("part").toString(),
+             params.value("translate_x").toString(),
+             params.value("translate_y").toString(),
+             params.value("translate_z").toString(),
+             params.value("rotate_x").toString(),
+             params.value("rotate_y").toString(),
+             params.value("rotate_z").toString(),
+             params.value("visible", "true").toString() == "false"
+                 ? QString("hidden")
+                 : QString("visible"));
+  }
   if (kind == "Sketches") {
     const QString data = params.value("data").toString();
     if (data.trimmed().isEmpty()) {
@@ -1509,8 +1569,9 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
   if (!form_box_ || !form_layout_) {
     return;
   }
-  const QSet<QString> supported = {"Materials", "Sections", "Steps", "BC",
-                                   "Loads", "Functions", "Physics", "Outputs"};
+  const QSet<QString> supported = {"Materials", "Sections", "Assembly",
+                                   "Steps", "BC", "Loads", "Functions",
+                                   "Physics", "Outputs"};
   if (!supported.contains(kind)) {
     form_box_->setVisible(false);
     return;
@@ -1528,7 +1589,7 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
   // 默认参数，因此不显示模板栏。Materials/BC/Loads 具有多个命名
   // 模板，使用下拉选择；Steps/Functions/Outputs 只有“类型默认值”，
   // 用直接按钮代替无选择意义的单项下拉，避免 macOS 弹层错位。
-  if (kind != "Sections" && kind != "Physics") {
+  if (kind != "Sections" && kind != "Physics" && kind != "Assembly") {
     const bool has_named_templates =
         kind == "Materials" || kind == "BC" || kind == "Loads";
     auto* template_row = new QWidget(form_box_);
@@ -1777,6 +1838,29 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
         "This value is updated by Apply Selected Volumes below."));
     form_layout_->addRow("Assigned Physical Volumes", assigned_volumes);
     form_widgets_.insert("block", assigned_volumes);
+  } else if (kind == "Assembly") {
+    const QStringList parts = collect_model_names("Parts");
+    add_combo("Part", "part", parts, "assemblyPartCombo");
+    if (auto* part_combo =
+            qobject_cast<QComboBox*>(form_widgets_.value("part"))) {
+      part_combo->setEditable(false);
+    }
+    add_section("Translation");
+    add_line("X", "translate_x", "assemblyTranslateX");
+    add_line("Y", "translate_y", "assemblyTranslateY");
+    add_line("Z", "translate_z", "assemblyTranslateZ");
+    add_section("Rotation (degrees, X → Y → Z)");
+    add_line("X", "rotate_x", "assemblyRotateX");
+    add_line("Y", "rotate_y", "assemblyRotateY");
+    add_line("Z", "rotate_z", "assemblyRotateZ");
+    add_section("Scale");
+    add_line("X", "scale_x", "assemblyScaleX");
+    add_line("Y", "scale_y", "assemblyScaleY");
+    add_line("Z", "scale_z", "assemblyScaleZ");
+    add_section("Instance");
+    add_combo("Visible", "visible", {"true", "false"},
+              "assemblyVisible");
+    add_line("Order", "order", "assemblyOrder");
   } else if (kind == "Steps") {
     // W-03e：Step→Executioner/TimeStepper/Preconditioning 表单
     // （*Static 四参数语义），分组：基本/求解控制/时间步进/预处理。

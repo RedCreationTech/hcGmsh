@@ -4,6 +4,7 @@
 #include <QString>
 #include <QStringList>
 #include <QVariantMap>
+#include <QVariantList>
 #include <QList>
 #include <vector>
 
@@ -42,6 +43,11 @@ class GmshPanel : public QWidget {
   void restore_external_models(const QVariantMap& sources,
                                const QString& selected_label);
   void select_external_model(const QString& label);
+  // Phase 5 / W-01d: configure and build an assembly model from persisted
+  // Part-instance records. Each record contains name/source_path plus
+  // translation, Euler rotation (degrees), scale, visibility, and order.
+  void set_assembly_instances(const QVariantList& instances);
+  bool build_assembly(QString* error = nullptr);
   void set_mesh_output_path(const QString& path);
   // 最近一次几何导入的失败原因；成功或尚未导入时为空。
   QString last_import_error() const { return last_import_error_; }
@@ -130,6 +136,7 @@ class GmshPanel : public QWidget {
   // 部件/装配通道交给网格面板的模型身份。文件预览和生成结果回读都会
   // 临时切换 Gmsh current model，正式生成前后必须按名称恢复。
   QString external_model_name_;
+  QVariantList assembly_instances_;
 
   QComboBox* model_selector_ = nullptr;
   QLineEdit* geo_path_ = nullptr;
