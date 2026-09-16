@@ -324,6 +324,7 @@ const QHash<QString, QString>& zh_dict() {
       {"Groups & Fields", "分组与网格场"},
       {"Update Selected", "更新所选"},
       {"Delete Selected", "删除所选"},
+      {"Clear Stage Filter", "取消舞台筛选"},
       {"Mesh Fields", "网格场"},
       {"Apply Field", "应用场"},
       {"Clear Fields", "清除场"},
@@ -714,6 +715,10 @@ const QHash<QString, QString>& zh_dict() {
       {"Volume selection: values use 3:tag, e.g. 3:1.",
        "当前选择体：使用 3:编号，例如 3:1。"},
       {"Entity Count", "实体数"},
+      {"Member Entities", "成员实体"},
+      {"Group Tag", "组标识"},
+      {"Group tag stays unchanged when its member entities are updated.",
+       "更新成员实体时，物理组标识保持不变。"},
       {"IDs or dim:tag list", "ID 或 dim:tag 列表"},
       {"Output mesh path (*.msh)", "输出网格路径 (*.msh)"},
       // ===== MoosePanel =====

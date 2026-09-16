@@ -37,6 +37,9 @@
 #include <QTabWidget>
 #include <QTemporaryDir>
 #include <QHeaderView>
+#include <QJsonDocument>
+#include <QJsonParseError>
+#include <QTreeWidget>
 #include <QAbstractItemView>
 #include <QApplication>
 #include <QEventLoop>
@@ -50,6 +53,7 @@
 #include <atomic>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -714,14 +718,24 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* phys_box = new QGroupBox("Physical Groups");
   auto* phys_form = new QFormLayout(phys_box);
   phys_group_list_ = new QComboBox();
+  phys_group_list_->setObjectName("physicalGroupList");
   phys_group_list_->setMinimumWidth(0);
   connect(phys_group_list_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, &GmshPanel::on_physical_group_selected);
   auto* phys_refresh = new QPushButton("Refresh");
+  phys_refresh->setObjectName("physicalGroupRefreshButton");
   connect(phys_refresh, &QPushButton::clicked, this,
           &GmshPanel::on_physical_group_refresh);
+  auto* phys_clear_stage_filter = new QPushButton("Clear Stage Filter");
+  phys_clear_stage_filter->setObjectName("physicalGroupClearStageFilterButton");
+  connect(phys_clear_stage_filter, &QPushButton::clicked, this, [this]() {
+    emit entity_preview_requested(-1, -1, 0.0, 0.0, 0.0);
+    emit physical_group_selected(-1, -1);
+    append_log("Physical group stage filter cleared; showing full model.");
+  });
   phys_form->addRow("Groups", phys_group_list_);
   phys_form->addRow(phys_refresh);
+  phys_form->addRow(phys_clear_stage_filter);
 
   phys_group_dim_ = new QComboBox();
   phys_group_dim_->setObjectName("physicalGroupDimension");
@@ -731,6 +745,7 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   phys_group_dim_->addItem("3 — Volume", 3);
   tune_dim_combo(phys_group_dim_);
   phys_group_name_ = new QLineEdit();
+  phys_group_name_->setObjectName("physicalGroupName");
   phys_group_name_->setPlaceholderText("Name");
   phys_form->addRow("Dim", phys_group_dim_);
   phys_form->addRow("Name", phys_group_name_);
@@ -743,6 +758,11 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   phys_entities_pick->setObjectName("physicalGroupEntityPickButton");
   connect(phys_entities_pick, &QPushButton::clicked, this, [this]() {
     const int dim = phys_group_dim_ ? phys_group_dim_->currentData().toInt() : -1;
+    // 当前组仍作为 Update/Delete 的编辑目标保留，但拾取候选面前必须
+    // 取消舞台的 Physical Group 过滤，让黄色候选面始终叠加在完整装配
+    // 上，而不是叠加在上一次选中的单个面组上。
+    emit entity_preview_requested(-1, -1, 0.0, 0.0, 0.0);
+    emit physical_group_selected(-1, -1);
     active_entity_input_ = phys_group_entities_;
     phys_group_entities_->setText(
         pick_entities_dialog(dim, "Select Physical Group Entities",
@@ -781,6 +801,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   phys_group_add_ = new QPushButton("Add");
   phys_group_update_ = new QPushButton("Update Selected");
   phys_group_delete_ = new QPushButton("Delete Selected");
+  phys_group_add_->setObjectName("physicalGroupAddButton");
+  phys_group_update_->setObjectName("physicalGroupUpdateButton");
+  phys_group_delete_->setObjectName("physicalGroupDeleteButton");
   connect(phys_group_add_, &QPushButton::clicked, this,
           &GmshPanel::on_physical_group_add);
   connect(phys_group_update_, &QPushButton::clicked, this,
@@ -795,27 +818,49 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* phys_group_actions_container = new QWidget();
   phys_group_actions_container->setLayout(phys_group_actions);
   phys_form->addRow("", phys_group_actions_container);
+  phys_group_feedback_ = new QLabel(
+      "Group tag stays unchanged when its member entities are updated.");
+  phys_group_feedback_->setObjectName("physicalGroupFeedback");
+  phys_group_feedback_->setWordWrap(true);
+  phys_group_feedback_->setStyleSheet("color: #555;");
+  phys_form->addRow("", phys_group_feedback_);
 
   phys_group_table_ = new QTableWidget();
-  phys_group_table_->setColumnCount(5);
+  phys_group_table_->setObjectName("physicalGroupTable");
+  phys_group_table_->setColumnCount(6);
   phys_group_table_->setHorizontalHeaderLabels(
-      {"Dim", "Tag", "Name", "Entity Count", "Elements"});
+      {"Dim", "Group Tag", "Name", "Member Entities", "Entity Count",
+       "Elements"});
   phys_group_table_->horizontalHeader()->setStretchLastSection(true);
-  // 5列表格不参与撑宽面板, 过窄时表格内部自行横向滚动
+  // 表格不参与撑宽面板, 过窄时表格内部自行横向滚动
   phys_group_table_->setSizePolicy(QSizePolicy::Ignored,
                                    QSizePolicy::Preferred);
   phys_group_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
+  phys_group_table_->setSelectionMode(QAbstractItemView::SingleSelection);
   phys_group_table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
+  // macOS 会用蓝色表示焦点内选择、灰色表示失焦后的同一选择。这里让
+  // 当前物理组始终使用同一强调色，避免用户把灰色误解为另一种状态。
+  phys_group_table_->setStyleSheet(
+      "QTableWidget { selection-background-color: #0a64e8; "
+      "selection-color: white; }");
   phys_group_table_->setMinimumHeight(90);
   connect(phys_group_table_, &QTableWidget::itemSelectionChanged, this,
           [this]() {
             if (!phys_group_table_ || phys_group_table_->selectedItems().isEmpty()) {
-              emit physical_group_selected(-1, -1);
+              if (phys_group_list_ && phys_group_list_->currentIndex() != 0) {
+                phys_group_list_->setCurrentIndex(0);
+              } else {
+                emit physical_group_selected(-1, -1);
+              }
               return;
             }
             const int row = phys_group_table_->currentRow();
             if (row < 0) {
-              emit physical_group_selected(-1, -1);
+              if (phys_group_list_ && phys_group_list_->currentIndex() != 0) {
+                phys_group_list_->setCurrentIndex(0);
+              } else {
+                emit physical_group_selected(-1, -1);
+              }
               return;
             }
             bool ok_dim = false;
@@ -823,7 +868,10 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
             const int dim = phys_group_table_->item(row, 0)->text().toInt(&ok_dim);
             const int tag = phys_group_table_->item(row, 1)->text().toInt(&ok_tag);
             if (ok_dim && ok_tag) {
-              emit physical_group_selected(dim, tag);
+              // 统计表与顶部下拉是同一个“当前物理组”的两种入口。
+              // 仅发舞台高亮信号会让 Update/Delete 仍读取到 New；统一通过
+              // select_physical_group() 同步下拉、编辑字段和舞台状态。
+              select_physical_group(dim, tag);
             }
           });
   phys_form->addRow("Stats", phys_group_table_);
@@ -1318,6 +1366,10 @@ bool GmshPanel::activate_model(int index) {
   model_loaded_ = true;
   update_entity_summary();
   update_entity_list();
+  if (phys_group_list_ && phys_group_list_->count() > 0) {
+    const QSignalBlocker blocker(phys_group_list_);
+    phys_group_list_->setCurrentIndex(0);
+  }
   update_physical_group_list();
   update_field_list();
   refresh_occ_entity_template_lists();
@@ -1411,6 +1463,11 @@ void GmshPanel::select_external_model(const QString& label) {
 
 void GmshPanel::set_assembly_instances(const QVariantList& instances) {
   assembly_instances_ = instances;
+}
+
+void GmshPanel::reset_project_physical_groups() {
+  custom_physical_groups_.clear();
+  physical_group_element_counts_.clear();
 }
 
 bool GmshPanel::build_assembly(QString* error) {
@@ -1572,6 +1629,11 @@ bool GmshPanel::build_assembly(QString* error) {
       }
     }
 
+    // 用户定义的接触/固定/加载专用面组在默认实例组之后恢复。恢复逻辑
+    // 只接受所属实例内几何签名一致的实体，防止 Part 修改后把旧组静默
+    // 绑定到同 tag 的另一张面。
+    restore_custom_physical_groups();
+
     if (model_selector_) {
       const QSignalBlocker blocker(model_selector_);
       model_selector_->clear();
@@ -1581,6 +1643,9 @@ bool GmshPanel::build_assembly(QString* error) {
                                      Qt::UserRole + 1);
       }
     }
+    // Assembly 已重建，旧网格清单不再能代表当前几何；项目加载路径会在
+    // build 完成后重新注入同一项目已保存的清单。
+    physical_group_element_counts_.clear();
     note_external_model_loaded("assembly: active");
     append_log(QString("Assembly built: %1 visible instance(s).")
                    .arg(visible_count));
@@ -1637,6 +1702,11 @@ QVariantMap GmshPanel::gmsh_settings() const {
   map.insert("output_path", output_path_ ? output_path_->text() : "");
   map.insert("model_source",
              model_selector_ ? model_selector_->currentText() : "");
+  map.insert(
+      "custom_physical_groups_json",
+      QString::fromUtf8(
+          QJsonDocument::fromVariant(custom_physical_groups_)
+              .toJson(QJsonDocument::Compact)));
   const QString geo_path = geo_path_ ? geo_path_->text() : "";
   if (!geo_path.isEmpty() && QFileInfo::exists(geo_path)) {
     map.insert("geometry_path", geo_path);
@@ -1664,7 +1734,46 @@ QVariantMap GmshPanel::gmsh_settings() const {
   return map;
 }
 
+void GmshPanel::set_physical_group_manifest(const QVariantMap& manifest) {
+  physical_group_element_counts_.clear();
+  const QVariantList groups = manifest.value("physical_groups").toList();
+  for (const QVariant& value : groups) {
+    const QVariantMap group = value.toMap();
+    const int dim = group.value("dim", -1).toInt();
+    const QString name = group.value("name").toString().trimmed();
+    const int element_count = group.value("element_count", 0).toInt();
+    if (dim < 0 || dim > 3 || name.isEmpty() || element_count < 0) {
+      continue;
+    }
+    physical_group_element_counts_.insert(
+        QString("name:%1:%2").arg(dim).arg(name), element_count);
+    for (const QVariant& tag_value : group.value("tags").toList()) {
+      bool ok = false;
+      const int tag = tag_value.toInt(&ok);
+      if (ok) {
+        physical_group_element_counts_.insert(
+            QString("tag:%1:%2").arg(dim).arg(tag), element_count);
+      }
+    }
+  }
+  update_physical_group_table();
+}
+
 void GmshPanel::apply_gmsh_settings(const QVariantMap& settings) {
+  custom_physical_groups_.clear();
+  const QByteArray custom_groups_json =
+      settings.value("custom_physical_groups_json", "[]").toString().toUtf8();
+  QJsonParseError custom_groups_error;
+  const QJsonDocument custom_groups_doc =
+      QJsonDocument::fromJson(custom_groups_json, &custom_groups_error);
+  if (custom_groups_error.error == QJsonParseError::NoError &&
+      custom_groups_doc.isArray()) {
+    custom_physical_groups_ = custom_groups_doc.toVariant().toList();
+  } else if (!custom_groups_json.trimmed().isEmpty() &&
+             custom_groups_json.trimmed() != "[]") {
+    append_log("Saved custom Physical Groups are invalid and were ignored.");
+  }
+
   auto set_combo_data = [](QComboBox* combo, int value) {
     if (!combo) {
       return;
@@ -3363,6 +3472,11 @@ void GmshPanel::on_physical_group_selected(int) {
   if (key.isEmpty()) {
     phys_group_name_->clear();
     phys_group_entities_->clear();
+    if (phys_group_table_) {
+      const QSignalBlocker blocker(phys_group_table_);
+      phys_group_table_->clearSelection();
+      phys_group_table_->setCurrentItem(nullptr);
+    }
     emit physical_group_selected(-1, -1);
     return;
   }
@@ -3413,6 +3527,31 @@ void GmshPanel::on_physical_group_selected(int) {
     phys_group_entities_->setText(ids.join(", "));
   }
 #endif
+}
+
+QString GmshPanel::selected_physical_group_key() const {
+  const QString combo_key =
+      phys_group_list_ ? phys_group_list_->currentData().toString() : QString();
+  if (!combo_key.isEmpty()) {
+    return combo_key;
+  }
+  // 兼容统计表选中事件尚未完成同步、或平台样式只改变当前行而未改变
+  // 下拉的情况。仅在表格确有选中项时回退，避免把历史 currentRow 当成
+  // 用户当前选择。
+  if (!phys_group_table_ || phys_group_table_->selectedItems().isEmpty()) {
+    return {};
+  }
+  const int row = phys_group_table_->currentRow();
+  auto* dim_item = row >= 0 ? phys_group_table_->item(row, 0) : nullptr;
+  auto* tag_item = row >= 0 ? phys_group_table_->item(row, 1) : nullptr;
+  if (!dim_item || !tag_item) {
+    return {};
+  }
+  bool ok_dim = false;
+  bool ok_tag = false;
+  const int dim = dim_item->text().toInt(&ok_dim);
+  const int tag = tag_item->text().toInt(&ok_tag);
+  return ok_dim && ok_tag ? QString("%1:%2").arg(dim).arg(tag) : QString();
 }
 
 void GmshPanel::select_physical_group(int dim, int tag) {
@@ -3482,6 +3621,446 @@ void GmshPanel::apply_entity_pick(int dim, int tag) {
   }
   active_entity_input_->setText(parts.join(", "));
   active_entity_input_->setFocus();
+#endif
+}
+
+QVariantList GmshPanel::entity_bounding_box(int dim, int tag) const {
+#ifdef GMP_ENABLE_GMSH_GUI
+  try {
+    double xmin = 0.0;
+    double ymin = 0.0;
+    double zmin = 0.0;
+    double xmax = 0.0;
+    double ymax = 0.0;
+    double zmax = 0.0;
+    gmsh::model::getBoundingBox(dim, tag, xmin, ymin, zmin, xmax, ymax, zmax);
+    return {xmin, ymin, zmin, xmax, ymax, zmax};
+  } catch (...) {
+  }
+#else
+  Q_UNUSED(dim);
+  Q_UNUSED(tag);
+#endif
+  return {};
+}
+
+QVariantList GmshPanel::entity_preview_direction(
+    int dim, int tag, const QString& owner) const {
+#ifdef GMP_ENABLE_GMSH_GUI
+  const QVariantList entity_box = entity_bounding_box(dim, tag);
+  if (entity_box.size() != 6) {
+    return {};
+  }
+  double reference[6] = {std::numeric_limits<double>::infinity(),
+                         std::numeric_limits<double>::infinity(),
+                         std::numeric_limits<double>::infinity(),
+                         -std::numeric_limits<double>::infinity(),
+                         -std::numeric_limits<double>::infinity(),
+                         -std::numeric_limits<double>::infinity()};
+  bool have_reference = false;
+  std::vector<std::pair<int, int>> candidates;
+  gmsh::model::getEntities(candidates, 3);
+  std::vector<std::pair<int, int>> owner_groups;
+  gmsh::model::getPhysicalGroups(owner_groups, 3);
+  if (!owner.isEmpty()) {
+    candidates.clear();
+    for (const auto& group : owner_groups) {
+      std::string group_name;
+      gmsh::model::getPhysicalName(group.first, group.second, group_name);
+      if (QString::fromStdString(group_name) != owner) {
+        continue;
+      }
+      std::vector<int> volumes;
+      gmsh::model::getEntitiesForPhysicalGroup(group.first, group.second,
+                                               volumes);
+      for (const int volume : volumes) {
+        candidates.push_back({3, volume});
+      }
+    }
+  }
+  if (candidates.empty()) {
+    gmsh::model::getEntities(candidates, dim);
+  }
+  for (const auto& candidate : candidates) {
+    const QVariantList box =
+        entity_bounding_box(candidate.first, candidate.second);
+    if (box.size() != 6) {
+      continue;
+    }
+    for (int axis = 0; axis < 3; ++axis) {
+      reference[axis] =
+          std::min(reference[axis], box.at(axis).toDouble());
+      reference[axis + 3] =
+          std::max(reference[axis + 3], box.at(axis + 3).toDouble());
+    }
+    have_reference = true;
+  }
+  if (!have_reference) {
+    return {};
+  }
+
+  const double owner_center[3] = {
+      0.5 * (reference[0] + reference[3]),
+      0.5 * (reference[1] + reference[4]),
+      0.5 * (reference[2] + reference[5])};
+  double surface_point[3] = {
+      0.5 * (entity_box.at(0).toDouble() + entity_box.at(3).toDouble()),
+      0.5 * (entity_box.at(1).toDouble() + entity_box.at(4).toDouble()),
+      0.5 * (entity_box.at(2).toDouble() + entity_box.at(5).toDouble())};
+  double normal[3] = {0.0, 0.0, 0.0};
+  bool have_surface_normal = false;
+
+  // 包围盒的“最薄轴”只能识别与全局坐标轴平行的面。对于旋转实例、
+  // 斜面和曲面，直接在曲面参数域中心读取 Gmsh 几何法向，并用所属实例
+  // 的中心校正为朝外方向；参数化不可用时才退回包围盒算法。
+  if (dim == 2) {
+    try {
+      std::vector<double> param_min;
+      std::vector<double> param_max;
+      gmsh::model::getParametrizationBounds(dim, tag, param_min, param_max);
+      if (param_min.size() >= 2 && param_max.size() >= 2 &&
+          std::isfinite(param_min[0]) && std::isfinite(param_min[1]) &&
+          std::isfinite(param_max[0]) && std::isfinite(param_max[1])) {
+        const std::vector<double> uv = {
+            0.5 * (param_min[0] + param_max[0]),
+            0.5 * (param_min[1] + param_max[1])};
+        std::vector<double> normals;
+        std::vector<double> coordinates;
+        gmsh::model::getNormal(tag, uv, normals);
+        gmsh::model::getValue(dim, tag, uv, coordinates);
+        if (normals.size() >= 3 && coordinates.size() >= 3 &&
+            std::isfinite(normals[0]) && std::isfinite(normals[1]) &&
+            std::isfinite(normals[2]) && std::isfinite(coordinates[0]) &&
+            std::isfinite(coordinates[1]) && std::isfinite(coordinates[2])) {
+          normal[0] = normals[0];
+          normal[1] = normals[1];
+          normal[2] = normals[2];
+          surface_point[0] = coordinates[0];
+          surface_point[1] = coordinates[1];
+          surface_point[2] = coordinates[2];
+          have_surface_normal = true;
+        }
+      }
+    } catch (...) {
+      have_surface_normal = false;
+    }
+  }
+
+  if (!have_surface_normal) {
+    int normal_axis = 0;
+    double minimum_extent = std::numeric_limits<double>::infinity();
+    for (int axis = 0; axis < 3; ++axis) {
+      const double extent = std::abs(entity_box.at(axis + 3).toDouble() -
+                                     entity_box.at(axis).toDouble());
+      if (extent < minimum_extent) {
+        minimum_extent = extent;
+        normal_axis = axis;
+      }
+    }
+    normal[normal_axis] =
+        surface_point[normal_axis] < owner_center[normal_axis] ? -1.0 : 1.0;
+  }
+
+  double normal_norm = std::sqrt(normal[0] * normal[0] +
+                                 normal[1] * normal[1] +
+                                 normal[2] * normal[2]);
+  if (normal_norm <= 1e-12) {
+    return {};
+  }
+  for (double& component : normal) {
+    component /= normal_norm;
+  }
+  const double outward[3] = {surface_point[0] - owner_center[0],
+                             surface_point[1] - owner_center[1],
+                             surface_point[2] - owner_center[2]};
+  if (normal[0] * outward[0] + normal[1] * outward[1] +
+          normal[2] * outward[2] <
+      0.0) {
+    for (double& component : normal) {
+      component = -component;
+    }
+  }
+
+  // 在真实外法向上叠加面内切向，形成可读的约 45° 轴测观察方向。
+  // 参考轴与法向接近平行时换轴，避免退化。
+  const double reference_up[3] = {
+      0.0, std::abs(normal[2]) > 0.9 ? 1.0 : 0.0,
+      std::abs(normal[2]) > 0.9 ? 0.0 : 1.0};
+  double tangent[3] = {
+      reference_up[1] * normal[2] - reference_up[2] * normal[1],
+      reference_up[2] * normal[0] - reference_up[0] * normal[2],
+      reference_up[0] * normal[1] - reference_up[1] * normal[0]};
+  const double tangent_norm = std::sqrt(tangent[0] * tangent[0] +
+                                        tangent[1] * tangent[1] +
+                                        tangent[2] * tangent[2]);
+  if (tangent_norm > 1e-12) {
+    for (double& component : tangent) {
+      component /= tangent_norm;
+    }
+  }
+  const double bitangent[3] = {
+      normal[1] * tangent[2] - normal[2] * tangent[1],
+      normal[2] * tangent[0] - normal[0] * tangent[2],
+      normal[0] * tangent[1] - normal[1] * tangent[0]};
+  double direction[3] = {
+      normal[0] + 0.75 * tangent[0] + 0.35 * bitangent[0],
+      normal[1] + 0.75 * tangent[1] + 0.35 * bitangent[1],
+      normal[2] + 0.75 * tangent[2] + 0.35 * bitangent[2]};
+  const double direction_norm = std::sqrt(direction[0] * direction[0] +
+                                          direction[1] * direction[1] +
+                                          direction[2] * direction[2]);
+  // 后三项保留规范化后的真实法向，供自动化合同验证；消费者只读取
+  // 前三项作为相机方向。
+  return {direction[0] / direction_norm, direction[1] / direction_norm,
+          direction[2] / direction_norm, normal[0], normal[1], normal[2]};
+#else
+  Q_UNUSED(dim);
+  Q_UNUSED(tag);
+  Q_UNUSED(owner);
+  return {};
+#endif
+}
+
+QString GmshPanel::assembly_owner_for_entity(int dim, int tag) const {
+#ifdef GMP_ENABLE_GMSH_GUI
+  if (dim < 0 || dim >= 3) {
+    return {};
+  }
+  std::vector<std::pair<int, int>> owner_groups;
+  gmsh::model::getPhysicalGroups(owner_groups, dim + 1);
+  for (const auto& owner_group : owner_groups) {
+    std::string owner_name;
+    gmsh::model::getPhysicalName(owner_group.first, owner_group.second,
+                                 owner_name);
+    if (owner_name.empty()) {
+      continue;
+    }
+    std::vector<int> owner_entities;
+    gmsh::model::getEntitiesForPhysicalGroup(
+        owner_group.first, owner_group.second, owner_entities);
+    for (const int owner_tag : owner_entities) {
+      gmsh::vectorpair boundary;
+      gmsh::model::getBoundary({{dim + 1, owner_tag}}, boundary, false, false,
+                               false);
+      for (const auto& entity : boundary) {
+        if (entity.first == dim && std::abs(entity.second) == tag) {
+          return QString::fromStdString(owner_name);
+        }
+      }
+    }
+  }
+#else
+  Q_UNUSED(dim);
+  Q_UNUSED(tag);
+#endif
+  return {};
+}
+
+std::vector<int> GmshPanel::assembly_owner_entities(const QString& owner,
+                                                    int dim) const {
+  std::vector<int> result;
+#ifdef GMP_ENABLE_GMSH_GUI
+  if (owner.isEmpty() || dim < 0 || dim >= 3) {
+    return result;
+  }
+  std::vector<std::pair<int, int>> owner_groups;
+  gmsh::model::getPhysicalGroups(owner_groups, dim + 1);
+  std::set<int> unique;
+  for (const auto& owner_group : owner_groups) {
+    std::string owner_name;
+    gmsh::model::getPhysicalName(owner_group.first, owner_group.second,
+                                 owner_name);
+    if (QString::fromStdString(owner_name) != owner) {
+      continue;
+    }
+    std::vector<int> owner_top_entities;
+    gmsh::model::getEntitiesForPhysicalGroup(
+        owner_group.first, owner_group.second, owner_top_entities);
+    for (const int owner_tag : owner_top_entities) {
+      gmsh::vectorpair boundary;
+      gmsh::model::getBoundary({{dim + 1, owner_tag}}, boundary, false, false,
+                               false);
+      for (const auto& entity : boundary) {
+        if (entity.first == dim) {
+          unique.insert(std::abs(entity.second));
+        }
+      }
+    }
+  }
+  result.assign(unique.begin(), unique.end());
+#else
+  Q_UNUSED(owner);
+  Q_UNUSED(dim);
+#endif
+  return result;
+}
+
+void GmshPanel::forget_custom_physical_group(const QString& name) {
+  if (name.trimmed().isEmpty()) {
+    return;
+  }
+  QVariantList kept;
+  for (const QVariant& value : custom_physical_groups_) {
+    if (value.toMap().value("name").toString() != name) {
+      kept.append(value);
+    }
+  }
+  custom_physical_groups_ = kept;
+}
+
+void GmshPanel::remember_custom_physical_group(
+    const QString& name, int dim, const std::vector<int>& tags) {
+#ifdef GMP_ENABLE_GMSH_GUI
+  if (!model_selector_ ||
+      !model_selector_->currentText().startsWith("assembly: ") ||
+      name.trimmed().isEmpty() || tags.empty()) {
+    return;
+  }
+  QVariantList entities;
+  for (const int tag : tags) {
+    const QVariantList bbox = entity_bounding_box(dim, tag);
+    const QString owner = assembly_owner_for_entity(dim, tag);
+    if (bbox.size() != 6 || (dim == 2 && owner.isEmpty())) {
+      append_log(QString("Custom Physical Group '%1' was not persisted: "
+                         "an entity has no Assembly owner or geometry signature.")
+                     .arg(name));
+      return;
+    }
+    entities.append(
+        QVariantMap{{"tag", tag}, {"owner", owner}, {"bbox", bbox}});
+  }
+  forget_custom_physical_group(name);
+  custom_physical_groups_.append(
+      QVariantMap{{"version", 1},
+                  {"name", name.trimmed()},
+                  {"dim", dim},
+                  {"entities", entities}});
+  append_log(QString("Custom Physical Group saved: %1 (%2 entity/entities).")
+                 .arg(name)
+                 .arg(entities.size()));
+#else
+  Q_UNUSED(name);
+  Q_UNUSED(dim);
+  Q_UNUSED(tags);
+#endif
+}
+
+void GmshPanel::restore_custom_physical_groups() {
+#ifdef GMP_ENABLE_GMSH_GUI
+  for (const QVariant& value : custom_physical_groups_) {
+    const QVariantMap spec = value.toMap();
+    const QString name = spec.value("name").toString().trimmed();
+    const int dim = spec.value("dim", -1).toInt();
+    const QVariantList entity_specs = spec.value("entities").toList();
+    if (name.isEmpty() || dim < 0 || dim > 3 || entity_specs.isEmpty()) {
+      continue;
+    }
+
+    bool name_in_use = false;
+    std::vector<std::pair<int, int>> existing_groups;
+    gmsh::model::getPhysicalGroups(existing_groups, dim);
+    for (const auto& group : existing_groups) {
+      std::string existing_name;
+      gmsh::model::getPhysicalName(group.first, group.second, existing_name);
+      if (QString::fromStdString(existing_name) == name) {
+        name_in_use = true;
+        break;
+      }
+    }
+    if (name_in_use) {
+      append_log(QString("Custom Physical Group '%1' was not restored: "
+                         "the name is already in use.")
+                     .arg(name));
+      continue;
+    }
+
+    std::vector<int> resolved;
+    std::set<int> used;
+    bool complete = true;
+    for (const QVariant& entity_value : entity_specs) {
+      const QVariantMap entity_spec = entity_value.toMap();
+      const QVariantList expected = entity_spec.value("bbox").toList();
+      const QString owner = entity_spec.value("owner").toString();
+      const int original_tag = entity_spec.value("tag", -1).toInt();
+      if (expected.size() != 6) {
+        complete = false;
+        break;
+      }
+
+      std::vector<int> candidates = assembly_owner_entities(owner, dim);
+      if (owner.isEmpty()) {
+        std::vector<std::pair<int, int>> all;
+        gmsh::model::getEntities(all, dim);
+        for (const auto& entity : all) {
+          candidates.push_back(entity.second);
+        }
+      }
+      double scale = 1.0;
+      for (const QVariant& coordinate : expected) {
+        scale = std::max(scale, std::abs(coordinate.toDouble()));
+      }
+      const double tolerance = 1e-6 * scale;
+      auto distance = [this, dim, &expected](int candidate) {
+        const QVariantList actual = entity_bounding_box(dim, candidate);
+        if (actual.size() != 6) {
+          return std::numeric_limits<double>::infinity();
+        }
+        double maximum = 0.0;
+        for (int i = 0; i < 6; ++i) {
+          maximum = std::max(
+              maximum,
+              std::abs(actual.at(i).toDouble() - expected.at(i).toDouble()));
+        }
+        return maximum;
+      };
+
+      std::vector<std::pair<double, int>> matches;
+      for (const int candidate : candidates) {
+        if (used.count(candidate)) {
+          continue;
+        }
+        const double candidate_distance = distance(candidate);
+        if (candidate_distance <= tolerance) {
+          // tag 只用于距离完全相同时提供稳定排序；存在多个等价候选时
+          // 下方仍会拒绝，不以 tag 代替几何身份。
+          matches.push_back({candidate_distance, candidate});
+        }
+      }
+      std::sort(matches.begin(), matches.end(),
+                [original_tag](const auto& lhs, const auto& rhs) {
+                  if (lhs.first != rhs.first) {
+                    return lhs.first < rhs.first;
+                  }
+                  return lhs.second == original_tag &&
+                         rhs.second != original_tag;
+                });
+      int selected = -1;
+      if (matches.size() == 1 ||
+          (matches.size() > 1 &&
+           matches.at(1).first - matches.at(0).first > tolerance * 0.01)) {
+        selected = matches.front().second;
+      }
+      if (selected < 0) {
+        complete = false;
+        break;
+      }
+      used.insert(selected);
+      resolved.push_back(selected);
+    }
+
+    if (!complete || resolved.size() !=
+                         static_cast<std::size_t>(entity_specs.size())) {
+      append_log(QString("Custom Physical Group '%1' was not restored: "
+                         "the owning instance geometry has changed.")
+                     .arg(name));
+      continue;
+    }
+    const int group_tag = gmsh::model::addPhysicalGroup(dim, resolved);
+    gmsh::model::setPhysicalName(dim, group_tag, name.toStdString());
+    append_log(QString("Custom Physical Group restored: %1 (%2 entity/entities).")
+                   .arg(name)
+                   .arg(resolved.size()));
+  }
 #endif
 }
 
@@ -3580,8 +4159,36 @@ void GmshPanel::on_physical_group_add() {
     const std::string name = phys_group_name_->text().trimmed().toStdString();
     const int group_tag = gmsh::model::addPhysicalGroup(dim, tags, -1, name);
     gmsh::model::setPhysicalName(dim, group_tag, name);
+    remember_custom_physical_group(QString::fromStdString(name), dim, tags);
+    // 物理组定义已经变化；旧网格清单中的单元数不能继续展示。
+    physical_group_element_counts_.clear();
     update_physical_group_list();
-    append_log(QString("Physical group added: %1:%2").arg(dim).arg(group_tag));
+    select_physical_group(dim, group_tag);
+    // 新建组后保留该组为编辑目标，但舞台恢复完整模型；否则新增单面组
+    // 会立即把主舞台过滤成一个面，让用户误以为装配或颜色被破坏。
+    emit physical_group_selected(-1, -1);
+    emit physical_groups_changed();
+    QStringList member_ids;
+    for (const int member_tag : tags) {
+      member_ids << QString("%1:%2").arg(dim).arg(member_tag);
+    }
+    const QString group_key = QString("%1:%2").arg(dim).arg(group_tag);
+    const QString member_text = member_ids.join(", ");
+    append_log(QString("Physical group added: %1; members=%2")
+                   .arg(group_key, member_text));
+    if (phys_group_feedback_) {
+      const bool chinese =
+          gmp::l10n::current_language() == gmp::l10n::Language::Chinese;
+      phys_group_feedback_->setText(
+          chinese
+              ? QString::fromUtf8(
+                    "已添加物理组 %1；成员实体：%2。组标识与成员实体编号属于不同命名空间；请重新生成网格并保存项目。")
+                    .arg(group_key, member_text)
+              : QString(
+                    "Added physical group %1; member entities: %2. Group tags and entity tags use different namespaces. Regenerate the mesh and save the project.")
+                    .arg(group_key, member_text));
+      phys_group_feedback_->setStyleSheet("color: #16733f;");
+    }
   } catch (const std::exception& ex) {
     append_log(QString("Physical group add failed: %1").arg(ex.what()));
   }
@@ -3593,12 +4200,25 @@ void GmshPanel::on_physical_group_update() {
   append_log("Gmsh is not enabled in this build.");
   return;
 #else
+  auto show_feedback = [this](const QString& message, bool success) {
+    if (!phys_group_feedback_) {
+      return;
+    }
+    phys_group_feedback_->setText(message);
+    phys_group_feedback_->setStyleSheet(
+        success ? "color: #16733f;" : "color: #b42318;");
+  };
   try {
     ensure_gmsh();
-    const QString key = phys_group_list_->currentData().toString();
+    const QString key = selected_physical_group_key();
     const QStringList parts = key.split(":");
     if (parts.size() != 2) {
       append_log("Update: select a physical group.");
+      show_feedback(
+          gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+              ? QString::fromUtf8("更新失败：请先选择一个物理组。")
+              : QString("Update failed: select a physical group first."),
+          false);
       return;
     }
     bool ok_dim = false;
@@ -3607,22 +4227,60 @@ void GmshPanel::on_physical_group_update() {
     const int tag = parts[1].toInt(&ok_tag);
     if (!ok_dim || !ok_tag) {
       append_log("Update: invalid group selection.");
+      show_feedback(
+          gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+              ? QString::fromUtf8("更新失败：当前物理组标识无效。")
+              : QString("Update failed: the current group key is invalid."),
+          false);
       return;
     }
     QString error;
     if (!validate_physical_group_input(dim, tag, &error)) {
       append_log(QString("Physical group update rejected: %1").arg(error));
+      show_feedback(error, false);
       return;
     }
+    std::string previous_name_raw;
+    gmsh::model::getPhysicalName(dim, tag, previous_name_raw);
+    const QString previous_name = QString::fromStdString(previous_name_raw);
     const auto tags = resolve_entity_tags(dim, phys_group_entities_->text());
     gmsh::model::removePhysicalGroups({{dim, tag}});
     const std::string name = phys_group_name_->text().trimmed().toStdString();
     gmsh::model::addPhysicalGroup(dim, tags, tag, name);
     gmsh::model::setPhysicalName(dim, tag, name);
+    forget_custom_physical_group(previous_name);
+    remember_custom_physical_group(QString::fromStdString(name), dim, tags);
+    physical_group_element_counts_.clear();
     update_physical_group_list();
-    append_log(QString("Physical group updated: %1:%2").arg(dim).arg(tag));
+    // 与 Add 一致：保留编辑目标，结束操作后取消舞台单组过滤。
+    emit physical_group_selected(-1, -1);
+    emit physical_groups_changed();
+    QStringList member_ids;
+    for (const int member_tag : tags) {
+      member_ids << QString("%1:%2").arg(dim).arg(member_tag);
+    }
+    const QString group_key = QString("%1:%2").arg(dim).arg(tag);
+    const QString member_text = member_ids.join(", ");
+    append_log(QString("Physical group updated: %1; members=%2")
+                   .arg(group_key, member_text));
+    const bool chinese =
+        gmp::l10n::current_language() == gmp::l10n::Language::Chinese;
+    show_feedback(
+        chinese
+            ? QString::fromUtf8(
+                  "已更新物理组 %1；成员实体：%2。组标识保持不变；请重新生成网格以刷新单元数，并保存项目以写入磁盘。")
+                  .arg(group_key, member_text)
+            : QString(
+                  "Updated physical group %1; member entities: %2. The group tag stays unchanged. Regenerate the mesh to refresh element counts, then save the project to write it to disk.")
+                  .arg(group_key, member_text),
+        true);
   } catch (const std::exception& ex) {
     append_log(QString("Physical group update failed: %1").arg(ex.what()));
+    show_feedback(
+        gmp::l10n::current_language() == gmp::l10n::Language::Chinese
+            ? QString::fromUtf8("更新失败：%1").arg(QString::fromUtf8(ex.what()))
+            : QString("Update failed: %1").arg(QString::fromUtf8(ex.what())),
+        false);
   }
 #endif
 }
@@ -3634,7 +4292,7 @@ void GmshPanel::on_physical_group_delete() {
 #else
   try {
     ensure_gmsh();
-    const QString key = phys_group_list_->currentData().toString();
+    const QString key = selected_physical_group_key();
     const QStringList parts = key.split(":");
     if (parts.size() != 2) {
       append_log("Delete: select a physical group.");
@@ -3648,11 +4306,30 @@ void GmshPanel::on_physical_group_delete() {
       append_log("Delete: invalid group selection.");
       return;
     }
+    std::string name_raw;
+    gmsh::model::getPhysicalName(dim, tag, name_raw);
     gmsh::model::removePhysicalGroups({{dim, tag}});
+    forget_custom_physical_group(QString::fromStdString(name_raw));
+    physical_group_element_counts_.clear();
     update_physical_group_list();
+    emit physical_group_selected(-1, -1);
+    emit physical_groups_changed();
     phys_group_name_->clear();
     phys_group_entities_->clear();
     append_log(QString("Physical group deleted: %1:%2").arg(dim).arg(tag));
+    if (phys_group_feedback_) {
+      const bool chinese =
+          gmp::l10n::current_language() == gmp::l10n::Language::Chinese;
+      phys_group_feedback_->setText(
+          chinese
+              ? QString::fromUtf8("已删除物理组 %1:%2；舞台已恢复完整模型。")
+                    .arg(dim)
+                    .arg(tag)
+              : QString("Deleted physical group %1:%2; restored the full stage.")
+                    .arg(dim)
+                    .arg(tag));
+      phys_group_feedback_->setStyleSheet("color: #16733f;");
+    }
   } catch (const std::exception& ex) {
     append_log(QString("Physical group delete failed: %1").arg(ex.what()));
   }
@@ -3661,6 +4338,12 @@ void GmshPanel::on_physical_group_delete() {
 
 void GmshPanel::on_physical_group_refresh() {
   update_physical_group_list();
+  // Refresh 只更新物理组清单和当前编辑字段，不应把当前编辑目标再次解释
+  // 为舞台筛选条件。否则生成网格后点击刷新，会把完整装配重新过滤为
+  // 单个二维组，实例颜色也随之退化成单色。
+  emit entity_preview_requested(-1, -1, 0.0, 0.0, 0.0);
+  emit physical_group_selected(-1, -1);
+  append_log("Physical group list refreshed; stage remains on the full model.");
 }
 
 void GmshPanel::on_field_apply() {
@@ -3835,24 +4518,31 @@ void GmshPanel::update_physical_group_list() {
   }
   if (!gmsh_ready_) {
     phys_group_list_->clear();
-    phys_group_list_->addItem("New", "");
+    phys_group_list_->addItem(l10n::tr("New"), "");
     return;
   }
   const QString current = phys_group_list_->currentData().toString();
   phys_group_list_->blockSignals(true);
   phys_group_list_->clear();
-  phys_group_list_->addItem("New", "");
+  phys_group_list_->addItem(l10n::tr("New"), "");
   std::vector<std::pair<int, int>> groups;
   gmsh::model::getPhysicalGroups(groups);
   for (const auto& g : groups) {
     std::string name;
     gmsh::model::getPhysicalName(g.first, g.second, name);
+    const bool chinese =
+        gmp::l10n::current_language() == gmp::l10n::Language::Chinese;
+    const QString key_text = QString("%1:%2").arg(g.first).arg(g.second);
     const QString label = name.empty()
-                              ? QString("%1:%2").arg(g.first).arg(g.second)
-                              : QString("%1:%2 %3")
-                                    .arg(g.first)
-                                    .arg(g.second)
-                                    .arg(QString::fromStdString(name));
+                              ? (chinese ? QString::fromUtf8("组 %1").arg(key_text)
+                                         : QString("Group %1").arg(key_text))
+                              : (chinese
+                                     ? QString::fromUtf8("组 %1 · %2")
+                                           .arg(key_text,
+                                                QString::fromStdString(name))
+                                     : QString("Group %1 · %2")
+                                           .arg(key_text,
+                                                QString::fromStdString(name)));
     const QString key = QString("%1:%2").arg(g.first).arg(g.second);
     phys_group_list_->addItem(label, key);
   }
@@ -3862,6 +4552,9 @@ void GmshPanel::update_physical_group_list() {
   }
   phys_group_list_->setCurrentIndex(idx);
   phys_group_list_->blockSignals(false);
+  // 当当前组已不存在或 Assembly 重建后回到 New 时，同步清空旧组遗留
+  // 的名称/实体文本；否则打开拾取器会把整实例 surface 误当成新组默认值。
+  on_physical_group_selected(idx);
 
   QStringList boundary_names;
   std::vector<std::pair<int, int>> bnd_groups;
@@ -3895,7 +4588,7 @@ void GmshPanel::update_physical_group_list() {
 #else
   if (phys_group_list_) {
     phys_group_list_->clear();
-    phys_group_list_->addItem("New", "");
+    phys_group_list_->addItem(l10n::tr("New"), "");
   }
 #endif
 }
@@ -3940,6 +4633,22 @@ void GmshPanel::update_physical_group_table() {
         elem_count += tags.size();
       }
     }
+    // 统计表表达的是最近一次正式生成网格的单元数，而当前 Gmsh 模型
+    // 可能只是 OCC 几何或轻量 2D 预览。存在 mesh_snapshot 时必须优先
+    // 使用其计数；没有清单时才展示当前模型的即时值。
+    const QString group_name = QString::fromStdString(name).trimmed();
+    const QString name_key =
+        QString("name:%1:%2").arg(g.first).arg(group_name);
+    const QString tag_key =
+        QString("tag:%1:%2").arg(g.first).arg(g.second);
+    if (!group_name.isEmpty() &&
+        physical_group_element_counts_.contains(name_key)) {
+      elem_count = static_cast<std::size_t>(
+          physical_group_element_counts_.value(name_key));
+    } else if (physical_group_element_counts_.contains(tag_key)) {
+      elem_count = static_cast<std::size_t>(
+          physical_group_element_counts_.value(tag_key));
+    }
 
     const int row = static_cast<int>(i);
     phys_group_table_->setItem(row, 0,
@@ -3950,10 +4659,16 @@ void GmshPanel::update_physical_group_table() {
                                   ? QString("(unnamed)")
                                   : QString::fromStdString(name);
     phys_group_table_->setItem(row, 2, new QTableWidgetItem(name_text));
+    QStringList member_ids;
+    for (const int entity_tag : ent_tags) {
+      member_ids << QString("%1:%2").arg(g.first).arg(entity_tag);
+    }
     phys_group_table_->setItem(
-        row, 3, new QTableWidgetItem(QString::number(ent_tags.size())));
+        row, 3, new QTableWidgetItem(member_ids.join(", ")));
     phys_group_table_->setItem(
-        row, 4, new QTableWidgetItem(QString::number(elem_count)));
+        row, 4, new QTableWidgetItem(QString::number(ent_tags.size())));
+    phys_group_table_->setItem(
+        row, 5, new QTableWidgetItem(QString::number(elem_count)));
 
     const QString key = QString("%1:%2").arg(g.first).arg(g.second);
     if (!current.isEmpty() && key == current) {
@@ -3963,6 +4678,9 @@ void GmshPanel::update_physical_group_table() {
 
   if (selected_row >= 0) {
     phys_group_table_->setCurrentCell(selected_row, 0);
+  } else {
+    phys_group_table_->clearSelection();
+    phys_group_table_->setCurrentItem(nullptr);
   }
   phys_group_table_->resizeColumnsToContents();
   phys_group_table_->blockSignals(false);
@@ -4310,7 +5028,7 @@ QString GmshPanel::pick_entities_dialog(int dim_filter,
       chinese && title == "Select Physical Group Entities"
           ? QString::fromUtf8("选择物理组实体")
           : title);
-  dialog.resize(760, 460);
+  dialog.resize(1080, 520);
   auto* layout = new QVBoxLayout(&dialog);
 
   QString source;
@@ -4338,21 +5056,46 @@ QString GmshPanel::pick_entities_dialog(int dim_filter,
     help_text += chinese ? QString::fromUtf8(" 当前来源：%1").arg(source)
                          : QString(" Current source: %1").arg(source);
   }
+  help_text += chinese
+                   ? QString::fromUtf8(
+                         " 选择一行后，主舞台会自动转向并用黄色即时高亮对应实体；"
+                         "选择窗口打开期间仍可直接在主舞台旋转、平移和缩放。")
+                   : QString(
+                         " Select a row to rotate the main stage and preview "
+                         "the entity in yellow; the main stage remains "
+                         "interactive while this window is open.");
   auto* help = new QLabel(help_text, &dialog);
   help->setObjectName("entityPickerHelp");
   help->setWordWrap(true);
   layout->addWidget(help);
 
-  auto* list = new QListWidget();
+  auto* list = new QTreeWidget();
   list->setObjectName("entityPickerList");
-  list->setSelectionMode(QAbstractItemView::NoSelection);
+  list->setColumnCount(3);
+  list->setHeaderLabels(
+      chinese
+          ? QStringList{QString::fromUtf8("实体"),
+                        QString::fromUtf8("所属 Assembly 实例"),
+                        QString::fromUtf8("几何范围")}
+          : QStringList{"Entity", "Assembly Instance", "Bounds"});
+  list->setRootIsDecorated(false);
+  list->setUniformRowHeights(true);
+  list->setSelectionMode(QAbstractItemView::SingleSelection);
+  list->setSelectionBehavior(QAbstractItemView::SelectRows);
+  list->header()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+  list->header()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+  list->header()->setSectionResizeMode(2, QHeaderView::Stretch);
   layout->addWidget(list, 1);
 
   QSet<QString> preselect;
   const auto tokens = parse_dim_tag_tokens(current_text);
-  const auto pairs = resolve_dim_tags(dim_filter, tokens);
-  for (const auto& p : pairs) {
-    preselect.insert(QString("%1:%2").arg(p.first).arg(p.second));
+  // resolve_dim_tags() 的空输入语义用于批处理命令，表示“当前维度全部
+  // 实体”；选择器的空输入必须表示“默认不勾选”，两者不可混用。
+  if (!tokens.empty()) {
+    const auto pairs = resolve_dim_tags(dim_filter, tokens);
+    for (const auto& p : pairs) {
+      preselect.insert(QString("%1:%2").arg(p.first).arg(p.second));
+    }
   }
 
   std::vector<std::pair<int, int>> entities;
@@ -4389,25 +5132,61 @@ QString GmshPanel::pick_entities_dialog(int dim_filter,
                         number(zmin), number(zmax));
     } catch (...) {
     }
-    QString label = chinese
-                        ? QString::fromUtf8("%1 %2（Gmsh 标识 %3）")
-                              .arg(type)
-                              .arg(e.second)
-                              .arg(key)
-                        : QString("%1 %2 (Gmsh ID %3)")
-                              .arg(type)
-                              .arg(e.second)
-                              .arg(key);
-    if (!bounds.isEmpty()) {
-      label += chinese ? QString::fromUtf8(" · 范围 %1").arg(bounds)
-                       : QString(" · Bounds %1").arg(bounds);
-    }
-    auto* item = new QListWidgetItem(label, list);
-    item->setData(Qt::UserRole, key);
-    item->setToolTip(help_text + "\n" + label);
+    const QString label = chinese
+                              ? QString::fromUtf8("%1 %2（%3）")
+                                    .arg(type)
+                                    .arg(e.second)
+                                    .arg(key)
+                              : QString("%1 %2 (%3)")
+                                    .arg(type)
+                                    .arg(e.second)
+                                    .arg(key);
+    const QString owner = assembly_owner_for_entity(e.first, e.second);
+    const QVariantList preview_direction =
+        entity_preview_direction(e.first, e.second, owner);
+    auto* item = new QTreeWidgetItem(list);
+    item->setText(0, label);
+    item->setText(1, owner.isEmpty() ? QString::fromUtf8("—") : owner);
+    item->setText(2, bounds);
+    item->setData(0, Qt::UserRole, key);
+    item->setData(0, Qt::UserRole + 1, preview_direction);
     item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
-    item->setCheckState(preselect.contains(key) ? Qt::Checked
-                                                : Qt::Unchecked);
+    item->setCheckState(0, preselect.contains(key) ? Qt::Checked
+                                                   : Qt::Unchecked);
+  }
+
+  connect(list, &QTreeWidget::currentItemChanged, &dialog,
+          [this](QTreeWidgetItem* current) {
+            if (!current) {
+              emit entity_preview_requested(-1, -1, 0.0, 0.0, 0.0);
+              return;
+            }
+            const QStringList parts =
+                current->data(0, Qt::UserRole).toString().split(":");
+            bool ok_dim = false;
+            bool ok_tag = false;
+            const int dim = parts.value(0).toInt(&ok_dim);
+            const int tag = parts.value(1).toInt(&ok_tag);
+            const QVariantList direction =
+                current->data(0, Qt::UserRole + 1).toList();
+            emit entity_preview_requested(
+                ok_dim && ok_tag ? dim : -1,
+                ok_dim && ok_tag ? tag : -1,
+                direction.value(0).toDouble(), direction.value(1).toDouble(),
+                direction.value(2).toDouble());
+          });
+  QTreeWidgetItem* initial_item = nullptr;
+  for (int row = 0; row < list->topLevelItemCount(); ++row) {
+    if (list->topLevelItem(row)->checkState(0) == Qt::Checked) {
+      initial_item = list->topLevelItem(row);
+      break;
+    }
+  }
+  if (!initial_item && list->topLevelItemCount() > 0) {
+    initial_item = list->topLevelItem(0);
+  }
+  if (initial_item) {
+    list->setCurrentItem(initial_item);
   }
 
   auto* buttons = new QDialogButtonBox(QDialogButtonBox::Ok |
@@ -4428,29 +5207,43 @@ QString GmshPanel::pick_entities_dialog(int dim_filter,
   layout->addWidget(buttons);
 
   connect(select_all, &QPushButton::clicked, list, [list]() {
-    for (int i = 0; i < list->count(); ++i) {
-      list->item(i)->setCheckState(Qt::Checked);
+    for (int i = 0; i < list->topLevelItemCount(); ++i) {
+      list->topLevelItem(i)->setCheckState(0, Qt::Checked);
     }
   });
   connect(clear_all, &QPushButton::clicked, list, [list]() {
-    for (int i = 0; i < list->count(); ++i) {
-      list->item(i)->setCheckState(Qt::Unchecked);
+    for (int i = 0; i < list->topLevelItemCount(); ++i) {
+      list->topLevelItem(i)->setCheckState(0, Qt::Unchecked);
     }
   });
   connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
   connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
 
-  if (dialog.exec() != QDialog::Accepted) {
+  // QDialog::exec() 会把父窗口置为不可用，导致实体选择期间无法手工检查
+  // 主舞台。这里使用非模态工具窗并只在当前调用栈内等待 finished 信号：
+  // 选择结果仍可同步返回，同时主窗口继续接收鼠标事件。
+  dialog.setWindowFlag(Qt::Tool, true);
+  dialog.setWindowModality(Qt::NonModal);
+  dialog.setModal(false);
+  QEventLoop picker_loop;
+  connect(&dialog, &QDialog::finished, &picker_loop, &QEventLoop::quit);
+  dialog.show();
+  dialog.raise();
+  dialog.activateWindow();
+  picker_loop.exec(QEventLoop::AllEvents);
+  const int result = dialog.result();
+  emit entity_preview_requested(-1, -1, 0.0, 0.0, 0.0);
+  if (result != QDialog::Accepted) {
     return current_text;
   }
 
   QStringList selected;
-  for (int i = 0; i < list->count(); ++i) {
-    auto* item = list->item(i);
-    if (item->checkState() != Qt::Checked) {
+  for (int i = 0; i < list->topLevelItemCount(); ++i) {
+    auto* item = list->topLevelItem(i);
+    if (item->checkState(0) != Qt::Checked) {
       continue;
     }
-    const QString key = item->data(Qt::UserRole).toString();
+    const QString key = item->data(0, Qt::UserRole).toString();
     selected << key;
   }
   return selected.join(", ");

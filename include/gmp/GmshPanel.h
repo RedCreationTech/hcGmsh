@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <QHash>
 #include <QString>
 #include <QStringList>
 #include <QVariantMap>
@@ -32,6 +33,9 @@ class GmshPanel : public QWidget {
   void set_mesh_generation_dim(int dim);
   QVariantMap gmsh_settings() const;
   void apply_gmsh_settings(const QVariantMap& settings);
+  // 注入已生成/已保存网格的 Physical Group 清单。几何模型本身不持有
+  // 子进程生成的离散单元，统计表需要以该清单恢复稳定的单元数。
+  void set_physical_group_manifest(const QVariantMap& manifest);
   void select_physical_group(int dim, int tag);
   void apply_entity_pick(int dim, int tag);
   bool import_geometry(const QString& path, bool auto_mesh);
@@ -48,6 +52,8 @@ class GmshPanel : public QWidget {
   // translation, Euler rotation (degrees), scale, visibility, and order.
   void set_assembly_instances(const QVariantList& instances);
   bool build_assembly(QString* error = nullptr);
+  // 新建项目时清除上一个项目持有的 Assembly 专用 Physical Group 定义。
+  void reset_project_physical_groups();
   void set_mesh_output_path(const QString& path);
   // 最近一次几何导入的失败原因；成功或尚未导入时为空。
   QString last_import_error() const { return last_import_error_; }
@@ -65,6 +71,11 @@ class GmshPanel : public QWidget {
   void boundary_groups(const QStringList& names);
   void volume_groups(const QStringList& names);
   void physical_group_selected(int dim, int tag);
+  // 实体选择对话框请求主舞台临时高亮；(-1, -1) 表示清除预览。
+  void entity_preview_requested(int dim, int tag, double view_x,
+                                double view_y, double view_z);
+  // 用户修改 Physical Group 后通知项目层更新未保存状态。
+  void physical_groups_changed();
 
  private slots:
   void on_open_geometry();
@@ -98,6 +109,7 @@ class GmshPanel : public QWidget {
   void update_entity_list();
   void update_physical_group_list();
   void update_physical_group_table();
+  QString selected_physical_group_key() const;
   void update_field_list();
   void update_geometry_controls();
   void update_primitive_controls();
@@ -112,6 +124,18 @@ class GmshPanel : public QWidget {
   // error（按当前语言中/英），调用方不得再触碰 gmsh 状态。
   bool validate_physical_group_input(int dim, int exclude_tag,
                                      QString* error) const;
+  // Phase 5 / §4.2：Assembly 专用作用面组以“所属实例 + 几何签名”持久化，
+  // 重建后不依赖可能变化的裸 Gmsh tag。
+  void remember_custom_physical_group(const QString& name, int dim,
+                                      const std::vector<int>& tags);
+  void forget_custom_physical_group(const QString& name);
+  void restore_custom_physical_groups();
+  QString assembly_owner_for_entity(int dim, int tag) const;
+  std::vector<int> assembly_owner_entities(const QString& owner,
+                                           int dim) const;
+  QVariantList entity_bounding_box(int dim, int tag) const;
+  QVariantList entity_preview_direction(int dim, int tag,
+                                        const QString& owner) const;
   void populate_transform_entity_templates(int dim_filter);
   void populate_boolean_entity_templates(int dim_filter);
   void refresh_occ_entity_template_lists();
@@ -137,6 +161,8 @@ class GmshPanel : public QWidget {
   // 临时切换 Gmsh current model，正式生成前后必须按名称恢复。
   QString external_model_name_;
   QVariantList assembly_instances_;
+  QVariantList custom_physical_groups_;
+  QHash<QString, int> physical_group_element_counts_;
 
   QComboBox* model_selector_ = nullptr;
   QLineEdit* geo_path_ = nullptr;
@@ -206,6 +232,7 @@ class GmshPanel : public QWidget {
   QPushButton* phys_group_add_ = nullptr;
   QPushButton* phys_group_update_ = nullptr;
   QPushButton* phys_group_delete_ = nullptr;
+  QLabel* phys_group_feedback_ = nullptr;
   QTableWidget* phys_group_table_ = nullptr;
 
   QComboBox* field_dim_ = nullptr;

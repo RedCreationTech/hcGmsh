@@ -131,6 +131,10 @@ class VtkViewer : public QWidget {
   void set_mesh_file_from_current_model(const QString& path);
   void set_mesh_group_filter(int dim, int tag);
   void set_mesh_entity_filter(int dim, int tag);
+  // 仅叠加高亮指定实体，不改变主网格过滤器；负值清除临时预览。
+  void preview_mesh_entity(int dim, int tag, double view_x = 0.0,
+                           double view_y = 0.0, double view_z = 0.0);
+  bool is_mesh_entity_previewed(int dim, int tag) const;
   QVariantMap viewer_settings() const;
   void apply_viewer_settings(const QVariantMap& settings);
   QString plot_snapshot_text() const;
@@ -337,6 +341,12 @@ signals:
   int selected_cell_id_ = -1;
   int selected_entity_dim_ = -1;
   int selected_entity_tag_ = -1;
+  int preview_entity_dim_ = -1;
+  int preview_entity_tag_ = -1;
+  bool preview_visual_active_ = false;
+  int preview_saved_scalar_visibility_ = 1;
+  bool preview_saved_scalar_bar_visibility_ = false;
+  double preview_saved_actor_color_[3] = {1.0, 1.0, 1.0};
 
   vtkSmartPointer<vtkGenericOpenGLRenderWindow> render_window_;
   vtkSmartPointer<vtkRenderer> renderer_;

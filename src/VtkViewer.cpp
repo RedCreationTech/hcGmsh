@@ -987,6 +987,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   connect(pick_clear_, &QPushButton::clicked, this, [this]() {
     selected_group_dim_ = -1;
     selected_group_id_ = -1;
+    selected_entity_dim_ = -1;
+    selected_entity_tag_ = -1;
     selected_cell_id_ = -1;
     update_selection_pipeline();
     if (pick_info_) {
@@ -1095,6 +1097,9 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
     selected_group_id_ = -1;
     selected_entity_dim_ = -1;
     selected_entity_tag_ = -1;
+    preview_entity_dim_ = -1;
+    preview_entity_tag_ = -1;
+    preview_visual_active_ = false;
     selected_cell_id_ = -1;
     update_mesh_pipeline();
   });
@@ -1410,6 +1415,9 @@ void VtkViewer::clear_stage_data() {
   selected_cell_id_ = -1;
   selected_entity_dim_ = -1;
   selected_entity_tag_ = -1;
+  preview_entity_dim_ = -1;
+  preview_entity_tag_ = -1;
+  preview_visual_active_ = false;
 
   for (vtkActor* actor : {actor_.GetPointer(), nodes_actor_.GetPointer(),
                           outline_actor_.GetPointer(),
@@ -1624,6 +1632,9 @@ void VtkViewer::set_mesh_file_impl(const QString& path,
   selected_group_id_ = -1;
   selected_entity_dim_ = -1;
   selected_entity_tag_ = -1;
+  preview_entity_dim_ = -1;
+  preview_entity_tag_ = -1;
+  preview_visual_active_ = false;
   if (mesh_entity_) {
     mesh_entity_->blockSignals(true);
     mesh_entity_->setCurrentIndex(0);
@@ -1657,11 +1668,12 @@ void VtkViewer::set_mesh_group_filter(int dim, int tag) {
   if (!mesh_group_ || mesh_group_->count() == 0) {
     return;
   }
+  const bool clear_filter = dim < 0 || tag < 0;
   selected_group_dim_ = dim;
   selected_group_id_ = tag;
   selected_cell_id_ = -1;
   int target_index = 0;
-  if (dim >= 0 && tag >= 0) {
+  if (!clear_filter) {
     for (size_t i = 0; i < mesh_groups_.size(); ++i) {
       const auto& g = mesh_groups_[i];
       if (g.dim == dim && g.id == tag) {
@@ -1676,6 +1688,50 @@ void VtkViewer::set_mesh_group_filter(int dim, int tag) {
   mesh_group_->blockSignals(true);
   mesh_group_->setCurrentIndex(target_index);
   mesh_group_->blockSignals(false);
+
+  if (clear_filter) {
+    // 物理组筛选会把维度下拉框同步到该组的维度。仅把 Group 切回 All
+    // 会因此停留在 2D，并把 contact/fixed/load 等边界组按 phys_id
+    // 覆盖显示为红绿拼色。清除筛选时同时回到网格最高维，并清掉独立的
+    // entity/cell 选择，恢复进入筛选前的完整实体视图。
+    selected_group_dim_ = -1;
+    selected_group_id_ = -1;
+    selected_entity_dim_ = -1;
+    selected_entity_tag_ = -1;
+    selected_cell_id_ = -1;
+    if (mesh_entity_) {
+      const int all_entities = mesh_entity_->findData(-1);
+      if (all_entities >= 0) {
+        mesh_entity_->blockSignals(true);
+        mesh_entity_->setCurrentIndex(all_entities);
+        mesh_entity_->blockSignals(false);
+      }
+    }
+    int highest_dim = -1;
+    // 以当前网格实际包含的单元为准。装配轻量预览虽保留 3D 几何实体，
+    // 但只生成 2D 单元；若按几何实体维度恢复会把舞台过滤成空白。
+    if (mesh_grid_ && mesh_grid_->GetCellData()) {
+      if (auto* dims = vtkIntArray::SafeDownCast(
+              mesh_grid_->GetCellData()->GetArray("phys_dim"))) {
+        for (vtkIdType cell = 0; cell < dims->GetNumberOfTuples(); ++cell) {
+          highest_dim = std::max(highest_dim, dims->GetValue(cell));
+        }
+      }
+    }
+    if (highest_dim < 0) {
+      for (const auto& entity : mesh_entities_) {
+        highest_dim = std::max(highest_dim, entity.dim);
+      }
+    }
+    if (mesh_dim_) {
+      const int highest_index = mesh_dim_->findData(highest_dim);
+      if (highest_index >= 0) {
+        mesh_dim_->blockSignals(true);
+        mesh_dim_->setCurrentIndex(highest_index);
+        mesh_dim_->blockSignals(false);
+      }
+    }
+  }
   update_mesh_pipeline();
   update_selection_pipeline();
 #else
@@ -1713,6 +1769,115 @@ void VtkViewer::set_mesh_entity_filter(int dim, int tag) {
 #else
   Q_UNUSED(dim);
   Q_UNUSED(tag);
+#endif
+}
+
+void VtkViewer::preview_mesh_entity(int dim, int tag, double view_x,
+                                    double view_y, double view_z) {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  const bool activate = dim >= 0 && tag >= 0;
+  if (activate && !preview_visual_active_) {
+    preview_saved_scalar_visibility_ =
+        mapper_ ? mapper_->GetScalarVisibility() : 1;
+    preview_saved_scalar_bar_visibility_ =
+        scalar_bar_ && scalar_bar_->GetVisibility() != 0;
+    if (actor_) {
+      actor_->GetProperty()->GetColor(preview_saved_actor_color_);
+    }
+    preview_visual_active_ = true;
+  }
+  preview_entity_dim_ = activate ? dim : -1;
+  preview_entity_tag_ = activate ? tag : -1;
+
+  if (activate) {
+    // 预览时把完整装配降为中性线框，候选面保持不透明黄色；这样内部
+    // 接触面不会继续被红/蓝实体着色淹没。
+    if (mapper_) {
+      mapper_->ScalarVisibilityOff();
+    }
+    if (actor_) {
+      actor_->SetVisibility(true);
+      actor_->GetProperty()->SetRepresentationToWireframe();
+      actor_->GetProperty()->SetEdgeVisibility(0);
+      actor_->GetProperty()->SetColor(0.42, 0.46, 0.52);
+      actor_->GetProperty()->SetOpacity(0.28);
+    }
+    if (scalar_bar_) {
+      scalar_bar_->SetVisibility(false);
+    }
+  } else if (preview_visual_active_) {
+    if (mapper_) {
+      mapper_->SetScalarVisibility(preview_saved_scalar_visibility_);
+    }
+    if (actor_) {
+      actor_->GetProperty()->SetColor(preview_saved_actor_color_);
+    }
+    preview_visual_active_ = false;
+    apply_mesh_visuals();
+    if (scalar_bar_) {
+      scalar_bar_->SetVisibility(preview_saved_scalar_bar_visibility_);
+    }
+  }
+
+  update_selection_pipeline();
+  if (activate && renderer_ && mesh_select_geom_) {
+    mesh_select_geom_->Update();
+    auto* selected = mesh_select_geom_->GetOutput();
+    double bounds[6] = {0, 0, 0, 0, 0, 0};
+    if (selected) {
+      selected->GetBounds(bounds);
+    }
+    const bool valid_bounds =
+        std::isfinite(bounds[0]) && std::isfinite(bounds[1]) &&
+        std::isfinite(bounds[2]) && std::isfinite(bounds[3]) &&
+        std::isfinite(bounds[4]) && std::isfinite(bounds[5]) &&
+        bounds[1] >= bounds[0] && bounds[3] >= bounds[2] &&
+        bounds[5] >= bounds[4];
+    const double norm =
+        std::sqrt(view_x * view_x + view_y * view_y + view_z * view_z);
+    if (valid_bounds && norm > 1e-12) {
+      const double center[3] = {0.5 * (bounds[0] + bounds[1]),
+                                0.5 * (bounds[2] + bounds[3]),
+                                0.5 * (bounds[4] + bounds[5])};
+      const double dx = mesh_bounds_[1] - mesh_bounds_[0];
+      const double dy = mesh_bounds_[3] - mesh_bounds_[2];
+      const double dz = mesh_bounds_[5] - mesh_bounds_[4];
+      const double distance =
+          std::max(1.0, 1.35 * std::sqrt(dx * dx + dy * dy + dz * dz));
+      vtkCamera* camera = renderer_->GetActiveCamera();
+      camera->SetFocalPoint(center);
+      camera->SetPosition(center[0] + distance * view_x / norm,
+                          center[1] + distance * view_y / norm,
+                          center[2] + distance * view_z / norm);
+      if (std::abs(view_z / norm) > 0.95) {
+        camera->SetViewUp(0.0, 1.0, 0.0);
+      } else {
+        camera->SetViewUp(0.0, 0.0, 1.0);
+      }
+      renderer_->ResetCameraClippingRange();
+    }
+  }
+  // 清除预览时 update_selection_pipeline() 可能走隐藏分支；这里补一次
+  // 渲染，确保黄色叠加立即消失并恢复原有舞台选择状态。
+  if (render_window_) {
+    render_window_->Render();
+  }
+#else
+  Q_UNUSED(dim);
+  Q_UNUSED(tag);
+  Q_UNUSED(view_x);
+  Q_UNUSED(view_y);
+  Q_UNUSED(view_z);
+#endif
+}
+
+bool VtkViewer::is_mesh_entity_previewed(int dim, int tag) const {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  return preview_entity_dim_ == dim && preview_entity_tag_ == tag;
+#else
+  Q_UNUSED(dim);
+  Q_UNUSED(tag);
+  return false;
 #endif
 }
 
@@ -2221,6 +2386,11 @@ void VtkViewer::on_array_changed(int index) {
     mapper_->SelectColorArray(name.toUtf8().constData());
     mapper_->ScalarVisibilityOn();
     if (auto_range_->isChecked()) {
+      // 两个端点必须作为一个范围原子更新。逐个 setValue() 会分别触发
+      // on_apply_range()；当新最小值大于旧最大值时，VTK 会短暂收到
+      // 反向区间（例如 [2, 0]），造成报错和一帧错误的单色显示。
+      const QSignalBlocker min_blocker(range_min_);
+      const QSignalBlocker max_blocker(range_max_);
       range_min_->setValue(range[0]);
       range_max_->setValue(range[1]);
     }
@@ -4105,7 +4275,9 @@ void VtkViewer::update_selection_pipeline() {
   if (!renderer_ || !mesh_grid_) {
     return;
   }
-  if (!pick_enable_ || !pick_enable_->isChecked()) {
+  const bool entity_preview =
+      preview_entity_dim_ >= 0 && preview_entity_tag_ >= 0;
+  if (!entity_preview && (!pick_enable_ || !pick_enable_->isChecked())) {
     if (mesh_select_actor_) {
       mesh_select_actor_->SetVisibility(false);
     }
@@ -4118,14 +4290,19 @@ void VtkViewer::update_selection_pipeline() {
     return;
   }
 
-  const int mode = pick_mode_ ? pick_mode_->currentData().toInt() : 0;
+  const int mode =
+      entity_preview ? 1 : (pick_mode_ ? pick_mode_->currentData().toInt() : 0);
+  const int entity_dim =
+      entity_preview ? preview_entity_dim_ : selected_entity_dim_;
+  const int entity_tag =
+      entity_preview ? preview_entity_tag_ : selected_entity_tag_;
   if (mode == 2 && selected_cell_id_ < 0) {
     if (mesh_select_actor_) {
       mesh_select_actor_->SetVisibility(false);
     }
     return;
   }
-  if (mode == 1 && (selected_entity_tag_ < 0 || selected_entity_dim_ < 0)) {
+  if (mode == 1 && (entity_tag < 0 || entity_dim < 0)) {
     if (mesh_select_actor_) {
       mesh_select_actor_->SetVisibility(false);
     }
@@ -4158,11 +4335,15 @@ void VtkViewer::update_selection_pipeline() {
   }
   if (!mesh_select_mapper_) {
     mesh_select_mapper_ = vtkSmartPointer<vtkDataSetMapper>::New();
+    mesh_select_mapper_->ScalarVisibilityOff();
   }
   if (!mesh_select_actor_) {
     mesh_select_actor_ = vtkSmartPointer<vtkActor>::New();
     mesh_select_actor_->SetMapper(mesh_select_mapper_);
-    mesh_select_actor_->GetProperty()->SetColor(1.0, 0.9, 0.2);
+    mesh_select_actor_->GetProperty()->SetColor(1.0, 0.78, 0.05);
+    mesh_select_actor_->GetProperty()->SetEdgeColor(0.20, 0.14, 0.0);
+    mesh_select_actor_->GetProperty()->SetAmbient(1.0);
+    mesh_select_actor_->GetProperty()->SetDiffuse(0.0);
     mesh_select_actor_->GetProperty()->SetLineWidth(2.0);
     mesh_select_actor_->GetProperty()->SetEdgeVisibility(1);
     mesh_select_actor_->GetProperty()->SetRepresentationToSurface();
@@ -4181,14 +4362,14 @@ void VtkViewer::update_selection_pipeline() {
     mesh_select_entity_dim_threshold_->SetInputData(mesh_grid_);
     mesh_select_entity_dim_threshold_->SetInputArrayToProcess(
         0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, "entity_dim");
-    mesh_select_entity_dim_threshold_->SetLowerThreshold(selected_entity_dim_);
-    mesh_select_entity_dim_threshold_->SetUpperThreshold(selected_entity_dim_);
+    mesh_select_entity_dim_threshold_->SetLowerThreshold(entity_dim);
+    mesh_select_entity_dim_threshold_->SetUpperThreshold(entity_dim);
     mesh_select_entity_tag_threshold_->SetInputConnection(
         mesh_select_entity_dim_threshold_->GetOutputPort());
     mesh_select_entity_tag_threshold_->SetInputArrayToProcess(
         0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, "entity_tag");
-    mesh_select_entity_tag_threshold_->SetLowerThreshold(selected_entity_tag_);
-    mesh_select_entity_tag_threshold_->SetUpperThreshold(selected_entity_tag_);
+    mesh_select_entity_tag_threshold_->SetLowerThreshold(entity_tag);
+    mesh_select_entity_tag_threshold_->SetUpperThreshold(entity_tag);
     current = mesh_select_entity_tag_threshold_->GetOutputPort();
   } else {
     mesh_select_dim_threshold_->SetInputData(mesh_grid_);

@@ -92,6 +92,9 @@ mesh_snapshot:
 
 gmsh:
   # GmshPanel 设置，与 v1 兼容
+  # Assembly 自定义 Physical Groups 使用标量 JSON 保存，以保持既有 gmsh 设置读写器兼容。
+  custom_physical_groups_json: >-
+    [{"version":1,"name":"contact_concrete","dim":2,"entities":[{"tag":7,"owner":"instance_concrete","bbox":[0,0,20,100,50,20]}]}]
 
 moose:
   # MoosePanel 设置，与 v1 兼容
@@ -145,6 +148,12 @@ Assembly 子项使用稳定的 `params` 合同：
 `<instance>_surface`。Part 几何或实例参数修改后，Assembly 及其下游 Mesh、输入、快照和
 Job 必须标记为过期；项目保存重开不得丢失引用和变换。
 
+Assembly 上由用户建立的专用 Physical Group 写入 `gmsh.custom_physical_groups_json`。
+每个实体记录 `owner`（所属 Assembly 实例）、`bbox`（六分量几何包围盒签名）和 `tag`
+（仅作原始匹配提示）。项目重开重建 Assembly 后，读取器必须先限定 `owner`，再以 `bbox`
+重绑定；不得把可能复用的裸 Gmsh tag 当作稳定身份。几何变化导致签名无法匹配时应跳过
+该组并给出日志提示，禁止静默绑定到其他实例或其他面。
+
 ### 3.2 状态字段
 
 节点 `status` 用于表达其与上游依赖的关系：
@@ -186,3 +195,4 @@ Job 必须标记为过期；项目保存重开不得丢失引用和变换。
 - [ ] 新 schema 项目保存/重开后，应用档案、单位合同、网格快照字段完整恢复。
 - [ ] 未知 schema_version 被拒绝并给出可读错误。
 - [ ] 缺少新增字段时，加载不崩溃，使用安全默认值。
+- [ ] Assembly 自定义 Physical Groups 保存重开后按所属实例和几何签名恢复；几何不匹配时安全拒绝。

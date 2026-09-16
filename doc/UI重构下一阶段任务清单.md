@@ -109,8 +109,9 @@
 > 可见性/顺序、保存重开、上游过期传播、Gmsh 实例化和装配网格均已交付；
 > `TEST-P5-G1-02`～`05` 已由用户完成人工验证。`TEST-P5-G1-05` 证据包含项目自有 3D
 > 装配网格、两个实例体组、两个实例面组、节点/单元/质量摘要和完整 SHA-256。
-> 下一步先补齐 `manual/test05.md` §4.2 专用作用面组的项目级持久化与 Assembly 重绑定，
-> 再进入 `TASK-P5-02` Load 与 Interaction/Contact 真实映射。
+> `manual/test05.md` §4.2 专用作用面组的项目级持久化与 Assembly 稳定重绑定已实现，
+> `assembly_instance_contract` 定向回归通过；等待人工验证后进入 `TASK-P5-02` Load 与
+> Interaction/Contact 真实映射。
 
 - **优先级**：P0
 - **关联**：REQ-011、REQ-012、W-01d

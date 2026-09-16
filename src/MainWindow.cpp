@@ -68,6 +68,7 @@
 #include <QDateTime>
 #include <QTimer>
 #include <memory>
+#include <cmath>
 #include <functional>
 #include <stdexcept>
 #include <vector>
@@ -3570,6 +3571,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
           &VtkViewer::set_mesh_file_from_current_model);
   connect(mesh_page, &GmshPanel::physical_group_selected, viewer_,
           &VtkViewer::set_mesh_group_filter);
+  connect(mesh_page, &GmshPanel::entity_preview_requested, viewer_,
+          &VtkViewer::preview_mesh_entity);
+  connect(mesh_page, &GmshPanel::physical_groups_changed, this,
+          [this]() { set_project_dirty(true); });
   connect(viewer_, &VtkViewer::mesh_group_picked, mesh_page,
           &GmshPanel::select_physical_group);
   connect(viewer_, &VtkViewer::mesh_entity_picked, mesh_page,
@@ -3638,6 +3643,9 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   connect(mesh_page, &GmshPanel::mesh_manifest, this,
           [this](const QVariantMap& manifest_map) {
             mesh_snapshot_ = PhysicalGroupManifest::from_variant_map(manifest_map);
+            if (gmsh_panel_) {
+              gmsh_panel_->set_physical_group_manifest(manifest_map);
+            }
             const bool complete = !mesh_snapshot_.groups.isEmpty() &&
                                   mesh_snapshot_.node_count > 0 &&
                                   mesh_snapshot_.element_count > 0;
@@ -5081,6 +5089,9 @@ void MainWindow::build_menu() {
       unit_contract_.clear();
       mesh_snapshot_ = PhysicalGroupManifest();
       input_snapshots_.clear();
+      if (gmsh_panel_) {
+        gmsh_panel_->reset_project_physical_groups();
+      }
       clear_model_tree_children();
       if (moose_panel_) {
         moose_panel_->reset_project_state();
@@ -11584,6 +11595,11 @@ bool MainWindow::load_project(const QString& path) {
     }
     YAML::Node gmsh_node = root["gmsh"];
     QVariantMap gmsh_settings;
+    if (gmsh_panel_) {
+      // 项目专属的 Physical Group 定义不得从先前打开的项目泄漏进来；
+      // 老项目没有 gmsh 节点时也必须回到干净状态。
+      gmsh_panel_->reset_project_physical_groups();
+    }
     if (gmsh_node && gmsh_node.IsMap() && gmsh_panel_) {
       gmsh_settings = parse_map(gmsh_node, {});
       gmsh_panel_->apply_gmsh_settings(gmsh_settings);
@@ -11649,6 +11665,10 @@ bool MainWindow::load_project(const QString& path) {
     application_profile_ = loaded_application_profile;
     unit_contract_ = loaded_unit_contract;
     mesh_snapshot_ = loaded_mesh_snapshot;
+    if (gmsh_panel_) {
+      gmsh_panel_->set_physical_group_manifest(
+          mesh_snapshot_.to_variant_map());
+    }
 
     migrate_project_mesh_paths(path);
     // 项目保存时 physical groups 已进入 mesh_snapshot；加载后还必须按
@@ -14133,20 +14153,30 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   dim->setCurrentIndex(volume_index);
                   struct PickerState {
                     bool opened = false;
+                    bool non_modal = false;
+                    bool stage_enabled = false;
                     bool explained = false;
                     bool readable_item = false;
+                    bool owner_column = false;
+                    bool default_unchecked = false;
                     QString selected_key;
                   };
                   auto state = std::make_shared<PickerState>();
-                  QTimer::singleShot(0, this, [state]() {
-                    auto* dialog = qobject_cast<QDialog*>(
-                        QApplication::activeModalWidget());
+                  QTimer::singleShot(0, this, [this, state]() {
+                    QDialog* dialog = nullptr;
+                    for (QWidget* widget : QApplication::topLevelWidgets()) {
+                      if (widget && widget->isVisible() &&
+                          widget->objectName() == "entityPickerDialog") {
+                        dialog = qobject_cast<QDialog*>(widget);
+                        break;
+                      }
+                    }
                     auto* help = dialog
                                      ? dialog->findChild<QLabel*>(
                                            "entityPickerHelp")
                                      : nullptr;
                     auto* list = dialog
-                                     ? dialog->findChild<QListWidget*>(
+                                     ? dialog->findChild<QTreeWidget*>(
                                            "entityPickerList")
                                      : nullptr;
                     auto* buttons =
@@ -14154,21 +14184,44 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                      "entityPickerButtons")
                                : nullptr;
                     state->opened = dialog && help && list && buttons;
+                    state->non_modal =
+                        dialog && !dialog->isModal() &&
+                        dialog->windowModality() == Qt::NonModal;
+                    state->stage_enabled = viewer_ && viewer_->isEnabled();
                     state->explained =
                         help && help->text().contains("0=") &&
                         help->text().contains("3=") &&
-                        help->text().contains("gmp_entity_picker_");
-                    if (list && list->count() > 0) {
-                      auto* item = list->item(0);
-                      const QString key = item->data(Qt::UserRole).toString();
+                        help->text().contains("gmp_entity_picker_") &&
+                        (help->text().contains(QString::fromUtf8("黄色")) ||
+                         help->text().contains("yellow")) &&
+                        (help->text().contains(QString::fromUtf8("旋转")) ||
+                         help->text().contains("interactive"));
+                    state->owner_column =
+                        list && list->columnCount() == 3 &&
+                        (list->headerItem()->text(1).contains("Assembly") ||
+                         list->headerItem()->text(1).contains(
+                             QString::fromUtf8("所属")));
+                    if (list && list->topLevelItemCount() > 0) {
+                      state->default_unchecked = true;
+                      for (int row = 0; row < list->topLevelItemCount();
+                           ++row) {
+                        state->default_unchecked =
+                            state->default_unchecked &&
+                            list->topLevelItem(row)->checkState(0) ==
+                                Qt::Unchecked;
+                      }
+                      auto* item = list->topLevelItem(0);
+                      const QString key =
+                          item->data(0, Qt::UserRole).toString();
                       state->readable_item =
-                          key.startsWith("3:") && item->text().contains(key) &&
-                          (item->text().contains(QString::fromUtf8("体")) ||
-                           item->text().contains("Volume")) &&
-                          (item->text().contains(QString::fromUtf8("范围")) ||
-                           item->text().contains("Bounds"));
+                          key.startsWith("3:") &&
+                          item->text(0).contains(key) &&
+                          (item->text(0).contains(QString::fromUtf8("体")) ||
+                           item->text(0).contains("Volume")) &&
+                          item->text(2).contains("X[") &&
+                          !item->text(1).isEmpty();
                       if (state->readable_item) {
-                        item->setCheckState(Qt::Checked);
+                        item->setCheckState(0, Qt::Checked);
                         state->selected_key = key;
                       }
                     }
@@ -14190,12 +14243,28 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   entity_input->clear();
                   dim->setCurrentIndex(saved_dim);
                   QFile::remove(picker_geo);
-                  if (!state->opened || !state->explained ||
-                      !state->readable_item || !qualified_writeback ||
+                  if (!state->opened || !state->non_modal ||
+                      !state->stage_enabled ||
+                      !state->explained ||
+                      !state->owner_column ||
+                      !state->default_unchecked || !state->readable_item ||
+                      !qualified_writeback ||
                       !dimension_explained) {
                     throw std::runtime_error(
-                        "Entity picker does not explain dimension tags or "
-                        "identify selectable geometry");
+                        QString("Entity picker contract failed: opened=%1 "
+                                "non_modal=%2 stage_enabled=%3 explained=%4 "
+                                "owner_column=%5 unchecked=%6 readable=%7 "
+                                "writeback=%8 dimension=%9")
+                            .arg(state->opened)
+                            .arg(state->non_modal)
+                            .arg(state->stage_enabled)
+                            .arg(state->explained)
+                            .arg(state->owner_column)
+                            .arg(state->default_unchecked)
+                            .arg(state->readable_item)
+                            .arg(qualified_writeback)
+                            .arg(dimension_explained)
+                            .toStdString());
                   }
                 },
                 mesh_work_window_});
@@ -17587,6 +17656,478 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     throw std::runtime_error(
                         "Assembly Part sources, transforms, or physical groups are incomplete");
                   }
+
+                  auto instance_faces = [](const QString& instance_name) {
+                    std::vector<int> faces;
+                    std::vector<std::pair<int, int>> volume_groups;
+                    gmsh::model::getPhysicalGroups(volume_groups, 3);
+                    for (const auto& group : volume_groups) {
+                      std::string name;
+                      gmsh::model::getPhysicalName(group.first, group.second,
+                                                   name);
+                      if (QString::fromStdString(name) != instance_name) {
+                        continue;
+                      }
+                      std::vector<int> volumes;
+                      gmsh::model::getEntitiesForPhysicalGroup(
+                          group.first, group.second, volumes);
+                      QSet<int> unique;
+                      for (const int volume : volumes) {
+                        gmsh::vectorpair boundary;
+                        gmsh::model::getBoundary({{3, volume}}, boundary,
+                                                 false, false, false);
+                        for (const auto& entity : boundary) {
+                          if (entity.first == 2) {
+                            unique.insert(std::abs(entity.second));
+                          }
+                        }
+                      }
+                      for (const int face : unique) {
+                        faces.push_back(face);
+                      }
+                    }
+                    std::sort(faces.begin(), faces.end());
+                    return faces;
+                  };
+                  const std::vector<int> concrete_faces =
+                      instance_faces("assembly_instance_a");
+                  const std::vector<int> plate_faces =
+                      instance_faces("assembly_instance_b");
+                  auto* group_dimension = gmsh_panel_->findChild<QComboBox*>(
+                      "physicalGroupDimension");
+                  auto* group_name = gmsh_panel_->findChild<QLineEdit*>(
+                      "physicalGroupName");
+                  auto* group_entities = gmsh_panel_->findChild<QLineEdit*>(
+                      "physicalGroupEntities");
+                  auto* group_add = gmsh_panel_->findChild<QPushButton*>(
+                      "physicalGroupAddButton");
+                  auto* group_update = gmsh_panel_->findChild<QPushButton*>(
+                      "physicalGroupUpdateButton");
+                  auto* group_delete = gmsh_panel_->findChild<QPushButton*>(
+                      "physicalGroupDeleteButton");
+                  auto* group_clear_stage =
+                      gmsh_panel_->findChild<QPushButton*>(
+                          "physicalGroupClearStageFilterButton");
+                  auto* group_refresh = gmsh_panel_->findChild<QPushButton*>(
+                      "physicalGroupRefreshButton");
+                  auto* group_list = gmsh_panel_->findChild<QComboBox*>(
+                      "physicalGroupList");
+                  auto* group_table = gmsh_panel_->findChild<QTableWidget*>(
+                      "physicalGroupTable");
+                  auto* group_feedback = gmsh_panel_->findChild<QLabel*>(
+                      "physicalGroupFeedback");
+                  if (concrete_faces.size() < 2 || plate_faces.size() < 2 ||
+                      !group_dimension || !group_name || !group_entities ||
+                      !group_add || !group_update || !group_delete ||
+                      !group_clear_stage || !group_refresh || !group_list ||
+                      !group_table || !group_feedback) {
+                    throw std::runtime_error(
+                        "Assembly custom Physical Group fixture is incomplete");
+                  }
+                  const int surface_index = group_dimension->findData(2);
+                  if (surface_index < 0) {
+                    throw std::runtime_error(
+                        "Surface Physical Group dimension is unavailable");
+                  }
+                  group_dimension->setCurrentIndex(surface_index);
+                  auto add_surface_group = [&](const QString& name,
+                                               int face) {
+                    group_name->setText(name);
+                    group_entities->setText(QString("2:%1").arg(face));
+                    group_add->click();
+                    qApp->processEvents();
+                  };
+                  add_surface_group("contact_concrete", concrete_faces.at(0));
+                  add_surface_group("fixed_bottom", concrete_faces.at(1));
+                  add_surface_group("contact_plate", plate_faces.at(0));
+                  add_surface_group("load_top", plate_faces.at(1));
+
+                  // 刷新清单可以保留当前编辑组，但不得重新启用该组的舞台
+                  // 过滤；完整装配及实例着色必须保持不变。
+                  const QString group_before_refresh =
+                      group_list->currentData().toString();
+                  const int dimension_before_refresh =
+                      viewer_->current_mesh_dimension();
+                  group_refresh->click();
+                  qApp->processEvents();
+                  if (group_before_refresh.isEmpty() ||
+                      group_list->currentData().toString() !=
+                          group_before_refresh ||
+                      viewer_->viewer_settings().contains("mesh_group_dim") ||
+                      viewer_->current_mesh_dimension() !=
+                          dimension_before_refresh) {
+                    throw std::runtime_error(
+                        "Physical Group refresh changed the editor target or stage filter");
+                  }
+                  // 切到 New 必须同时清除统计表的 selection/current index；
+                  // 刷新后动态重建的 New 也必须继续使用当前语言。
+                  group_list->setCurrentIndex(0);
+                  qApp->processEvents();
+                  if (!group_table->selectedItems().isEmpty() ||
+                      group_table->currentItem() != nullptr ||
+                      group_list->itemText(0) != l10n::tr("New")) {
+                    throw std::runtime_error(
+                        "New Physical Group did not clear the table selection or preserve localization");
+                  }
+                  group_refresh->click();
+                  qApp->processEvents();
+                  if (!group_table->selectedItems().isEmpty() ||
+                      group_table->currentItem() != nullptr ||
+                      group_list->itemText(0) != l10n::tr("New") ||
+                      !group_table->styleSheet().contains(
+                          "selection-background-color")) {
+                    throw std::runtime_error(
+                        "Physical Group refresh restored a stale selection or inconsistent highlight");
+                  }
+
+                  // 用户可以直接在统计表选择组；这必须与顶部下拉和编辑
+                  // 字段形成同一个当前选择，并同时驱动更新/删除动作。
+                  auto find_group_row = [group_table](const QString& name) {
+                    for (int row = 0; row < group_table->rowCount(); ++row) {
+                      auto* item = group_table->item(row, 2);
+                      if (item && item->text() == name) {
+                        return row;
+                      }
+                    }
+                    return -1;
+                  };
+                  int contact_row = find_group_row("contact_concrete");
+                  if (contact_row < 0) {
+                    throw std::runtime_error(
+                        "Assembly custom Physical Group table row is missing");
+                  }
+                  group_table->selectRow(contact_row);
+                  qApp->processEvents();
+                  const QString selected_group_key =
+                      group_list->currentData().toString();
+                  const QStringList selected_group_parts =
+                      selected_group_key.split(":");
+                  const int selected_group_tag =
+                      selected_group_parts.size() == 2
+                          ? selected_group_parts.at(1).toInt()
+                          : -1;
+                  if (!selected_group_key.startsWith("2:") ||
+                      group_name->text() != "contact_concrete" ||
+                      selected_group_tag < 0) {
+                    throw std::runtime_error(
+                        "Physical Group table selection did not synchronize the editor");
+                  }
+
+                  group_entities->setText(
+                      QString("2:%1").arg(concrete_faces.at(1)));
+                  group_update->click();
+                  qApp->processEvents();
+                  std::vector<int> updated_group_entities;
+                  gmsh::model::getEntitiesForPhysicalGroup(
+                      2, selected_group_tag, updated_group_entities);
+                  contact_row = find_group_row("contact_concrete");
+                  const QString updated_member_text =
+                      contact_row >= 0 && group_table->item(contact_row, 3)
+                          ? group_table->item(contact_row, 3)->text()
+                          : QString();
+                  bool persisted_updated_entity = false;
+                  const QVariantList persisted_groups =
+                      QJsonDocument::fromJson(
+                          gmsh_panel_->gmsh_settings()
+                              .value("custom_physical_groups_json")
+                              .toString()
+                              .toUtf8())
+                          .toVariant()
+                          .toList();
+                  for (const QVariant& persisted_value : persisted_groups) {
+                    const QVariantMap persisted_group =
+                        persisted_value.toMap();
+                    if (persisted_group.value("name").toString() !=
+                        "contact_concrete") {
+                      continue;
+                    }
+                    const QVariantList persisted_entities =
+                        persisted_group.value("entities").toList();
+                    persisted_updated_entity =
+                        persisted_entities.size() == 1 &&
+                        persisted_entities.constFirst()
+                                .toMap()
+                                .value("tag")
+                                .toInt() == concrete_faces.at(1);
+                  }
+                  if (updated_group_entities !=
+                          std::vector<int>{concrete_faces.at(1)} ||
+                      updated_member_text !=
+                          QString("2:%1").arg(concrete_faces.at(1)) ||
+                      !persisted_updated_entity ||
+                      !group_feedback->text().contains(
+                          QString("2:%1").arg(concrete_faces.at(1))) ||
+                      viewer_->viewer_settings().contains("mesh_group_dim")) {
+                    throw std::runtime_error(
+                        "Physical Group update did not expose or persist the new member entity");
+                  }
+                  group_entities->setText(
+                      QString("2:%1").arg(concrete_faces.at(0)));
+                  group_update->click();
+                  qApp->processEvents();
+
+                  contact_row = find_group_row("contact_concrete");
+                  if (contact_row < 0) {
+                    throw std::runtime_error(
+                        "Updated Physical Group table row disappeared");
+                  }
+                  group_table->selectRow(contact_row);
+                  qApp->processEvents();
+                  group_delete->click();
+                  qApp->processEvents();
+                  bool deleted_group_still_exists = false;
+                  std::vector<std::pair<int, int>> groups_after_delete;
+                  gmsh::model::getPhysicalGroups(groups_after_delete, 2);
+                  for (const auto& group : groups_after_delete) {
+                    std::string name;
+                    gmsh::model::getPhysicalName(group.first, group.second,
+                                                 name);
+                    deleted_group_still_exists =
+                        deleted_group_still_exists ||
+                        QString::fromStdString(name) == "contact_concrete";
+                  }
+                  const QString after_delete_json =
+                      gmsh_panel_->gmsh_settings()
+                          .value("custom_physical_groups_json")
+                          .toString();
+                  if (deleted_group_still_exists ||
+                      after_delete_json.contains(
+                          "\"name\":\"contact_concrete\"")) {
+                    throw std::runtime_error(
+                        "Physical Group table selection did not drive Delete Selected");
+                  }
+                  add_surface_group("contact_concrete", concrete_faces.at(0));
+                  contact_row = find_group_row("contact_concrete");
+                  if (contact_row < 0 ||
+                      !group_table->item(contact_row, 3) ||
+                      group_table->item(contact_row, 3)->text() !=
+                          QString("2:%1").arg(concrete_faces.at(0)) ||
+                      viewer_->viewer_settings().contains("mesh_group_dim")) {
+                    throw std::runtime_error(
+                        "Re-added Physical Group did not show its member entity or restore the full stage");
+                  }
+
+                  const QString custom_groups_json =
+                      gmsh_panel_->gmsh_settings()
+                          .value("custom_physical_groups_json")
+                          .toString();
+                  if (!custom_groups_json.contains("contact_concrete") ||
+                      !custom_groups_json.contains("contact_plate") ||
+                      !custom_groups_json.contains("fixed_bottom") ||
+                      !custom_groups_json.contains("load_top")) {
+                    throw std::runtime_error(
+                        "Assembly custom Physical Groups were not captured for persistence");
+                  }
+
+                  auto* group_pick = gmsh_panel_->findChild<QPushButton*>(
+                      "physicalGroupEntityPickButton");
+                  struct AssemblyPickerState {
+                    bool owner_a = false;
+                    bool owner_b = false;
+                    bool non_modal = false;
+                    bool stage_enabled = false;
+                    bool stage_unfiltered = false;
+                    bool real_surface_normal = false;
+                    bool previewed = false;
+                    bool default_unchecked = false;
+                    bool stage_captured = false;
+                  };
+                  auto picker_state = std::make_shared<AssemblyPickerState>();
+                  const QString preview_key =
+                      QString("2:%1").arg(concrete_faces.at(0));
+
+                  int assembly_surface_group_tag = -1;
+                  std::vector<std::pair<int, int>> surface_groups_for_filter;
+                  gmsh::model::getPhysicalGroups(surface_groups_for_filter,
+                                                 2);
+                  for (const auto& group : surface_groups_for_filter) {
+                    std::string name;
+                    gmsh::model::getPhysicalName(group.first, group.second,
+                                                 name);
+                    if (QString::fromStdString(name) ==
+                        "assembly_instance_a_surface") {
+                      assembly_surface_group_tag = group.second;
+                      break;
+                    }
+                  }
+                  if (assembly_surface_group_tag < 0) {
+                    throw std::runtime_error(
+                        "Assembly surface group is unavailable for stage filter test");
+                  }
+                  // 新增完成后会保留新组作为编辑目标；本段专门验证“新建组”
+                  // 拾取默认不勾选，因此显式切回 New。
+                  group_list->setCurrentIndex(0);
+                  qApp->processEvents();
+                  const QString editor_group_before_clear =
+                      group_list->currentData().toString();
+                  const int full_stage_dimension =
+                      viewer_->current_mesh_dimension();
+                  viewer_->set_mesh_group_filter(2,
+                                                 assembly_surface_group_tag);
+                  if (!viewer_->viewer_settings().contains("mesh_group_dim")) {
+                    throw std::runtime_error(
+                        "Assembly stage group filter fixture did not activate");
+                  }
+                  group_clear_stage->click();
+                  qApp->processEvents();
+                  if (viewer_->viewer_settings().contains("mesh_group_dim") ||
+                      viewer_->current_mesh_dimension() !=
+                          full_stage_dimension ||
+                      group_list->currentData().toString() !=
+                          editor_group_before_clear ||
+                      !viewer_->save_screenshot(
+                          dir + "/assembly_group_filter_cleared.png")) {
+                    throw std::runtime_error(
+                        "Clear Stage Filter changed the editor target or did not restore the full-dimensional stage");
+                  }
+                  viewer_->set_mesh_group_filter(2,
+                                                 assembly_surface_group_tag);
+                  QTimer::singleShot(
+                      0, this,
+                      [this, picker_state, preview_key, dir]() {
+                        QDialog* dialog = nullptr;
+                        for (QWidget* widget :
+                             QApplication::topLevelWidgets()) {
+                          if (widget && widget->isVisible() &&
+                              widget->objectName() == "entityPickerDialog") {
+                            dialog = qobject_cast<QDialog*>(widget);
+                            break;
+                          }
+                        }
+                        auto* tree = dialog
+                                         ? dialog->findChild<QTreeWidget*>(
+                                               "entityPickerList")
+                                         : nullptr;
+                        QTreeWidgetItem* preview_item = nullptr;
+                        picker_state->non_modal =
+                            dialog && !dialog->isModal() &&
+                            dialog->windowModality() == Qt::NonModal;
+                        picker_state->stage_enabled =
+                            viewer_ && viewer_->isEnabled();
+                        picker_state->stage_unfiltered =
+                            viewer_ && !viewer_->viewer_settings().contains(
+                                           "mesh_group_dim");
+                        picker_state->default_unchecked = tree != nullptr;
+                        for (int row = 0;
+                             tree && row < tree->topLevelItemCount(); ++row) {
+                          auto* item = tree->topLevelItem(row);
+                          picker_state->default_unchecked =
+                              picker_state->default_unchecked &&
+                              item->checkState(0) == Qt::Unchecked;
+                          const QString owner = item->text(1);
+                          picker_state->owner_a =
+                              picker_state->owner_a ||
+                              owner == "assembly_instance_a";
+                          picker_state->owner_b =
+                              picker_state->owner_b ||
+                              owner == "assembly_instance_b";
+                          const QVariantList direction =
+                              item->data(0, Qt::UserRole + 1).toList();
+                          if (owner == "assembly_instance_b" &&
+                              direction.size() >= 6 &&
+                              std::abs(direction.at(5).toDouble()) < 0.1) {
+                            picker_state->real_surface_normal = true;
+                          }
+                          if (item->data(0, Qt::UserRole).toString() ==
+                              preview_key) {
+                            preview_item = item;
+                          }
+                        }
+                        if (tree && preview_item) {
+                          tree->setCurrentItem(preview_item);
+                          qApp->processEvents();
+                          const QStringList ids = preview_key.split(":");
+                          picker_state->previewed =
+                              viewer_ &&
+                              viewer_->is_mesh_entity_previewed(
+                                  ids.value(0).toInt(), ids.value(1).toInt());
+                          picker_state->stage_captured =
+                              viewer_ && viewer_->save_screenshot(
+                                             dir +
+                                             "/assembly_entity_preview_stage.png");
+                        }
+                        if (dialog) {
+                          dialog->grab().save(
+                              dir + "/assembly_entity_picker.png");
+                        }
+                        if (dialog) {
+                          dialog->reject();
+                        }
+                      });
+                  if (!group_pick) {
+                    throw std::runtime_error(
+                        "Assembly Physical Group picker button is missing");
+                  }
+                  group_pick->click();
+                  const QStringList preview_ids = preview_key.split(":");
+                  if (!picker_state->owner_a || !picker_state->owner_b ||
+                      !picker_state->non_modal ||
+                      !picker_state->stage_enabled ||
+                      !picker_state->stage_unfiltered ||
+                      !picker_state->real_surface_normal ||
+                      !picker_state->default_unchecked ||
+                      !picker_state->previewed ||
+                      !picker_state->stage_captured ||
+                      viewer_->current_mesh_dimension() !=
+                          full_stage_dimension ||
+                      viewer_->is_mesh_entity_previewed(
+                          preview_ids.value(0).toInt(),
+                          preview_ids.value(1).toInt()) ||
+                      !viewer_->save_screenshot(
+                          dir + "/assembly_entity_preview_cancelled.png")) {
+                    throw std::runtime_error(
+                        "Assembly entity picker owner labels or stage preview contract failed");
+                  }
+
+                  // 几何模型恢复后本身没有子进程生成的离散单元。模拟一次
+                  // 已生成网格清单，验证刷新以及项目重开都从持久化清单恢复
+                  // 非零计数，而不是把统计表覆盖为 0。
+                  PhysicalGroupManifest persisted_count_manifest;
+                  persisted_count_manifest.mesh_path = viewer_->current_file();
+                  persisted_count_manifest.mesh_sha256 =
+                      QString(64, QLatin1Char('a'));
+                  persisted_count_manifest.mesh_dim = 3;
+                  persisted_count_manifest.node_count = 101;
+                  persisted_count_manifest.element_count = 241;
+                  persisted_count_manifest.element_type = "Triangle 3";
+                  constexpr int persisted_contact_count = 7007;
+                  std::vector<std::pair<int, int>> count_groups;
+                  gmsh::model::getPhysicalGroups(count_groups);
+                  for (const auto& group : count_groups) {
+                    std::string raw_name;
+                    gmsh::model::getPhysicalName(group.first, group.second,
+                                                 raw_name);
+                    const QString name = QString::fromStdString(raw_name);
+                    if (name.isEmpty()) {
+                      continue;
+                    }
+                    std::vector<int> entities;
+                    gmsh::model::getEntitiesForPhysicalGroup(
+                        group.first, group.second, entities);
+                    PhysicalGroupEntry entry;
+                    entry.name = name;
+                    entry.dim = group.first;
+                    entry.tags.append(group.second);
+                    entry.entity_count = static_cast<int>(entities.size());
+                    entry.element_count =
+                        name == "contact_concrete"
+                            ? persisted_contact_count
+                            : 1000 + group.second;
+                    persisted_count_manifest.groups.append(entry);
+                  }
+                  mesh_snapshot_ = persisted_count_manifest;
+                  gmsh_panel_->set_physical_group_manifest(
+                      mesh_snapshot_.to_variant_map());
+                  group_refresh->click();
+                  qApp->processEvents();
+                  contact_row = find_group_row("contact_concrete");
+                  if (contact_row < 0 ||
+                      !group_table->item(contact_row, 5) ||
+                      group_table->item(contact_row, 5)->text().toInt() !=
+                          persisted_contact_count) {
+                    throw std::runtime_error(
+                        "Physical Group refresh discarded persisted element counts");
+                  }
 #endif
                   const QString project = dir + "/assembly_instance.gmp.yaml";
                   if (!save_project(project) || !load_project(project)) {
@@ -17619,6 +18160,45 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     throw std::runtime_error(
                         "Assembly instance transform did not survive reopen");
                   }
+#ifdef GMP_ENABLE_GMSH_GUI
+                  QSet<QString> restored_custom_groups;
+                  std::vector<std::pair<int, int>> restored_surface_groups;
+                  gmsh::model::getPhysicalGroups(restored_surface_groups, 2);
+                  for (const auto& group : restored_surface_groups) {
+                    std::string name;
+                    gmsh::model::getPhysicalName(group.first, group.second,
+                                                 name);
+                    const QString group_name = QString::fromStdString(name);
+                    if (group_name != "contact_concrete" &&
+                        group_name != "contact_plate" &&
+                        group_name != "fixed_bottom" &&
+                        group_name != "load_top") {
+                      continue;
+                    }
+                    std::vector<int> entities;
+                    gmsh::model::getEntitiesForPhysicalGroup(
+                        group.first, group.second, entities);
+                    if (entities.empty()) {
+                      throw std::runtime_error(
+                          "Restored Assembly custom Physical Group is empty");
+                    }
+                    restored_custom_groups.insert(group_name);
+                  }
+                  if (restored_custom_groups !=
+                      QSet<QString>{"contact_concrete", "contact_plate",
+                                    "fixed_bottom", "load_top"}) {
+                    throw std::runtime_error(
+                        "Assembly custom Physical Groups did not survive reopen");
+                  }
+                  contact_row = find_group_row("contact_concrete");
+                  if (contact_row < 0 ||
+                      !group_table->item(contact_row, 5) ||
+                      group_table->item(contact_row, 5)->text().toInt() !=
+                          persisted_contact_count) {
+                    throw std::runtime_error(
+                        "Persisted Physical Group element counts did not survive reopen");
+                  }
+#endif
                   QTreeWidgetItem* restored_part = nullptr;
                   auto* restored_parts = find_root_item("Parts");
                   for (int row = 0;

@@ -25,7 +25,7 @@
 - Phase 4 的 CDP 材料/Section、Physical Groups/FileMeshGenerator、Physics、单 Step、BC/Function、Outputs、旧 diffusion 清理、v2 快照和远程提交/启动已获人工证据。
 - `job_20260913_223929_xu10t1` 已验证远端预检、4 MPI 启动和状态监控，随后由用户取消；2026-09-13 用户确认该证据满足当前阶段远程提交验收，成功制品/Results 回放转 M-01 再验。
 - Phase 4 的 W-04 专家扩展/来源追踪、W-05 统一阻断校验及 6 项原剩余人工准出用例均已通过；用户已明确确认 Phase 4 / G0 人工验收完成。
-- Phase 5 / G1 已启动；`TASK-P5-01` / W-01d Assembly 与装配网格已通过 `TEST-P5-G1-02`～`05` 人工验证并关闭。下一步补齐 `test05.md` §4.2 专用作用面组的持久化与 Assembly 重绑定，再进入 Load/Contact；M-01、Reference Point/Coupling 与 CDP 基准对比尚未开始。
+- Phase 5 / G1 已启动；`TASK-P5-01` / W-01d Assembly 与装配网格已通过 `TEST-P5-G1-02`～`05` 人工验证并关闭；`test05.md` §4.2 专用作用面组的项目级持久化与 Assembly 稳定重绑定已实现并通过定向回归，等待人工验证。验证后进入 Load/Contact；M-01、Reference Point/Coupling 与 CDP 基准对比尚未开始。
 - 下一阶段的分期、任务编号、依赖与准出闸门以 `doc/UI重构下一阶段任务清单.md` 为执行入口；历史环境交接仍见 `doc/UI重构下一阶段交接说明.md`。
 
 ---
@@ -487,8 +487,10 @@
 > `assembly_instance_contract` 定向真实点击通过；2026-09-15 `TEST-P5-G1-02` 混凝土块 +
 > 钢板独立实例、定位、旋转与恢复，以及 `TEST-P5-G1-03` 可见性、顺序与非法参数均已
 > 人工通过；`TEST-P5-G1-04` 保存重开与过期传播、`TEST-P5-G1-05` 装配网格与
-> Physical Groups 亦已人工通过，W-01d 与 `TASK-P5-01` 验收关闭。下一步补齐专用作用
-> 面组定义的项目级持久化与 Assembly 重绑定，再进入 Load/Contact 真实映射。
+> Physical Groups 亦已人工通过，W-01d 与 `TASK-P5-01` 验收关闭。专用作用面组定义的
+> 项目级持久化与“所属实例 + 几何签名”重绑定已实现并通过
+> `assembly_instance_contract` 定向回归，待按 `test05.md` §4.2 人工验证后进入
+> Load/Contact 真实映射。
 
 - **优先级**：P0
 - **关联需求**：REQ-011、REQ-013；方案 §4 W-01a~d
