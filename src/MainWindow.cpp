@@ -17602,6 +17602,37 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     throw std::runtime_error(
                         "Assembly build did not replace the Part viewport preview");
                   }
+                  // 补齐低维实体拾取预览合同：点和边不能只更新内部 tag
+                  // 而在舞台上仍不可见。此 Assembly 预览是 2D 网格，面预览
+                  // 已由后续选择器合同覆盖，体预览由正式 3D 网格合同覆盖。
+                  for (const int preview_dim : {0, 1}) {
+                    std::vector<std::pair<int, int>> preview_entities;
+                    gmsh::model::getEntities(preview_entities, preview_dim);
+                    if (preview_entities.empty()) {
+                      throw std::runtime_error(
+                          "Assembly preview is missing a topology dimension");
+                    }
+                    const int preview_tag = preview_entities.front().second;
+                    viewer_->preview_mesh_entity(preview_dim, preview_tag,
+                                                 1.0, 0.8, 0.6);
+                    qApp->processEvents();
+                    if (!viewer_->is_mesh_entity_preview_visible(
+                            preview_dim, preview_tag)) {
+                      throw std::runtime_error(
+                          QString("Entity picker stage highlight is not visible "
+                                  "for dimension %1")
+                              .arg(preview_dim)
+                              .toStdString());
+                    }
+                    const QString preview_shot =
+                        dir + QString("/assembly_entity_preview_%1.png")
+                                  .arg(preview_dim == 0 ? "point" : "curve");
+                    if (!viewer_->save_screenshot(preview_shot)) {
+                      throw std::runtime_error(
+                          "Low-dimensional entity preview screenshot failed");
+                    }
+                  }
+                  viewer_->preview_mesh_entity(-1, -1);
                   QSet<QString> group_names;
                   std::vector<std::pair<int, int>> groups;
                   gmsh::model::getPhysicalGroups(groups);

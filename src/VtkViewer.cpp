@@ -42,6 +42,7 @@
 #include <vtkCompositeDataIterator.h>
 #include <vtkCompositeDataSet.h>
 #include <vtkDataArray.h>
+#include <vtkDataSet.h>
 #include <vtkDataObject.h>
 #include <vtkDataSet.h>
 #include <vtkDataSetSurfaceFilter.h>
@@ -75,6 +76,8 @@
 #include <vtkCellArray.h>
 #include <vtkCellType.h>
 #include <vtkVertexGlyphFilter.h>
+#include <vtkSphereSource.h>
+#include <vtkTubeFilter.h>
 #include <vtkRenderer.h>
 #include <vtkScalarBarActor.h>
 #include <vtkWindowToImageFilter.h>
@@ -678,6 +681,66 @@ vtkSmartPointer<vtkUnstructuredGrid> BuildGridFromCurrentGmshModel() {
     grid->GetCellData()->SetScalars(phys_id_arr);
 
     return grid;
+  } catch (...) {
+    return nullptr;
+  }
+}
+
+// 点和边可能存在于当前 OCC 模型，却因为 .msh 仅保存 Physical Groups
+// 而没有进入 VTK 网格。实体拾取预览因此不能只依赖 mesh_grid_ 的
+// entity_dim/entity_tag 阈值；这里直接从当前 Gmsh 几何构造独立 PolyData。
+vtkSmartPointer<vtkPolyData> BuildGmshEntityPreviewGeometry(int dim, int tag) {
+  if (dim < 0 || dim > 1 || tag < 0) {
+    return nullptr;
+  }
+  try {
+    auto poly = vtkSmartPointer<vtkPolyData>::New();
+    auto points = vtkSmartPointer<vtkPoints>::New();
+    auto cells = vtkSmartPointer<vtkCellArray>::New();
+    if (dim == 0) {
+      double xmin = 0.0, ymin = 0.0, zmin = 0.0;
+      double xmax = 0.0, ymax = 0.0, zmax = 0.0;
+      gmsh::model::getBoundingBox(dim, tag, xmin, ymin, zmin, xmax, ymax,
+                                  zmax);
+      points->InsertNextPoint(0.5 * (xmin + xmax), 0.5 * (ymin + ymax),
+                              0.5 * (zmin + zmax));
+      cells->InsertNextCell(1);
+      cells->InsertCellPoint(0);
+      poly->SetPoints(points);
+      poly->SetVerts(cells);
+      return poly;
+    }
+
+    std::vector<double> param_min;
+    std::vector<double> param_max;
+    gmsh::model::getParametrizationBounds(dim, tag, param_min, param_max);
+    if (param_min.empty() || param_max.empty() ||
+        !std::isfinite(param_min[0]) || !std::isfinite(param_max[0])) {
+      return nullptr;
+    }
+    constexpr int kCurveSamples = 96;
+    std::vector<double> parameters;
+    parameters.reserve(kCurveSamples);
+    for (int i = 0; i < kCurveSamples; ++i) {
+      const double ratio = static_cast<double>(i) / (kCurveSamples - 1);
+      parameters.push_back(param_min[0] + ratio * (param_max[0] - param_min[0]));
+    }
+    std::vector<double> coordinates;
+    gmsh::model::getValue(dim, tag, parameters, coordinates);
+    if (coordinates.size() < static_cast<size_t>(kCurveSamples * 3)) {
+      return nullptr;
+    }
+    for (int i = 0; i < kCurveSamples; ++i) {
+      points->InsertNextPoint(coordinates[3 * i], coordinates[3 * i + 1],
+                              coordinates[3 * i + 2]);
+    }
+    cells->InsertNextCell(kCurveSamples);
+    for (int i = 0; i < kCurveSamples; ++i) {
+      cells->InsertCellPoint(i);
+    }
+    poly->SetPoints(points);
+    poly->SetLines(cells);
+    return poly;
   } catch (...) {
     return nullptr;
   }
@@ -1417,6 +1480,7 @@ void VtkViewer::clear_stage_data() {
   selected_entity_tag_ = -1;
   preview_entity_dim_ = -1;
   preview_entity_tag_ = -1;
+  mesh_select_occ_geometry_ = nullptr;
   preview_visual_active_ = false;
 
   for (vtkActor* actor : {actor_.GetPointer(), nodes_actor_.GetPointer(),
@@ -1788,6 +1852,9 @@ void VtkViewer::preview_mesh_entity(int dim, int tag, double view_x,
   }
   preview_entity_dim_ = activate ? dim : -1;
   preview_entity_tag_ = activate ? tag : -1;
+  if (!activate) {
+    mesh_select_occ_geometry_ = nullptr;
+  }
 
   if (activate) {
     // 预览时把完整装配降为中性线框，候选面保持不透明黄色；这样内部
@@ -1822,7 +1889,10 @@ void VtkViewer::preview_mesh_entity(int dim, int tag, double view_x,
   update_selection_pipeline();
   if (activate && renderer_ && mesh_select_geom_) {
     mesh_select_geom_->Update();
-    auto* selected = mesh_select_geom_->GetOutput();
+    vtkDataSet* selected =
+        dim <= 1 && mesh_select_occ_geometry_
+            ? static_cast<vtkDataSet*>(mesh_select_occ_geometry_.GetPointer())
+            : static_cast<vtkDataSet*>(mesh_select_geom_->GetOutput());
     double bounds[6] = {0, 0, 0, 0, 0, 0};
     if (selected) {
       selected->GetBounds(bounds);
@@ -1874,6 +1944,41 @@ void VtkViewer::preview_mesh_entity(int dim, int tag, double view_x,
 bool VtkViewer::is_mesh_entity_previewed(int dim, int tag) const {
 #ifdef GMP_ENABLE_VTK_VIEWER
   return preview_entity_dim_ == dim && preview_entity_tag_ == tag;
+#else
+  Q_UNUSED(dim);
+  Q_UNUSED(tag);
+  return false;
+#endif
+}
+
+bool VtkViewer::is_mesh_entity_preview_visible(int dim, int tag) const {
+#ifdef GMP_ENABLE_VTK_VIEWER
+  if (!is_mesh_entity_previewed(dim, tag) || !mesh_select_actor_ ||
+      mesh_select_actor_->GetVisibility() == 0 || !mesh_select_geom_) {
+    return false;
+  }
+  mesh_select_geom_->Update();
+  vtkDataSet* selected =
+      dim <= 1 && mesh_select_occ_geometry_
+          ? static_cast<vtkDataSet*>(mesh_select_occ_geometry_.GetPointer())
+          : static_cast<vtkDataSet*>(mesh_select_geom_->GetOutput());
+  if (!selected || selected->GetNumberOfCells() <= 0) {
+    return false;
+  }
+  auto* property = mesh_select_actor_->GetProperty();
+  if (!property) {
+    return false;
+  }
+  if (dim == 0) {
+    return mesh_select_point_source_ &&
+           mesh_select_point_source_->GetRadius() > 0.0 &&
+           property->GetRepresentation() == VTK_SURFACE;
+  }
+  if (dim == 1) {
+    return mesh_select_curve_tube_ && mesh_select_curve_tube_->GetRadius() > 0.0 &&
+           property->GetRepresentation() == VTK_SURFACE;
+  }
+  return property->GetRepresentation() == VTK_SURFACE;
 #else
   Q_UNUSED(dim);
   Q_UNUSED(tag);
@@ -4350,6 +4455,24 @@ void VtkViewer::update_selection_pipeline() {
     renderer_->AddActor(mesh_select_actor_);
   }
 
+  // 点、边、面/体共用同一选择 actor，但必须使用不同的可视强调方式。
+  // 仅增加 OpenGL point/line width 仍会与灰色装配线框共面并被深度缓冲
+  // 淹没，因此点生成真实球体，边生成真实管体；面和体保持原有黄色表面。
+  // 标记半径相对完整模型对角线计算，缩放后仍有稳定的空间可读性。
+  auto* selection_property = mesh_select_actor_->GetProperty();
+  selection_property->SetColor(1.0, 0.78, 0.05);
+  selection_property->SetEdgeColor(0.20, 0.14, 0.0);
+  selection_property->SetOpacity(1.0);
+  selection_property->SetAmbient(1.0);
+  selection_property->SetDiffuse(0.0);
+  selection_property->SetPointSize(5.0);
+  selection_property->SetLineWidth(2.0);
+  selection_property->SetRenderPointsAsSpheres(false);
+  selection_property->SetRenderLinesAsTubes(false);
+  selection_property->SetRepresentationToSurface();
+  selection_property->SetEdgeVisibility(entity_preview && entity_dim <= 1 ? 0
+                                                                          : 1);
+
   vtkAlgorithmOutput* current = nullptr;
   if (mode == 2) {
     mesh_select_cell_threshold_->SetInputData(mesh_grid_);
@@ -4387,7 +4510,66 @@ void VtkViewer::update_selection_pipeline() {
   }
 
   mesh_select_geom_->SetInputConnection(current);
-  mesh_select_mapper_->SetInputConnection(mesh_select_geom_->GetOutputPort());
+  mesh_select_geom_->Update();
+  if (entity_preview && entity_dim <= 1) {
+#ifdef GMP_ENABLE_GMSH_GUI
+    mesh_select_occ_geometry_ =
+        BuildGmshEntityPreviewGeometry(entity_dim, entity_tag);
+#else
+    mesh_select_occ_geometry_ = nullptr;
+#endif
+  } else {
+    mesh_select_occ_geometry_ = nullptr;
+  }
+  vtkDataSet* selected_geometry =
+      mesh_select_occ_geometry_
+          ? static_cast<vtkDataSet*>(mesh_select_occ_geometry_.GetPointer())
+          : static_cast<vtkDataSet*>(mesh_select_geom_->GetOutput());
+  if (!selected_geometry || selected_geometry->GetNumberOfCells() <= 0) {
+    mesh_select_actor_->SetVisibility(false);
+    if (render_window_) {
+      render_window_->Render();
+    }
+    return;
+  }
+
+  const double dx = mesh_bounds_[1] - mesh_bounds_[0];
+  const double dy = mesh_bounds_[3] - mesh_bounds_[2];
+  const double dz = mesh_bounds_[5] - mesh_bounds_[4];
+  const double model_diagonal =
+      std::max(1e-6, std::sqrt(dx * dx + dy * dy + dz * dz));
+  if (entity_preview && entity_dim == 0) {
+    if (!mesh_select_point_source_) {
+      mesh_select_point_source_ = vtkSmartPointer<vtkSphereSource>::New();
+      mesh_select_point_source_->SetThetaResolution(24);
+      mesh_select_point_source_->SetPhiResolution(16);
+    }
+    double bounds[6] = {0, 0, 0, 0, 0, 0};
+    selected_geometry->GetBounds(bounds);
+    mesh_select_point_source_->SetCenter(0.5 * (bounds[0] + bounds[1]),
+                                         0.5 * (bounds[2] + bounds[3]),
+                                         0.5 * (bounds[4] + bounds[5]));
+    mesh_select_point_source_->SetRadius(0.003 * model_diagonal);
+    mesh_select_mapper_->SetInputConnection(
+        mesh_select_point_source_->GetOutputPort());
+  } else if (entity_preview && entity_dim == 1) {
+    if (!mesh_select_curve_tube_) {
+      mesh_select_curve_tube_ = vtkSmartPointer<vtkTubeFilter>::New();
+      mesh_select_curve_tube_->SetNumberOfSides(12);
+      mesh_select_curve_tube_->CappingOn();
+    }
+    if (mesh_select_occ_geometry_) {
+      mesh_select_curve_tube_->SetInputData(mesh_select_occ_geometry_);
+    } else {
+      mesh_select_curve_tube_->SetInputConnection(
+          mesh_select_geom_->GetOutputPort());
+    }
+    mesh_select_curve_tube_->SetRadius(0.000875 * model_diagonal);
+    mesh_select_mapper_->SetInputConnection(
+        mesh_select_curve_tube_->GetOutputPort());
+  } else {
+    mesh_select_mapper_->SetInputConnection(mesh_select_geom_->GetOutputPort());
+  }
   mesh_select_actor_->SetVisibility(true);
   if (render_window_) {
     render_window_->Render();

@@ -28,8 +28,11 @@ class vtkExodusIIReader;
 class vtkCompositeDataGeometryFilter;
 class vtkMultiBlockDataSetAlgorithm;
 class vtkDataSetSurfaceFilter;
+class vtkPolyData;
 class vtkUnstructuredGrid;
 class vtkVertexGlyphFilter;
+class vtkSphereSource;
+class vtkTubeFilter;
 class vtkShrinkFilter;
 class vtkOutlineFilter;
 class vtkAxesActor;
@@ -135,6 +138,9 @@ class VtkViewer : public QWidget {
   void preview_mesh_entity(int dim, int tag, double view_x = 0.0,
                            double view_y = 0.0, double view_z = 0.0);
   bool is_mesh_entity_previewed(int dim, int tag) const;
+  // 实体拾取即时预览是否真正产生了可见几何，并应用了与维度匹配的
+  // 强调样式。用于 GUI 合同验证，避免只检查 dim/tag 状态而漏掉空输出。
+  bool is_mesh_entity_preview_visible(int dim, int tag) const;
   QVariantMap viewer_settings() const;
   void apply_viewer_settings(const QVariantMap& settings);
   QString plot_snapshot_text() const;
@@ -368,6 +374,9 @@ signals:
   vtkSmartPointer<vtkThreshold> mesh_select_entity_dim_threshold_;
   vtkSmartPointer<vtkThreshold> mesh_select_entity_tag_threshold_;
   vtkSmartPointer<vtkDataSetSurfaceFilter> mesh_select_geom_;
+  vtkSmartPointer<vtkPolyData> mesh_select_occ_geometry_;
+  vtkSmartPointer<vtkSphereSource> mesh_select_point_source_;
+  vtkSmartPointer<vtkTubeFilter> mesh_select_curve_tube_;
   vtkSmartPointer<vtkDataSetMapper> mesh_select_mapper_;
   vtkSmartPointer<vtkActor> mesh_select_actor_;
   vtkSmartPointer<vtkPlane> mesh_slice_plane_;

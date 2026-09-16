@@ -3661,7 +3661,7 @@ QVariantList GmshPanel::entity_preview_direction(
   std::vector<std::pair<int, int>> candidates;
   gmsh::model::getEntities(candidates, 3);
   std::vector<std::pair<int, int>> owner_groups;
-  gmsh::model::getPhysicalGroups(owner_groups, 3);
+  gmsh::model::getPhysicalGroups(owner_groups, std::min(3, dim + 1));
   if (!owner.isEmpty()) {
     candidates.clear();
     for (const auto& group : owner_groups) {
@@ -3674,7 +3674,7 @@ QVariantList GmshPanel::entity_preview_direction(
       gmsh::model::getEntitiesForPhysicalGroup(group.first, group.second,
                                                volumes);
       for (const int volume : volumes) {
-        candidates.push_back({3, volume});
+        candidates.push_back({group.first, volume});
       }
     }
   }
@@ -3709,6 +3709,75 @@ QVariantList GmshPanel::entity_preview_direction(
       0.5 * (entity_box.at(2).toDouble() + entity_box.at(5).toDouble())};
   double normal[3] = {0.0, 0.0, 0.0};
   bool have_surface_normal = false;
+
+  // 点使用“实体点 - 所属实例中心”的外向方向；边在参数域中点求切线，
+  // 再把外向向量投影到切线法平面。这样相机不会沿边看过去，且能从
+  // 实例外侧观察球形/管状黄色标记。
+  if (dim == 0) {
+    normal[0] = surface_point[0] - owner_center[0];
+    normal[1] = surface_point[1] - owner_center[1];
+    normal[2] = surface_point[2] - owner_center[2];
+    if (normal[0] * normal[0] + normal[1] * normal[1] +
+            normal[2] * normal[2] <=
+        1e-12) {
+      normal[0] = normal[1] = normal[2] = 1.0;
+    }
+    have_surface_normal = true;
+  } else if (dim == 1) {
+    try {
+      std::vector<double> param_min;
+      std::vector<double> param_max;
+      gmsh::model::getParametrizationBounds(dim, tag, param_min, param_max);
+      if (!param_min.empty() && !param_max.empty()) {
+        const std::vector<double> u = {0.5 * (param_min[0] + param_max[0])};
+        std::vector<double> coordinates;
+        std::vector<double> derivatives;
+        gmsh::model::getValue(dim, tag, u, coordinates);
+        gmsh::model::getDerivative(dim, tag, u, derivatives);
+        if (coordinates.size() >= 3 && derivatives.size() >= 3) {
+          surface_point[0] = coordinates[0];
+          surface_point[1] = coordinates[1];
+          surface_point[2] = coordinates[2];
+          double tangent[3] = {derivatives[0], derivatives[1], derivatives[2]};
+          const double tangent_norm =
+              std::sqrt(tangent[0] * tangent[0] + tangent[1] * tangent[1] +
+                        tangent[2] * tangent[2]);
+          if (tangent_norm > 1e-12) {
+            for (double& component : tangent) {
+              component /= tangent_norm;
+            }
+            const double outward[3] = {
+                surface_point[0] - owner_center[0],
+                surface_point[1] - owner_center[1],
+                surface_point[2] - owner_center[2]};
+            const double along = outward[0] * tangent[0] +
+                                 outward[1] * tangent[1] +
+                                 outward[2] * tangent[2];
+            for (int axis = 0; axis < 3; ++axis) {
+              normal[axis] = outward[axis] - along * tangent[axis];
+            }
+            if (normal[0] * normal[0] + normal[1] * normal[1] +
+                    normal[2] * normal[2] <=
+                1e-12) {
+              const double fallback[3] = {
+                  std::abs(tangent[2]) > 0.9 ? 1.0 : 0.0, 0.0,
+                  std::abs(tangent[2]) > 0.9 ? 0.0 : 1.0};
+              const double fallback_along = fallback[0] * tangent[0] +
+                                            fallback[1] * tangent[1] +
+                                            fallback[2] * tangent[2];
+              for (int axis = 0; axis < 3; ++axis) {
+                normal[axis] =
+                    fallback[axis] - fallback_along * tangent[axis];
+              }
+            }
+            have_surface_normal = true;
+          }
+        }
+      }
+    } catch (...) {
+      have_surface_normal = false;
+    }
+  }
 
   // 包围盒的“最薄轴”只能识别与全局坐标轴平行的面。对于旋转实例、
   // 斜面和曲面，直接在曲面参数域中心读取 Gmsh 几何法向，并用所属实例
@@ -5058,11 +5127,14 @@ QString GmshPanel::pick_entities_dialog(int dim_filter,
   }
   help_text += chinese
                    ? QString::fromUtf8(
-                         " 选择一行后，主舞台会自动转向并用黄色即时高亮对应实体；"
+                         " 选择一行后，主舞台会自动转向并用黄色即时高亮对应实体："
+                         "点显示为放大圆点、边显示为加粗线、面和体显示为不透明表面；"
                          "选择窗口打开期间仍可直接在主舞台旋转、平移和缩放。")
                    : QString(
                          " Select a row to rotate the main stage and preview "
-                         "the entity in yellow; the main stage remains "
+                         "the entity in yellow: points use enlarged markers, "
+                         "curves use thick lines, and surfaces/volumes use "
+                         "opaque faces; the main stage remains "
                          "interactive while this window is open.");
   auto* help = new QLabel(help_text, &dialog);
   help->setObjectName("entityPickerHelp");
