@@ -35,6 +35,10 @@ class PropertyEditor : public QWidget {
   // W-03b：Physics action 下拉候选（QuasiStatic 恒定；CDPQuasiStatic 仅当
   // 活动档案 extra.physics_action 声明时由 MainWindow 注入）。
   void set_physics_action_options(const QStringList& options);
+  // G1：候选由活动 Application Profile + mapping registry 注入，避免
+  // 表单展示当前求解应用不能生成的载荷/接触类型。
+  void set_load_type_options(const QStringList& options);
+  void set_interaction_type_options(const QStringList& options);
   void refresh_form_options();
   bool validate_current(QStringList* issues = nullptr);
   // 参数级校验（纯查询）：返回缺失/异常项列表，供表单与巡览合同复用。
@@ -77,6 +81,7 @@ class PropertyEditor : public QWidget {
                                   const QString& type) const;
   void apply_template_values(const QVariantMap& values, bool overwrite);
   QStringList collect_model_names(const QString& root_name) const;
+  QStringList pressure_variable_candidates() const;
   // W-03a：CDP 应力类字段显示↔存储换算用的比例因子。
   double display_unit_factor(const QString& quantity, double fallback) const;
 
@@ -133,6 +138,10 @@ class PropertyEditor : public QWidget {
   QStringList volume_groups_;
   QMap<QString, double> display_unit_factors_;
   QStringList physics_action_options_ = {"QuasiStatic"};
+  QStringList load_type_options_ = {"BodyForce", "TimeDerivative",
+                                    "MatDiffusion", "HeatConduction",
+                                    "TensorMechanics"};
+  QStringList interaction_type_options_ = {"Contact"};
 };
 
 }  // namespace gmp

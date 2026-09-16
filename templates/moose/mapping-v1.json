@@ -274,6 +274,19 @@
             "boundary": { "type": "physical_group_list", "dim": 2, "label": "边界" },
             "value": { "type": "scalar", "label": "边界值" }
           }
+        },
+        "Pressure": {
+          "required_params": ["type", "variable", "boundary"],
+          "optional_params": ["factor", "function", "component", "use_displaced_mesh"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "Pressure", "readonly": true },
+            "variable": { "type": "variable_ref", "label": "变量" },
+            "boundary": { "type": "physical_group_list", "dim": 2, "label": "受压面" },
+            "factor": { "type": "scalar", "label": "压力系数" },
+            "function": { "type": "function_ref", "label": "载荷函数" },
+            "component": { "type": "int", "label": "分量（0/1/2）" },
+            "use_displaced_mesh": { "type": "bool", "label": "使用变形后网格" }
+          }
         }
       }
     },
@@ -318,14 +331,22 @@
       "description": "接触",
       "objects": {
         "Contact": {
-          "required_params": ["type", "model", "formulation", "master", "slave"],
-          "optional_params": ["normal_smoothing_distance", "tangential_tolerance"],
+          "required_params": ["type", "model", "formulation", "primary", "secondary"],
+          "optional_params": [
+            "friction_coefficient", "normal_smoothing_distance",
+            "tangential_tolerance", "penalty", "normalize_penalty"
+          ],
           "param_schema": {
             "type": { "type": "enum", "value": "Contact", "readonly": true },
-            "model": { "type": "enum", "enum": ["frictionless", "coulomb"], "label": "接触模型" },
-            "formulation": { "type": "enum", "enum": ["default", "kinematic", "penalty"], "label": " formulation" },
-            "master": { "type": "physical_group_list", "label": "主面" },
-            "slave": { "type": "physical_group_list", "label": "从面" }
+            "model": { "type": "enum", "enum": ["frictionless", "coulomb", "glued"], "label": "接触模型" },
+            "formulation": { "type": "enum", "enum": ["kinematic", "penalty", "augmented_lagrange", "tangential_penalty", "mortar"], "label": "接触算法" },
+            "primary": { "type": "physical_group_list", "dim": 2, "label": "主面" },
+            "secondary": { "type": "physical_group_list", "dim": 2, "label": "从面" },
+            "friction_coefficient": { "type": "scalar", "label": "摩擦系数" },
+            "normal_smoothing_distance": { "type": "scalar", "label": "法向平滑距离" },
+            "tangential_tolerance": { "type": "scalar", "label": "切向容差" },
+            "penalty": { "type": "scalar", "label": "罚参数" },
+            "normalize_penalty": { "type": "bool", "label": "归一化罚参数" }
           }
         }
       },

@@ -110,7 +110,7 @@
 > `TEST-P5-G1-02`～`05` 已由用户完成人工验证。`TEST-P5-G1-05` 证据包含项目自有 3D
 > 装配网格、两个实例体组、两个实例面组、节点/单元/质量摘要和完整 SHA-256。
 > `manual/test05.md` §4.2 专用作用面组的项目级持久化与 Assembly 稳定重绑定已实现，
-> `assembly_instance_contract` 定向回归通过；等待人工验证后进入 `TASK-P5-02` Load 与
+> `assembly_instance_contract` 定向回归及人工验证均已通过；已进入 `TASK-P5-02` Load 与
 > Interaction/Contact 真实映射。
 
 - **优先级**：P0
@@ -119,6 +119,13 @@
 - **验收**：混凝土块和钢板可独立定位；保存重开一致；生成网格的体组/面组与实例位置一致。
 
 ### TASK-P5-02 Load 与 Interaction/Contact 真实映射
+
+> **实施状态（2026-09-16）**：开发完成，等待人工验证。DamSafetyApp + mapping v1 已冻结
+> `Pressure` 与 `Contact` 生产映射；Pressure 通过命名二维 Physical Group 写入 `[BCs]`，
+> Contact 使用 `primary`/`secondary`、`model`、`formulation` 和
+> `friction_coefficient` 写入 `[Contact]`。表单候选由活动档案与 mapping 共同注入；无映射、
+> 主从面相同、维度错误、重复接触对及同面同变量的 BC/Pressure 冲突均进入预检。
+> `contact_load_mapping_contract`、`bc_function_dirichlet_contract` 定向巡览和 CTest 已通过。
 
 - **优先级**：P0
 - **关联**：REQ-013、REQ-015、M-01
@@ -130,6 +137,16 @@
 - **验收**：生成的真实 MOOSE 对象通过 `--check-input`，不得用普通 BC 静默冒充未实现的 Load/Contact。
 
 ### TASK-P5-03 M-01 线弹性 + 面—面接触算例
+
+> **实施状态（2026-09-16）**：UI 配置、确定性输入生成、来源报告、目标应用输入检查入口、
+> contract v2 快照、远程作业终态与 Results 回放基础能力均已具备；现进入
+> `TEST-P5-G1-06`～`09` 人工验证。最终 `--check-input` 与远程 `succeeded` 依赖用户的
+> DamSafetyApp 运行环境和本轮 M-01 项目证据，不在本地自动测试中伪造。
+>
+> **阶段性记录（2026-09-17）**：M-01 生成报告和内部工作流校验已有证据；
+> `TEST-P5-G1-08` 因目标应用未执行 `--check-input` 记为“部分完成／环境待测”，
+> `TEST-P5-G1-09` 因远端计算环境当前不可用记为“未测试／延期”。接触量仍待结果文件核实，
+> G1 未准出。可先分析 `TASK-P5-04` 的支持矩阵和映射方案，不开始 G2 实施或验收。
 
 - **优先级**：P0
 - **关联**：M-01、REQ-011～017
@@ -196,3 +213,32 @@
 2. **专家模式准出范围**：建议在 G0 完成 Custom Blocks、冲突校验和 diff；若产品决定延期，必须明确标记 M-P4-3 未完成，不能将 Phase 4 整体标为完成。
 3. **CDP 基准容差**：M-03 开始前确认参考输入、材料曲线版本、力—位移/损伤比较指标和容差。
 4. **多 Step 技术路线**：待 TASK-P6-01 调研结论后冻结；当前“仅取第一个 Step”告警在 G4 前保留。
+
+## 8. 后续阶段 TODO（不纳入当前 G1～G4 准出）
+
+### TASK-NEXT-002 二维线—线（边界—边界）接触
+
+- **状态**：TODO；当前仅完成可行性确认，不修改或集成现有 G1 三维 Contact。
+- **优先级**：P2；建议在 Phase 6 / G4 完成后进入后续阶段。
+- **目标**：二维模型使用一维 Physical Group 作为主/从接触边界，继续生成标准
+  `[Contact]`；产品界面可称“线—线接触”，内部语义保持 MOOSE 的 primary/secondary
+  boundary（离散层面可能为 node-to-segment 或二维 mortar），不新增伪 `LineContact` 类型。
+- **可行性依据**：MOOSE 官方 Contact 教程明确 Contact 可用于 2D 与 3D；`primary`、
+  `secondary` 接收 boundary/sideset 名称。现有工程的默认 Contact、工作流预检、Gmsh/MOOSE
+  边界组读取已多处使用 `mesh_dim - 1`，具备维度自适应基础。
+- **当前缺口**：
+  1. `DamSafetyApp-opt` 档案目前只声明三维能力；需先用实际部署求解器冻结二维平面应变/
+     平面应力、变量和 Contact formulation 支持矩阵。
+  2. `mapping-v1.json` 的 `primary`/`secondary` 仍固定 `dim=2`，应扩展为“边界维度”语义，
+     即二维模型取 1D 组、三维模型取 2D 组。
+  3. Contact 表单标签与非法引用提示仍写死“主面/从面、2D Physical Group”，应按模型维度
+     显示“主线/从线”或统一为“主边界/从边界”。
+  4. 需验证二维网格清单、1D Physical Group 持久化、线拾取高亮、主从方向和法向约定。
+- **交付**：二维力学 application profile；动态 boundary-dimension schema；维度感知的
+  Contact 表单/校验/报告；二维接触样例与独立人工验收说明。
+- **验收**：
+  1. 二维模型的主/从下拉只列一维 Physical Group，三维现有行为保持只列二维组。
+  2. 生成标准 `[Contact]`，通过目标 DamSafetyApp `--check-input`，不得手工修改 `.i`。
+  3. 至少一个二维无摩擦算例和一个二维 Coulomb 算例远程成功，并验证接触压力、穿透量及
+     反力；错误维度、同组和方向异常均能明确阻断。
+  4. 现有 G1 三维 `contact_plate_concrete` 全量回归不退化。

@@ -1995,12 +1995,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                add_item_under_root(root);
              }
            }},
-          {"Add Tie Interaction", [this]() {
+          {"Add Surface Contact", [this]() {
              if (auto* root = find_root_item("Interactions")) {
-               add_child_item(root, "tie_1", "Interactions",
-                              {{"type", "Tie"},
-                               {"master", ""},
-                               {"slave", ""}});
+               add_child_item(root, "contact_1", "Interactions",
+                              default_params_for_kind("Interactions"));
              }
            }},
       });
@@ -2025,6 +2023,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                              { {"type", "BodyForce"},
                                {"variable", "u"},
                                {"value", "0"} });
+             }
+           }},
+          {"Add Surface Pressure", [this]() {
+             if (auto* root = find_root_item("Loads")) {
+               QVariantMap params = default_params_for_kind("Loads");
+               params.insert("type", "Pressure");
+               params.insert("variable", "disp_z");
+               params.insert("factor", "1.0");
+               params.insert("component", "2");
+               params.insert("use_displaced_mesh", "true");
+               add_child_item(root, "surface_pressure", "Loads", params);
              }
            }},
           {"Open BC Root", [this]() {
@@ -2957,6 +2966,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                                              {{"type", "BodyForce"},
                                               {"variable", "u"},
                                               {"value", "0"}});
+                             }
+                           }},
+                           {"Add Surface Pressure", [this]() {
+                             if (auto* root = find_root_item("Loads")) {
+                               QVariantMap params =
+                                   default_params_for_kind("Loads");
+                               params.insert("type", "Pressure");
+                               params.insert("variable", "disp_z");
+                               params.insert("factor", "1.0");
+                               params.insert("component", "2");
+                               params.insert("use_displaced_mesh", "true");
+                               add_child_item(root, "surface_pressure",
+                                              "Loads", params);
                              }
                            }},
                            {"Open BC Root", [this]() {
@@ -6147,7 +6169,8 @@ void MainWindow::open_property_form(QTreeWidgetItem* item,
   const QStringList volumes =
       property_editor_ ? property_editor_->volume_groups() : QStringList();
   auto* form = new FloatingPropertyForm(
-      item, boundaries, volumes,
+      item, boundaries, volumes, physics_action_options(),
+      load_type_options(), interaction_type_options(),
       dialog_parent(transient_parent ? transient_parent : this));
   floating_property_form_ = form;
   form->set_display_unit_factors(display_unit_factors());
@@ -6936,6 +6959,8 @@ void MainWindow::push_context_to_moose_panel() {
     property_editor_->set_display_unit_factors(display_unit_factors());
     // W-03b：Physics action 下拉候选随档案 extra.physics_action 声明刷新。
     property_editor_->set_physics_action_options(physics_action_options());
+    property_editor_->set_load_type_options(load_type_options());
+    property_editor_->set_interaction_type_options(interaction_type_options());
   }
 }
 
@@ -7703,7 +7728,7 @@ QVariantList MainWindow::collect_workflow_issues() const {
 
   const QStringList roots_to_validate = {
       "Materials", "Sections", "Assembly", "Physics", "Functions",
-      "Steps",     "BC",       "Loads",    "Outputs"};
+      "Steps",     "BC",       "Loads",    "Interactions", "Outputs"};
   for (const auto& root_name : roots_to_validate) {
     const auto* root = find_root_item(root_name);
     if (!root) {
@@ -7749,11 +7774,16 @@ QVariantList MainWindow::collect_workflow_issues() const {
                                         const QString& object,
                                         const QString& field,
                                         const QString& name, int dim) {
-    if (!name.trimmed().isEmpty() && !mesh_snapshot_.has_group(name, dim)) {
-      add_issue("error", root, object, field,
-                QString("Physical Group '%1' (dimension %2) is not present in the mesh.")
-                    .arg(name)
-                    .arg(dim));
+    const QStringList names = name.split(QRegularExpression("\\s+"),
+                                         Qt::SkipEmptyParts);
+    for (const auto& group_name : names) {
+      if (!mesh_snapshot_.has_group(group_name, dim)) {
+        add_issue(
+            "error", root, object, field,
+            QString("Physical Group '%1' (dimension %2) is not present in the mesh.")
+                .arg(group_name)
+                .arg(dim));
+      }
     }
   };
 
@@ -7823,6 +7853,7 @@ QVariantList MainWindow::collect_workflow_issues() const {
       }
     }
   }
+  QSet<QString> constrained_boundary_dofs;
   if (const auto* root = find_root_item("BC")) {
     for (int row = 0; row < root->childCount(); ++row) {
       const auto* child = root->child(row);
@@ -7842,6 +7873,14 @@ QVariantList MainWindow::collect_workflow_issues() const {
           add_issue("error", "BC", child->text(0), "function",
                     QString("Referenced Function '%1' does not exist.").arg(function));
         }
+      }
+      const QStringList boundaries =
+          params.value("boundary")
+              .toString()
+              .split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+      for (const auto& boundary : boundaries) {
+        constrained_boundary_dofs.insert(
+            boundary + "\n" + params.value("variable").toString());
       }
     }
   }
@@ -7865,6 +7904,65 @@ QVariantList MainWindow::collect_workflow_issues() const {
                   QString("Referenced Variable '%1' does not exist.")
                       .arg(variable));
       }
+      const QString type = params.value("type").toString();
+      if (type == "Pressure" &&
+          (!active_profile_supports_block("BCs") ||
+           !mapping_registry_.has_object_type("BCs", "Pressure"))) {
+        add_issue("error", "Loads", child->text(0), "type",
+                  "Pressure is not supported by the active application profile/mapping.");
+      }
+      if (type == "Pressure") {
+        const QStringList boundaries =
+            params.value("boundary")
+                .toString()
+                .split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+        for (const auto& group : boundaries) {
+          if (constrained_boundary_dofs.contains(
+                  group + "\n" + params.value("variable").toString())) {
+            add_issue(
+                "error", "Loads", child->text(0), "boundary/variable",
+                "Pressure conflicts with a prescribed BC on the same boundary and variable.");
+          }
+        }
+      }
+    }
+  }
+  if (const auto* root = find_root_item("Interactions")) {
+    QSet<QString> contact_pairs;
+    for (int row = 0; row < root->childCount(); ++row) {
+      const auto* child = root->child(row);
+      if (!child) {
+        continue;
+      }
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      const QString type = params.value("type").toString();
+      if (type != "Contact" ||
+          !active_profile_supports_block("Contact") ||
+          !mapping_registry_.has_object_type("Contact", type)) {
+        add_issue("error", "Interactions", child->text(0), "type",
+                  QString("Interaction type '%1' is not supported by the active application profile/mapping.")
+                      .arg(type));
+        continue;
+      }
+      const QString primary = params.value("primary").toString().trimmed();
+      const QString secondary =
+          params.value("secondary").toString().trimmed();
+      check_group("Interactions", child->text(0), "primary", primary,
+                  boundary_dim);
+      check_group("Interactions", child->text(0), "secondary", secondary,
+                  boundary_dim);
+      if (!primary.isEmpty() && primary == secondary) {
+        add_issue("error", "Interactions", child->text(0), "secondary",
+                  "Primary and secondary contact surfaces must differ.");
+      }
+      const QString pair = primary + "\n" + secondary;
+      if (!primary.isEmpty() && !secondary.isEmpty() &&
+          contact_pairs.contains(pair)) {
+        add_issue("error", "Interactions", child->text(0), "primary/secondary",
+                  "The same primary/secondary contact pair is already defined.");
+      }
+      contact_pairs.insert(pair);
     }
   }
   if (const auto* root = find_root_item("Outputs")) {
@@ -9150,7 +9248,24 @@ QVariantMap MainWindow::default_params_for_kind(const QString& kind) const {
             {"order", QString::number(order)}};
   }
   if (kind == "Interactions") {
-    return {{"type", "Interaction"}};
+    QStringList surfaces;
+    const int boundary_dim = mesh_snapshot_.mesh_dim > 0
+                                 ? mesh_snapshot_.mesh_dim - 1
+                                 : 2;
+    for (const auto& group : mesh_snapshot_.groups) {
+      if (group.dim == boundary_dim && !surfaces.contains(group.name)) {
+        surfaces << group.name;
+      }
+    }
+    return {{"type", "Contact"},
+            {"model", "coulomb"},
+            {"formulation", "kinematic"},
+            {"primary", surfaces.value(0)},
+            {"secondary", surfaces.value(1)},
+            {"friction_coefficient", "0.15"},
+            {"tangential_tolerance", "5e-4"},
+            {"penalty", "1e12"},
+            {"normalize_penalty", "true"}};
   }
   if (kind == "Mesh") {
     return {{"status", "New"}};
@@ -9350,15 +9465,24 @@ QString MainWindow::build_functions_block(QTreeWidgetItem* root) const {
 }
 
 QString MainWindow::build_bcs_block(QTreeWidgetItem* root) const {
-  if (!root || root->childCount() == 0) {
+  auto* loads_root = find_root_item("Loads");
+  bool has_pressure = false;
+  for (int i = 0; loads_root && i < loads_root->childCount(); ++i) {
+    const auto* child = loads_root->child(i);
+    has_pressure = has_pressure ||
+                   (child && child->data(0, PropertyEditor::kParamsRole)
+                                 .toMap()
+                                 .value("type")
+                                 .toString() == "Pressure");
+  }
+  if ((!root || root->childCount() == 0) && !has_pressure) {
     return QString();
   }
   QString out;
   out += "[BCs]\n";
-  for (int i = 0; i < root->childCount(); ++i) {
-    auto* child = root->child(i);
+  auto append_bc = [&out](const QTreeWidgetItem* child, bool pressure) {
     if (!child) {
-      continue;
+      return;
     }
     const QString name = child->text(0);
     out += QString("  [%1]\n").arg(name);
@@ -9366,7 +9490,7 @@ QString MainWindow::build_bcs_block(QTreeWidgetItem* root) const {
         child->data(0, PropertyEditor::kParamsRole).toMap();
     QString type = params.value("type").toString();
     if (type.isEmpty()) {
-      type = "DirichletBC";
+      type = pressure ? "Pressure" : "DirichletBC";
     }
     out += QString("    type = %1\n").arg(type);
     for (auto it = params.begin(); it != params.end(); ++it) {
@@ -9380,13 +9504,114 @@ QString MainWindow::build_bcs_block(QTreeWidgetItem* root) const {
       if (type == "DirichletBC" && it.key() == "function") {
         continue;
       }
+      if (type == "Pressure" &&
+          !QStringList{"variable", "boundary", "factor", "function",
+                       "component", "use_displaced_mesh"}
+               .contains(it.key())) {
+        continue;
+      }
+      if (type == "Pressure" && it.value().toString().trimmed().isEmpty()) {
+        continue;
+      }
       out += QString("    %1 = %2\n")
                  .arg(it.key())
                  .arg(quote_moose_value_if_needed(it.value().toString()));
     }
     out += "  []\n";
+  };
+  for (int i = 0; root && i < root->childCount(); ++i) {
+    append_bc(root->child(i), false);
+  }
+  for (int i = 0; loads_root && i < loads_root->childCount(); ++i) {
+    const auto* child = loads_root->child(i);
+    if (child && child->data(0, PropertyEditor::kParamsRole)
+                         .toMap()
+                         .value("type")
+                         .toString() == "Pressure") {
+      append_bc(child, true);
+    }
   }
   out += "[]\n";
+  return out;
+}
+
+QString MainWindow::build_loads_block(QTreeWidgetItem* root) const {
+  if (!root) {
+    return QString();
+  }
+  QString out;
+  for (int i = 0; i < root->childCount(); ++i) {
+    const auto* child = root->child(i);
+    if (!child || child->data(0, PropertyEditor::kParamsRole)
+                          .toMap()
+                          .value("type")
+                          .toString() == "Pressure") {
+      continue;
+    }
+    if (out.isEmpty()) {
+      out = "[Kernels]\n";
+    }
+    const QVariantMap params =
+        child->data(0, PropertyEditor::kParamsRole).toMap();
+    out += QString("  [%1]\n").arg(child->text(0));
+    out += QString("    type = %1\n")
+               .arg(params.value("type", "BodyForce").toString());
+    for (auto it = params.begin(); it != params.end(); ++it) {
+      if (it.key() == "type" || it.key() == "section" ||
+          it.value().toString().trimmed().isEmpty()) {
+        continue;
+      }
+      out += QString("    %1 = %2\n")
+                 .arg(it.key(),
+                      quote_moose_value_if_needed(it.value().toString()));
+    }
+    out += "  []\n";
+  }
+  if (!out.isEmpty()) {
+    out += "[]\n";
+  }
+  return out;
+}
+
+QString MainWindow::build_interactions_block(QTreeWidgetItem* root) const {
+  if (!root || root->childCount() == 0) {
+    return QString();
+  }
+  QString out;
+  const QStringList ordered_keys = {
+      "primary",          "secondary",        "model",
+      "formulation",      "friction_coefficient",
+      "normal_smoothing_distance", "tangential_tolerance",
+      "penalty",          "normalize_penalty"};
+  for (int i = 0; i < root->childCount(); ++i) {
+    const auto* child = root->child(i);
+    if (!child) {
+      continue;
+    }
+    const QVariantMap params =
+        child->data(0, PropertyEditor::kParamsRole).toMap();
+    if (params.value("type").toString() != "Contact") {
+      continue;
+    }
+    if (out.isEmpty()) {
+      out = "[Contact]\n";
+    }
+    out += QString("  [%1]\n").arg(child->text(0));
+    for (const auto& key : ordered_keys) {
+      const QString value = params.value(key).toString().trimmed();
+      if (value.isEmpty() ||
+          (key == "friction_coefficient" &&
+           params.value("model").toString() != "coulomb")) {
+        continue;
+      }
+      out += QString("    %1 = %2\n")
+                 .arg(key, quote_moose_value_if_needed(value));
+    }
+    out += "  []\n";
+  }
+  if (!out.isEmpty()) {
+    out += "[]\n";
+  }
   return out;
 }
 
@@ -9764,6 +9989,42 @@ QStringList MainWindow::physics_action_options() const {
         break;
       }
     }
+  }
+  return options;
+}
+
+bool MainWindow::active_profile_supports_block(
+    const QString& block_name) const {
+  const ApplicationProfile profile = app_profile_registry_.profile(
+      application_profile_.value("id").toString());
+  if (!profile.valid) {
+    return false;
+  }
+  for (const auto& physics : profile.physics) {
+    if (physics.supported_blocks.contains(block_name)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+QStringList MainWindow::load_type_options() const {
+  // 既有通用 Kernel 类型保留兼容；Pressure 只有在档案与 mapping 均明确
+  // 支持 BCs/Pressure 时才进入候选。
+  QStringList options{"BodyForce", "TimeDerivative", "MatDiffusion",
+                      "HeatConduction", "TensorMechanics"};
+  if (active_profile_supports_block("BCs") &&
+      mapping_registry_.has_object_type("BCs", "Pressure")) {
+    options << "Pressure";
+  }
+  return options;
+}
+
+QStringList MainWindow::interaction_type_options() const {
+  QStringList options;
+  if (active_profile_supports_block("Contact") &&
+      mapping_registry_.has_object_type("Contact", "Contact")) {
+    options << "Contact";
   }
   return options;
 }
@@ -10332,7 +10593,36 @@ QString MainWindow::build_generation_report() const {
   append_children("Functions", "Functions");
   append_children("Variables", "Variables");
   append_children("BC", "BCs");
-  append_children("Loads", "Kernels");
+  if (const auto* loads = find_root_item("Loads")) {
+    for (int row = 0; row < loads->childCount(); ++row) {
+      const auto* child = loads->child(row);
+      if (!child) {
+        continue;
+      }
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      lines << QString("[%1/%2] <- Model Tree Loads/%2 (Physical Group=%3)")
+                   .arg(params.value("type").toString() == "Pressure"
+                            ? "BCs"
+                            : "Kernels",
+                        child->text(0),
+                        params.value("boundary").toString());
+    }
+  }
+  if (const auto* interactions = find_root_item("Interactions")) {
+    for (int row = 0; row < interactions->childCount(); ++row) {
+      const auto* child = interactions->child(row);
+      if (!child) {
+        continue;
+      }
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      lines << QString("[Contact/%1] <- Model Tree Interactions/%1 "
+                       "(primary=%2, secondary=%3, mapping=Contact/Contact)")
+                   .arg(child->text(0), params.value("primary").toString(),
+                        params.value("secondary").toString());
+    }
+  }
   if (const auto* steps = find_root_item("Steps"); steps && steps->childCount() > 0) {
     lines << QString("[Executioner] <- Model Tree Steps/%1")
                  .arg(steps->child(0)->text(0));
@@ -10371,6 +10661,78 @@ bool MainWindow::sync_model_to_input(const QString& project_path_override) {
   if (!moose_panel_) {
     return false;
   }
+  // G1：已创建的 Load/Interaction 若活动档案无真实映射，或接触主从面
+  // 等必填参数无效，不允许静默省略/伪装后继续同步。
+  auto block_sync = [this](const QString& message) {
+    statusBar()->showMessage("Model sync blocked: " + message, 6000);
+    gmp::log_operation("model", "Model sync blocked: " + message);
+    return false;
+  };
+  if (const auto* materials = find_root_item("Materials")) {
+    const QStringList volume_groups =
+        property_editor_ ? property_editor_->volume_groups() : QStringList();
+    for (int i = 0; i < materials->childCount(); ++i) {
+      const auto* child = materials->child(i);
+      if (!child) {
+        continue;
+      }
+      const QStringList blocks =
+          child->data(0, PropertyEditor::kParamsRole)
+              .toMap()
+              .value("block")
+              .toString()
+              .split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+      for (const auto& block : blocks) {
+        if (!volume_groups.contains(block)) {
+          return block_sync(
+              QString("material '%1' references unknown volume Physical "
+                      "Group '%2'")
+                  .arg(child->text(0), block));
+        }
+      }
+    }
+  }
+  if (const auto* interactions = find_root_item("Interactions")) {
+    for (int i = 0; i < interactions->childCount(); ++i) {
+      const auto* child = interactions->child(i);
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      const QString type = params.value("type").toString();
+      if (type != "Contact" ||
+          !active_profile_supports_block("Contact") ||
+          !mapping_registry_.has_object_type("Contact", type)) {
+        return block_sync(
+            QString("unsupported interaction '%1' (%2)")
+                .arg(child->text(0), type));
+      }
+      if (property_editor_ &&
+          !property_editor_->validate_params("Interactions", params)
+               .isEmpty()) {
+        return block_sync(
+            QString("invalid contact parameters in '%1'").arg(child->text(0)));
+      }
+    }
+  }
+  if (const auto* loads = find_root_item("Loads")) {
+    for (int i = 0; i < loads->childCount(); ++i) {
+      const auto* child = loads->child(i);
+      const QVariantMap params =
+          child->data(0, PropertyEditor::kParamsRole).toMap();
+      if (params.value("type").toString() != "Pressure") {
+        continue;
+      }
+      if (!active_profile_supports_block("BCs") ||
+          !mapping_registry_.has_object_type("BCs", "Pressure")) {
+        return block_sync(
+            QString("unsupported pressure load '%1'").arg(child->text(0)));
+      }
+      if (property_editor_ &&
+          !property_editor_->validate_params("Loads", params).isEmpty()) {
+        return block_sync(
+            QString("invalid pressure parameters in '%1'").arg(child->text(0)));
+      }
+    }
+  }
   moose_panel_->begin_model_sync();
   // 材料 CSV 等相对输入文件可能刚由属性表单更新；每次装配前刷新来源表，
   // 供项目工作目录物化与后续快照打包共同使用。
@@ -10379,9 +10741,7 @@ bool MainWindow::sync_model_to_input(const QString& project_path_override) {
   const QString variables = build_variables_block(find_root_item("Variables"));
   const QString materials = build_materials_block(find_root_item("Materials"));
   const QString bcs = build_bcs_block(find_root_item("BC"));
-  const QString kernels =
-      build_block_from_root(find_root_item("Loads"), "Kernels", "BodyForce",
-                            {"section"});
+  const QString kernels = build_loads_block(find_root_item("Loads"));
   const QString outputs = build_outputs_block(find_root_item("Outputs"));
   QString executioner =
       build_executioner_block(find_root_item("Steps"));
@@ -10423,6 +10783,9 @@ bool MainWindow::sync_model_to_input(const QString& project_path_override) {
     } else {
       input = upsert_generated_block(input, "GlobalParams", QString());
     }
+    input = upsert_generated_block(
+        input, "Contact",
+        build_interactions_block(find_root_item("Interactions")));
     // 删除已从模型树移除或改名的 Physics action，避免旧 action 与新
     // action 同时残留在输入中。
     for (const auto& header : generated_headers_with_prefix(
@@ -14285,6 +14648,261 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
     }
     return QString();
   };
+  steps.append({"g1_isotropic_material_form_contract",
+                [this]() {
+                  auto* root = find_root_item("Materials");
+                  if (!root || !property_editor_) {
+                    throw std::runtime_error(
+                        "G1 isotropic material form fixture is missing");
+                  }
+                  auto flush_form = []() {
+                    qApp->sendPostedEvents(nullptr, QEvent::DeferredDelete);
+                  };
+                  const QStringList saved_volumes =
+                      property_editor_->volume_groups();
+                  property_editor_->set_volume_groups(
+                      {"instance_concrete", "instance_plate"});
+                  auto* elasticity = add_child_item(
+                      root, "tour_g1_elasticity", "Materials",
+                      default_params_for_kind("Materials"));
+                  if (!elasticity) {
+                    throw std::runtime_error(
+                        "G1 isotropic material node was not created");
+                  }
+                  property_editor_->set_item(elasticity);
+                  flush_form();
+                  auto* type = property_editor_->findChild<QComboBox*>(
+                      "materialTypeCombo");
+                  const int isotropic_index =
+                      type ? type->findText("ComputeIsotropicElasticityTensor")
+                           : -1;
+                  if (isotropic_index < 0) {
+                    throw std::runtime_error(
+                        "G1 isotropic elasticity type is absent from the picker");
+                  }
+                  type->setCurrentIndex(isotropic_index);
+                  flush_form();
+                  auto* young = property_editor_->findChild<QLineEdit*>(
+                      "cdpYoungsModulusMpa");
+                  auto* poisson = property_editor_->findChild<QLineEdit*>(
+                      "cdpPoissonsRatio");
+                  auto* block = property_editor_->findChild<QLineEdit*>(
+                      "materialBlockEdit");
+                  auto* groups = property_editor_->findChild<QListWidget*>(
+                      "propertyGroupsList");
+                  auto* apply_groups =
+                      property_editor_->findChild<QPushButton*>(
+                          "applyGroupsBtn");
+                  auto* groups_box = property_editor_->findChild<QGroupBox*>(
+                      "propertyGroupsBox");
+                  if (!young || young->isHidden() || !poisson ||
+                      poisson->isHidden() || !block || block->isHidden() ||
+                      !block->isReadOnly() || !groups || !apply_groups ||
+                      !groups_box || groups_box->isHidden() ||
+                      groups->count() != 2) {
+                    throw std::runtime_error(
+                        "G1 isotropic E/nu or volume picker is unavailable");
+                  }
+                  young->setText("29791.45978");
+                  poisson->setText("0.2");
+                  for (int i = 0; i < groups->count(); ++i) {
+                    groups->item(i)->setSelected(true);
+                  }
+                  apply_groups->click();
+                  flush_form();
+                  const QString multi_block =
+                      elasticity->data(0, PropertyEditor::kParamsRole)
+                          .toMap()
+                          .value("block")
+                          .toString();
+                  if (!multi_block.contains("instance_concrete") ||
+                      !multi_block.contains("instance_plate")) {
+                    throw std::runtime_error(
+                        "G1 material volume picker did not support multiple groups");
+                  }
+                  groups = property_editor_->findChild<QListWidget*>(
+                      "propertyGroupsList");
+                  apply_groups = property_editor_->findChild<QPushButton*>(
+                      "applyGroupsBtn");
+                  for (int i = 0; i < groups->count(); ++i) {
+                    groups->item(i)->setSelected(
+                        groups->item(i)->text() == "instance_concrete");
+                  }
+                  apply_groups->click();
+                  flush_form();
+                  const QVariantMap elastic_params =
+                      elasticity->data(0, PropertyEditor::kParamsRole).toMap();
+                  if (elastic_params.value("type").toString() !=
+                          "ComputeIsotropicElasticityTensor" ||
+                      std::abs(elastic_params.value("youngs_modulus")
+                                       .toDouble() -
+                               29791459780.0) > 0.1 ||
+                      elastic_params.value("poissons_ratio").toString() !=
+                          "0.2" ||
+                      elastic_params.value("block").toString() !=
+                          "instance_concrete" ||
+                      elastic_params.contains("prop_names") ||
+                      elastic_params.contains("prop_values") ||
+                      elastic_params.contains("unit_factor_stress") ||
+                      !property_editor_->validate_params("Materials",
+                                                         elastic_params)
+                           .isEmpty()) {
+                    throw std::runtime_error(
+                        "G1 isotropic material did not retain clean SI parameters");
+                  }
+                  const QString materials_input = build_materials_block(root);
+                  const int begin =
+                      materials_input.indexOf("  [tour_g1_elasticity]\n");
+                  const int end = materials_input.indexOf("  []", begin);
+                  const QString elastic_block =
+                      begin >= 0 && end > begin
+                          ? materials_input.mid(begin, end - begin)
+                          : QString();
+                  if (!elastic_block.contains(
+                          "type = ComputeIsotropicElasticityTensor") ||
+                      !elastic_block.contains("youngs_modulus = ") ||
+                      !elastic_block.contains("poissons_ratio = 0.2") ||
+                      !elastic_block.contains(
+                          "block = instance_concrete") ||
+                      elastic_block.contains("prop_names") ||
+                      elastic_block.contains("unit_factor_stress")) {
+                    throw std::runtime_error(
+                        "G1 isotropic material input mapping is incorrect");
+                  }
+                  auto* advanced = property_editor_->findChild<QTableWidget*>(
+                      "propertyParamsTable");
+                  int block_row = -1;
+                  for (int row = 0; advanced && row < advanced->rowCount();
+                       ++row) {
+                    if (advanced->item(row, 0) &&
+                        advanced->item(row, 0)->text() == "block") {
+                      block_row = row;
+                      break;
+                    }
+                  }
+                  if (block_row < 0 || !advanced->item(block_row, 1)) {
+                    throw std::runtime_error(
+                        "G1 material advanced block row is absent");
+                  }
+                  advanced->item(block_row, 1)->setText("missing_volume");
+                  QStringList block_issues;
+                  if (property_editor_->validate_current(&block_issues) ||
+                      !block_issues.join(" ").contains(
+                          "existing volume Physical Group")) {
+                    throw std::runtime_error(
+                        "G1 invalid advanced material block was accepted");
+                  }
+                  groups = property_editor_->findChild<QListWidget*>(
+                      "propertyGroupsList");
+                  apply_groups = property_editor_->findChild<QPushButton*>(
+                      "applyGroupsBtn");
+                  for (int i = 0; i < groups->count(); ++i) {
+                    groups->item(i)->setSelected(
+                        groups->item(i)->text() == "instance_concrete");
+                  }
+                  apply_groups->click();
+                  flush_form();
+                  property_editor_->set_item(nullptr);
+                  property_editor_->set_item(elasticity);
+                  flush_form();
+                  auto* reopened_young =
+                      property_editor_->findChild<QLineEdit*>(
+                          "cdpYoungsModulusMpa");
+                  auto* reopened_block =
+                      property_editor_->findChild<QLineEdit*>(
+                          "materialBlockEdit");
+                  if (!reopened_young ||
+                      std::abs(reopened_young->text().toDouble() -
+                               29791.45978) > 1e-6 ||
+                      !reopened_block ||
+                      !reopened_block->isReadOnly() ||
+                      reopened_block->text() != "instance_concrete") {
+                    throw std::runtime_error(
+                        "G1 isotropic material quick-form round trip failed");
+                  }
+                  open_property_form(elasticity);
+                  qApp->processEvents();
+                  auto* floating = findChild<FloatingPropertyForm*>(
+                      "floatingPropertyForm");
+                  auto* floating_type = floating
+                          ? floating->findChild<QComboBox*>(
+                                "materialTypeCombo")
+                          : nullptr;
+                  auto* floating_young = floating
+                          ? floating->findChild<QLineEdit*>(
+                                "cdpYoungsModulusMpa")
+                          : nullptr;
+                  auto* floating_groups = floating
+                          ? floating->findChild<QListWidget*>(
+                                "propertyGroupsList")
+                          : nullptr;
+                  auto* floating_block = floating
+                          ? floating->findChild<QLineEdit*>(
+                                "materialBlockEdit")
+                          : nullptr;
+                  if (!floating_type ||
+                      floating_type->currentText() !=
+                          "ComputeIsotropicElasticityTensor" ||
+                      !floating_young || floating_young->isHidden() ||
+                      !floating_groups || floating_groups->count() != 2 ||
+                      !floating_block || !floating_block->isReadOnly() ||
+                      floating_block->text() != "instance_concrete" ||
+                      std::abs(floating_young->text().toDouble() -
+                               29791.45978) > 1e-6) {
+                    throw std::runtime_error(
+                        "G1 floating material form lacks E/nu or volume picker");
+                  }
+                  auto* floating_advanced = floating->findChild<QTableWidget*>(
+                      "propertyParamsTable");
+                  auto* floating_ok = floating->findChild<QPushButton*>(
+                      "propertyFormOk");
+                  int floating_block_row = -1;
+                  for (int row = 0;
+                       floating_advanced && row < floating_advanced->rowCount();
+                       ++row) {
+                    if (floating_advanced->item(row, 0) &&
+                        floating_advanced->item(row, 0)->text() == "block") {
+                      floating_block_row = row;
+                      break;
+                    }
+                  }
+                  if (floating_block_row < 0 || !floating_ok) {
+                    throw std::runtime_error(
+                        "G1 floating material block validation fixture is absent");
+                  }
+                  floating_advanced->item(floating_block_row, 1)->setText(
+                      "missing_volume");
+                  floating_ok->click();
+                  qApp->processEvents();
+                  if (!floating->isVisible() ||
+                      elasticity->data(0, PropertyEditor::kParamsRole)
+                              .toMap()
+                              .value("block")
+                              .toString() != "instance_concrete") {
+                    throw std::runtime_error(
+                        "G1 floating form accepted an unknown material block");
+                  }
+                  floating->reject();
+                  flush_form();
+                  QVariantMap invalid_saved =
+                      elasticity->data(0, PropertyEditor::kParamsRole).toMap();
+                  invalid_saved.insert("block", "missing_volume");
+                  elasticity->setData(0, PropertyEditor::kParamsRole,
+                                      invalid_saved);
+                  if (sync_model_to_input() ||
+                      !statusBar()->currentMessage().contains(
+                          "unknown volume Physical Group")) {
+                    throw std::runtime_error(
+                        "G1 saved material with unknown block was synchronized");
+                  }
+                  elasticity->setData(0, PropertyEditor::kParamsRole,
+                                      elastic_params);
+                  property_editor_->set_item(nullptr);
+                  delete root->takeChild(root->indexOfChild(elasticity));
+                  property_editor_->set_volume_groups(saved_volumes);
+                  refresh_module_pages();
+                },
+                this});
   steps.append({"cdp_material_form_contract",
                 [this, resolve_tour_fixture]() {
                   // W-03a：CDP 材料表单合同。新建 type=AbaqusCDP 材料 →
@@ -16515,6 +17133,446 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   delete functions_root->takeChild(
                       functions_root->indexOfChild(parsed));
                   delete bc_root->takeChild(bc_root->indexOfChild(bc));
+                  refresh_module_pages();
+                },
+                this});
+  steps.append({"contact_load_mapping_contract",
+                [this]() {
+                  // G1-06/G1-07：活动档案 + mapping 驱动的表单候选，
+                  // Pressure 使用命名面组写入 [BCs]，Contact 使用
+                  // primary/secondary 写入 [Contact]；重复 sync 必须幂等。
+                  auto* functions_root = find_root_item("Functions");
+                  auto* loads_root = find_root_item("Loads");
+                  auto* interactions_root = find_root_item("Interactions");
+                  if (!functions_root || !loads_root || !interactions_root ||
+                      !property_editor_ || !moose_panel_ || !model_tree_) {
+                    throw std::runtime_error(
+                        "G1 contact/load mapping fixture is missing");
+                  }
+                  const QStringList saved_boundaries =
+                      property_editor_->boundary_groups();
+                  const QStringList saved_volumes =
+                      property_editor_->volume_groups();
+                  property_editor_->set_boundary_groups(
+                      {"load_top", "contact_plate", "contact_concrete"});
+                  property_editor_->set_volume_groups(
+                      {"instance_plate", "instance_concrete"});
+
+                  auto* function = add_child_item(
+                      functions_root, "tour_pressure_curve", "Functions",
+                      {{"type", "PiecewiseLinear"},
+                       {"x", "0 1"},
+                       {"y", "0 1"}});
+                  auto* pressure = add_child_item(
+                      loads_root, "tour_pressure", "Loads",
+                      {{"type", "Pressure"},
+                       {"variable", "disp_z"},
+                       {"boundary", "load_top"},
+                       {"factor", "-250000"},
+                       {"function", "tour_pressure_curve"},
+                       {"component", "2"},
+                       {"use_displaced_mesh", "true"}});
+                  auto* contact = add_child_item(
+                      interactions_root, "tour_contact", "Interactions",
+                      {{"type", "Contact"},
+                       {"model", "coulomb"},
+                       {"formulation", "kinematic"},
+                       {"primary", "contact_plate"},
+                       {"secondary", "contact_concrete"},
+                       {"friction_coefficient", "0.15"},
+                       {"tangential_tolerance", "5e-4"},
+                       {"penalty", "1e12"},
+                       {"normalize_penalty", "true"}});
+                  if (!function || !pressure || !contact) {
+                    throw std::runtime_error(
+                        "G1 contact/load nodes were not created");
+                  }
+
+                  property_editor_->set_item(pressure);
+                  qApp->sendPostedEvents(nullptr, QEvent::DeferredDelete);
+                  auto* load_type = property_editor_->findChild<QComboBox*>(
+                      "loadTypeCombo");
+                  auto* load_boundary = property_editor_->findChild<QLineEdit*>(
+                      "loadBoundaryEdit");
+                  auto* load_variable = property_editor_->findChild<QComboBox*>(
+                      "loadVariableCombo");
+                  if (!load_type || load_type->isEditable() ||
+                      load_type->findText("Pressure") < 0 || !load_variable ||
+                      load_variable->findText("disp_z") < 0 || !load_boundary ||
+                      !load_boundary->isReadOnly() ||
+                      load_boundary->text() != "load_top") {
+                    throw std::runtime_error(
+                        "G1 Pressure profile/form contract failed");
+                  }
+
+                  // Reproduce a project with no explicit Variables children:
+                  // the old Surface Pressure template retained BodyForce's u.
+                  QVariantMap stale_pressure =
+                      pressure->data(0, PropertyEditor::kParamsRole).toMap();
+                  stale_pressure.insert("variable", "u");
+                  pressure->setData(0, PropertyEditor::kParamsRole,
+                                    stale_pressure);
+                  property_editor_->set_item(pressure);
+                  QVariantMap unknown_pressure = stale_pressure;
+                  unknown_pressure.insert("variable", "missing_pressure_var");
+                  if (!property_editor_->validate_params("Loads", unknown_pressure)
+                           .contains("variable must reference a displacement variable")) {
+                    throw std::runtime_error(
+                        "G1 unknown Pressure variable was not rejected");
+                  }
+
+                  // The user edits Loads in a modal clone, not the embedded
+                  // editor. Verify that profile-driven choices reach that
+                  // clone and its Surface Pressure template can be applied.
+                  open_property_form(pressure);
+                  qApp->processEvents();
+                  auto* pressure_form = findChild<FloatingPropertyForm*>(
+                      "floatingPropertyForm");
+                  auto* pressure_template =
+                      pressure_form
+                          ? pressure_form->findChild<QComboBox*>(
+                                "propertyTemplateSelector")
+                          : nullptr;
+                  auto* pressure_type =
+                      pressure_form
+                          ? pressure_form->findChild<QComboBox*>(
+                                "loadTypeCombo")
+                          : nullptr;
+                  auto* apply_pressure_template =
+                      pressure_form
+                          ? pressure_form->findChild<QPushButton*>(
+                                "propertyApplyTemplateButton")
+                          : nullptr;
+                  if (!pressure_form || !pressure_template || !pressure_type ||
+                      !apply_pressure_template ||
+                      pressure_template->findData("Surface Pressure") < 0 ||
+                      pressure_type->findText("Pressure") < 0) {
+                    throw std::runtime_error(
+                        QString("G1 floating Pressure template/profile contract "
+                                "failed (form=%1 template=%2 type=%3 "
+                                "apply=%4 surface=%5 pressure=%6)")
+                            .arg(pressure_form != nullptr)
+                            .arg(pressure_template != nullptr)
+                            .arg(pressure_type != nullptr)
+                            .arg(apply_pressure_template != nullptr)
+                            .arg(pressure_template &&
+                                 pressure_template->findData("Surface Pressure") >= 0)
+                            .arg(pressure_type &&
+                                 pressure_type->findText("Pressure") >= 0)
+                            .toStdString());
+                  }
+                  pressure_template->setCurrentIndex(
+                      pressure_template->findData("Surface Pressure"));
+                  apply_pressure_template->click();
+                  qApp->sendPostedEvents(nullptr, QEvent::DeferredDelete);
+                  pressure_type = pressure_form->findChild<QComboBox*>(
+                      "loadTypeCombo");
+                  auto* pressure_variable =
+                      pressure_form->findChild<QComboBox*>("loadVariableCombo");
+                  auto* pressure_groups = pressure_form->findChild<QListWidget*>(
+                      "propertyGroupsList");
+                  if (!pressure_type ||
+                      pressure_type->currentText() != "Pressure" ||
+                      !pressure_variable ||
+                      pressure_variable->findText("disp_z") < 0 ||
+                      pressure_variable->currentText() != "disp_z" ||
+                      !pressure_groups ||
+                      pressure_groups->findItems("load_top", Qt::MatchExactly).isEmpty() ||
+                      !pressure_groups->findItems("instance_plate", Qt::MatchExactly).isEmpty()) {
+                    throw std::runtime_error(
+                        "G1 floating Surface Pressure template or surface groups did not apply");
+                  }
+                  // G1-07 step 8: advanced params can bypass the read-only
+                  // boundary picker. A 3D volume must fail in both validation
+                  // views and Confirm must leave the original Load unchanged.
+                  auto* pressure_params =
+                      pressure_form->findChild<QTableWidget*>(
+                          "propertyParamsTable");
+                  auto* pressure_inline = pressure_form->findChild<QLabel*>(
+                      "propertyValidationInline");
+                  auto* pressure_validation =
+                      pressure_form->findChild<QTableWidget*>(
+                          "propertyValidationTable");
+                  auto* pressure_ok = pressure_form->findChild<QPushButton*>(
+                      "propertyFormOk");
+                  if (!pressure_params || !pressure_inline ||
+                      !pressure_validation || !pressure_ok) {
+                    throw std::runtime_error(
+                        "G1 Pressure advanced validation fixture is missing");
+                  }
+                  int pressure_boundary_row = -1;
+                  for (int row = 0; row < pressure_params->rowCount(); ++row) {
+                    const auto* key = pressure_params->item(row, 0);
+                    if (key && key->text() == "boundary") {
+                      pressure_boundary_row = row;
+                      break;
+                    }
+                  }
+                  if (pressure_boundary_row < 0 ||
+                      !pressure_params->item(pressure_boundary_row, 1)) {
+                    throw std::runtime_error(
+                        "G1 Pressure advanced boundary parameter is missing");
+                  }
+                  pressure_params->item(pressure_boundary_row, 1)
+                      ->setText("instance_plate");
+                  qApp->processEvents();
+                  const QString pressure_dimension_issue =
+                      "boundary must reference an existing 2D Physical Group";
+                  bool pressure_issue_row_found = false;
+                  for (int row = 0; row < pressure_validation->rowCount(); ++row) {
+                    const auto* node = pressure_validation->item(row, 0);
+                    const auto* issue = pressure_validation->item(row, 1);
+                    if (node && issue &&
+                        node->text().contains("tour_pressure") &&
+                        issue->text().contains(pressure_dimension_issue)) {
+                      pressure_issue_row_found = true;
+                      break;
+                    }
+                  }
+                  if (!pressure_inline->text().contains(pressure_dimension_issue) ||
+                      !pressure_issue_row_found) {
+                    throw std::runtime_error(
+                        "G1 Pressure dimension issue was not shown in both validation views");
+                  }
+                  pressure_ok->click();
+                  qApp->processEvents();
+                  if (!pressure_form->isVisible() ||
+                      pressure->data(0, PropertyEditor::kParamsRole)
+                              .toMap().value("boundary").toString() !=
+                          "load_top") {
+                    throw std::runtime_error(
+                        "G1 invalid Pressure edit was not blocked on confirm");
+                  }
+                  pressure_form->reject();
+                  qApp->sendPostedEvents(nullptr, QEvent::DeferredDelete);
+                  stale_pressure.insert("variable", "disp_z");
+                  pressure->setData(0, PropertyEditor::kParamsRole,
+                                    stale_pressure);
+                  QVariantMap invalid_pressure = stale_pressure;
+                  invalid_pressure.insert("boundary", "instance_plate");
+                  pressure->setData(0, PropertyEditor::kParamsRole,
+                                    invalid_pressure);
+                  const QString input_before_invalid_sync =
+                      moose_panel_->input_text();
+                  if (sync_model_to_input() ||
+                      moose_panel_->input_text() != input_before_invalid_sync) {
+                    throw std::runtime_error(
+                        "G1 invalid Pressure boundary was not blocked on sync");
+                  }
+                  pressure->setData(0, PropertyEditor::kParamsRole,
+                                    stale_pressure);
+
+                  auto* direct_pressure = add_child_item(
+                      loads_root, "tour_pressure_type_switch", "Loads",
+                      {{"type", "BodyForce"}, {"variable", "u"},
+                       {"value", "0"}});
+                  open_property_form(direct_pressure);
+                  qApp->processEvents();
+                  auto* direct_form = findChild<FloatingPropertyForm*>(
+                      "floatingPropertyForm");
+                  auto* direct_type = direct_form
+                          ? direct_form->findChild<QComboBox*>("loadTypeCombo")
+                          : nullptr;
+                  if (!direct_type || direct_type->findText("Pressure") < 0) {
+                    throw std::runtime_error(
+                        "G1 direct Pressure type switch is unavailable");
+                  }
+                  direct_type->setCurrentText("Pressure");
+                  qApp->sendPostedEvents(nullptr, QEvent::DeferredDelete);
+                  auto* direct_variable = direct_form->findChild<QComboBox*>(
+                      "loadVariableCombo");
+                  if (!direct_variable ||
+                      direct_variable->findText("disp_z") < 0 ||
+                      direct_variable->currentText() != "disp_z") {
+                    throw std::runtime_error(
+                        "G1 direct Pressure type switch kept a stale variable");
+                  }
+                  direct_form->reject();
+                  qApp->sendPostedEvents(nullptr, QEvent::DeferredDelete);
+                  delete loads_root->takeChild(
+                      loads_root->indexOfChild(direct_pressure));
+
+                  property_editor_->set_item(contact);
+                  qApp->sendPostedEvents(nullptr, QEvent::DeferredDelete);
+                  auto* interaction_type =
+                      property_editor_->findChild<QComboBox*>(
+                          "interactionTypeCombo");
+                  auto* primary = property_editor_->findChild<QComboBox*>(
+                      "interactionPrimaryCombo");
+                  auto* secondary = property_editor_->findChild<QComboBox*>(
+                      "interactionSecondaryCombo");
+                  if (!interaction_type || interaction_type->isEditable() ||
+                      interaction_type->findText("Contact") < 0 || !primary ||
+                      !secondary || primary->isEditable() ||
+                      secondary->isEditable() ||
+                      primary->currentText() != "contact_plate" ||
+                      secondary->currentText() != "contact_concrete") {
+                    throw std::runtime_error(
+                        "G1 Contact profile/form contract failed");
+                  }
+                  QVariantMap invalid =
+                      contact->data(0, PropertyEditor::kParamsRole).toMap();
+                  invalid.insert("secondary", "contact_plate");
+                  if (!property_editor_
+                           ->validate_params("Interactions", invalid)
+                           .contains("primary and secondary must differ")) {
+                    throw std::runtime_error(
+                        "G1 identical contact surface validation failed");
+                  }
+                  invalid =
+                      contact->data(0, PropertyEditor::kParamsRole).toMap();
+                  invalid.insert("primary", "instance_plate");
+                  const QString dimension_issue =
+                      "primary must reference an existing 2D Physical Group";
+                  if (!property_editor_
+                           ->validate_params("Interactions", invalid)
+                           .contains(dimension_issue)) {
+                    throw std::runtime_error(
+                        "G1 non-surface contact validation failed");
+                  }
+
+                  // 从真实浮动属性表单的高级参数表绕过只读下拉，覆盖用户
+                  // 报告的路径：参数页和校验页必须同时显示二维组错误，点击
+                  // “确定”必须留在弹窗内，且不得污染原模型树节点。
+                  open_property_form(contact);
+                  qApp->processEvents();
+                  auto* form = findChild<FloatingPropertyForm*>(
+                      "floatingPropertyForm");
+                  auto* params_table =
+                      form ? form->findChild<QTableWidget*>(
+                                 "propertyParamsTable")
+                           : nullptr;
+                  auto* inline_validation =
+                      form ? form->findChild<QLabel*>(
+                                 "propertyValidationInline")
+                           : nullptr;
+                  auto* validation_table =
+                      form ? form->findChild<QTableWidget*>(
+                                 "propertyValidationTable")
+                           : nullptr;
+                  auto* ok = form ? form->findChild<QPushButton*>(
+                                        "propertyFormOk")
+                                  : nullptr;
+                  if (!form || !params_table || !inline_validation ||
+                      !validation_table || !ok) {
+                    throw std::runtime_error(
+                        "G1 contact validation form fixture is missing");
+                  }
+                  int primary_row = -1;
+                  for (int row = 0; row < params_table->rowCount(); ++row) {
+                    const auto* key_item = params_table->item(row, 0);
+                    if (key_item && key_item->text() == "primary") {
+                      primary_row = row;
+                      break;
+                    }
+                  }
+                  if (primary_row < 0 ||
+                      !params_table->item(primary_row, 1)) {
+                    throw std::runtime_error(
+                        "G1 contact primary advanced parameter is missing");
+                  }
+                  params_table->item(primary_row, 1)
+                      ->setText("instance_plate");
+                  qApp->processEvents();
+                  bool validation_row_found = false;
+                  for (int row = 0; row < validation_table->rowCount(); ++row) {
+                    const auto* node_item = validation_table->item(row, 0);
+                    const auto* issue_item = validation_table->item(row, 1);
+                    if (node_item && issue_item &&
+                        node_item->text().contains("tour_contact") &&
+                        issue_item->text().contains(dimension_issue)) {
+                      validation_row_found = true;
+                      break;
+                    }
+                  }
+                  if (!inline_validation->text().contains(dimension_issue) ||
+                      !validation_row_found) {
+                    throw std::runtime_error(
+                        "G1 contact dimension issue was not shown in both "
+                        "validation views");
+                  }
+                  ok->click();
+                  qApp->processEvents();
+                  const QVariantMap original_contact =
+                      contact->data(0, PropertyEditor::kParamsRole).toMap();
+                  if (!form->isVisible() ||
+                      original_contact.value("primary").toString() !=
+                          "contact_plate") {
+                    throw std::runtime_error(
+                        "G1 invalid contact edit was not blocked on confirm");
+                  }
+                  form->reject();
+                  qApp->sendPostedEvents(nullptr, QEvent::DeferredDelete);
+
+                  sync_model_to_input();
+                  const QString first_input = moose_panel_->input_text();
+                  const int pressure_pos =
+                      first_input.indexOf("[tour_pressure]");
+                  const int pressure_end =
+                      first_input.indexOf("[]", pressure_pos);
+                  const QString pressure_block =
+                      pressure_pos >= 0 && pressure_end > pressure_pos
+                          ? first_input.mid(pressure_pos,
+                                            pressure_end - pressure_pos)
+                          : QString();
+                  const int contact_pos =
+                      first_input.indexOf("[tour_contact]");
+                  const int contact_end =
+                      first_input.indexOf("[]", contact_pos);
+                  const QString contact_block =
+                      contact_pos >= 0 && contact_end > contact_pos
+                          ? first_input.mid(contact_pos,
+                                            contact_end - contact_pos)
+                          : QString();
+                  if (!pressure_block.contains("type = Pressure") ||
+                      !pressure_block.contains("boundary = load_top") ||
+                      !pressure_block.contains("variable = disp_z") ||
+                      !pressure_block.contains(
+                          "function = tour_pressure_curve") ||
+                      !contact_block.contains("primary = contact_plate") ||
+                      !contact_block.contains(
+                          "secondary = contact_concrete") ||
+                      !contact_block.contains(
+                          "friction_coefficient = 0.15") ||
+                      contact_block.contains("master =") ||
+                      contact_block.contains("slave =")) {
+                    throw std::runtime_error(
+                        "G1 Pressure/Contact input generation failed");
+                  }
+                  const int kernels_pos = first_input.indexOf("[Kernels]");
+                  const int kernels_end =
+                      kernels_pos >= 0
+                          ? first_input.indexOf("\n[]", kernels_pos)
+                          : -1;
+                  if (kernels_pos >= 0 && kernels_end > kernels_pos &&
+                      first_input.mid(kernels_pos, kernels_end - kernels_pos)
+                          .contains("[tour_pressure]")) {
+                    throw std::runtime_error(
+                        "G1 Pressure was incorrectly generated as a Kernel");
+                  }
+                  const QString report = build_generation_report();
+                  if (!report.contains("Physical Group=load_top") ||
+                      !report.contains("primary=contact_plate") ||
+                      !report.contains("mapping=Contact/Contact")) {
+                    throw std::runtime_error(
+                        "G1 generation traceability report failed");
+                  }
+                  sync_model_to_input();
+                  if (moose_panel_->input_text() != first_input) {
+                    throw std::runtime_error(
+                        "G1 repeated model sync is not deterministic");
+                  }
+
+                  property_editor_->set_item(nullptr);
+                  delete functions_root->takeChild(
+                      functions_root->indexOfChild(function));
+                  delete loads_root->takeChild(
+                      loads_root->indexOfChild(pressure));
+                  delete interactions_root->takeChild(
+                      interactions_root->indexOfChild(contact));
+                  property_editor_->set_boundary_groups(saved_boundaries);
+                  property_editor_->set_volume_groups(saved_volumes);
+                  sync_model_to_input();
                   refresh_module_pages();
                 },
                 this});

@@ -153,6 +153,7 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   params_container_layout->setContentsMargins(0, 0, 0, 0);
   params_container_layout->setSpacing(4);
   params_table_ = new QTableWidget(params_container_);
+  params_table_->setObjectName("propertyParamsTable");
   params_table_->setColumnCount(2);
   params_table_->setHorizontalHeaderLabels({"Key", "Value"});
   params_table_->horizontalHeader()->setStretchLastSection(true);
@@ -175,6 +176,7 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   params_layout->addWidget(params_container_, 1);
 
   validation_label_ = new QLabel(params_tab_);
+  validation_label_->setObjectName("propertyValidationInline");
   validation_label_->setStyleSheet("color: #b00020;");
   validation_label_->setWordWrap(true);
   params_layout->addWidget(validation_label_);
@@ -187,9 +189,11 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   validation_box_ = new QGroupBox("Validation Summary", validation_tab);
   auto* validation_layout = new QVBoxLayout(validation_box_);
   validation_summary_label_ = new QLabel("No issues.", validation_box_);
+  validation_summary_label_->setObjectName("propertyValidationSummary");
   validation_summary_label_->setStyleSheet("font-weight: 600;");
   validation_layout->addWidget(validation_summary_label_);
   validation_table_ = new QTableWidget(validation_box_);
+  validation_table_->setObjectName("propertyValidationTable");
   validation_table_->setColumnCount(2);
   validation_table_->setHorizontalHeaderLabels({"Node", "Issues"});
   validation_table_->horizontalHeader()->setStretchLastSection(true);
@@ -302,6 +306,7 @@ void PropertyEditor::set_volume_groups(const QStringList& names) {
   const QString kind =
       current_item_ ? current_item_->data(0, kKindRole).toString() : QString();
   update_group_widget_for_kind(kind);
+  update_validation();
 }
 
 void PropertyEditor::set_display_unit_factors(
@@ -320,6 +325,24 @@ void PropertyEditor::set_physics_action_options(const QStringList& options) {
     if (kind == "Physics") {
       refresh_form_options();
     }
+  }
+}
+
+void PropertyEditor::set_load_type_options(const QStringList& options) {
+  load_type_options_ = options.isEmpty() ? QStringList{"BodyForce"} : options;
+  if (current_item_ &&
+      current_item_->data(0, kKindRole).toString() == "Loads") {
+    refresh_form_options();
+  }
+}
+
+void PropertyEditor::set_interaction_type_options(
+    const QStringList& options) {
+  interaction_type_options_ = options.isEmpty() ? QStringList{"Unsupported"}
+                                                : options;
+  if (current_item_ &&
+      current_item_->data(0, kKindRole).toString() == "Interactions") {
+    refresh_form_options();
   }
 }
 
@@ -548,6 +571,8 @@ void PropertyEditor::on_remove_param() {
   }
   params_table_->removeRow(ranges.first().topRow());
   save_params_to_item();
+  update_group_widget_for_kind(
+      current_item_->data(0, kKindRole).toString());
   update_validation();
   refresh_preview();
 }
@@ -577,6 +602,11 @@ void PropertyEditor::on_param_changed(int row, int column) {
     }
   }
   save_params_to_item();
+  if (row >= 0 && params_table_->item(row, 0) &&
+      params_table_->item(row, 0)->text().trimmed() == "block") {
+    update_group_widget_for_kind(
+        current_item_->data(0, kKindRole).toString());
+  }
   refresh_preview();
   if (row >= 0 && (!sync_mode_ || sync_mode_->currentIndex() == 0)) {
     auto* key_item = params_table_->item(row, 0);
@@ -592,8 +622,19 @@ void PropertyEditor::on_param_changed(int row, int column) {
             bool stored_ok = false;
             const double stored = value.trimmed().toDouble(&stored_ok);
             if (stored_ok) {
+              const QVariantMap params =
+                  current_item_->data(0, kParamsRole).toMap();
+              bool factor_ok = false;
+              const double stored_factor = params.value("unit_factor_stress")
+                                               .toString()
+                                               .toDouble(&factor_ok);
+              const double factor =
+                  params.value("type").toString() == "AbaqusCDP" &&
+                          factor_ok && stored_factor > 0.0
+                      ? stored_factor
+                      : display_unit_factor("pressure", 1e6);
               value = QString::number(
-                  stored / display_unit_factor("pressure", 1e6), 'g', 17);
+                  stored / factor, 'g', 17);
             }
           }
           edit->setText(value);
@@ -648,7 +689,8 @@ void PropertyEditor::on_apply_groups() {
       current_item_->data(0, kKindRole).toString().isEmpty()
           ? current_item_->text(0)
           : current_item_->data(0, kKindRole).toString();
-  if (kind != "BC" && kind != "Loads" && kind != "Sections" &&
+  if (kind != "BC" && kind != "Loads" && kind != "Materials" &&
+      kind != "Sections" &&
       kind != "Physics" && kind != "Outputs") {
     return;
   }
@@ -659,17 +701,23 @@ void PropertyEditor::on_apply_groups() {
       selected << item->text();
     }
   }
-  if (selected.isEmpty()) {
+  if (selected.isEmpty() && kind != "Materials") {
     return;
   }
   QVariantMap params = current_item_->data(0, kParamsRole).toMap();
   if (kind == "BC") {
     params.insert("boundary", selected.join(" "));
+  } else if (kind == "Loads" &&
+             params.value("type").toString() == "Pressure") {
+    params.insert("boundary", selected.join(" "));
   } else if (kind == "Outputs") {
     // W-03d：历史输出套餐的面组（反力/平均位移共用）。
     params.insert("hist_boundary", selected.join(" "));
+  } else if (selected.isEmpty()) {
+    // 材料可不限制 block；清空选择并应用会移除已有指派。
+    params.remove("block");
   } else {
-    // Loads/Sections/Physics（W-03b）：体组写入 block。
+    // Materials/Loads/Sections/Physics：体组写入 block。
     params.insert("block", selected.join(" "));
   }
   current_item_->setData(0, kParamsRole, params);
@@ -681,7 +729,8 @@ void PropertyEditor::update_group_widget_for_kind(const QString& kind) {
   if (!groups_box_ || !groups_list_) {
     return;
   }
-  if (kind != "BC" && kind != "Loads" && kind != "Sections" &&
+  if (kind != "BC" && kind != "Loads" && kind != "Materials" &&
+      kind != "Sections" &&
       kind != "Physics" && kind != "Outputs") {
     groups_box_->setVisible(false);
     return;
@@ -689,14 +738,20 @@ void PropertyEditor::update_group_widget_for_kind(const QString& kind) {
   groups_box_->setVisible(true);
   groups_list_->clear();
   // W-03b：Physics block 用体组；W-03d：Outputs 历史输出面组用面组。
-  const bool use_boundary = (kind == "BC" || kind == "Outputs");
+  const QVariantMap params =
+      current_item_ ? current_item_->data(0, kParamsRole).toMap()
+                    : QVariantMap();
+  const bool use_boundary =
+      (kind == "BC" || kind == "Outputs" ||
+       (kind == "Loads" &&
+        params.value("type").toString() == "Pressure"));
   QStringList source = use_boundary ? boundary_groups_ : volume_groups_;
   groups_list_->addItems(source);
   if (groups_hint_) {
     groups_hint_->setText(l10n::tr(
         use_boundary
             ? "Select one or more boundaries, then apply the selection."
-            : (kind == "Sections"
+            : (kind == "Sections" || kind == "Materials"
                    ? "Select one or more physical volumes below, then apply "
                      "the selection."
                    : "Select one or more volume groups, then apply the "
@@ -705,21 +760,22 @@ void PropertyEditor::update_group_widget_for_kind(const QString& kind) {
   if (groups_box_) {
     groups_box_->setTitle(l10n::tr(
         use_boundary ? "Available Boundary Groups"
-                     : (kind == "Sections" ? "Available Physical Volumes"
+                     : (kind == "Sections" || kind == "Materials"
+                            ? "Available Physical Volumes"
                                             : "Available Volume Groups")));
   }
   if (apply_groups_btn_) {
     apply_groups_btn_->setText(l10n::tr(
         use_boundary ? "Apply Selected Boundaries"
-                     : (kind == "Sections" ? "Apply Selected Volumes"
+                     : (kind == "Sections" || kind == "Materials"
+                            ? "Apply Selected Volumes"
                                             : "Apply Selected Groups")));
   }
-  const QVariantMap params =
-      current_item_ ? current_item_->data(0, kParamsRole).toMap()
-                    : QVariantMap();
-  const QString key = kind == "BC" ? "boundary"
-                                   : (kind == "Outputs" ? "hist_boundary"
-                                                        : "block");
+  const QString key =
+      (kind == "BC" ||
+       (kind == "Loads" && params.value("type").toString() == "Pressure"))
+          ? "boundary"
+          : (kind == "Outputs" ? "hist_boundary" : "block");
   const QString current = params.value(key).toString().trimmed();
   const QStringList selected =
       current.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
@@ -929,6 +985,16 @@ QStringList PropertyEditor::validate_params(const QString& kind,
   };
   if (kind == "Materials") {
     require_key("type");
+    const QStringList blocks =
+        params.value("block")
+            .toString()
+            .split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+    for (const auto& block : blocks) {
+      if (!volume_groups_.contains(block)) {
+        missing << "block must reference an existing volume Physical Group";
+        break;
+      }
+    }
     const QString type = params.value("type").toString();
     if (type == "GenericConstantMaterial") {
       require_key("prop_names");
@@ -950,6 +1016,24 @@ QStringList PropertyEditor::validate_params(const QString& kind,
       require_key("property_name");
     } else if (type == "ComputeElasticityTensor") {
       require_key("C_ijkl");
+    } else if (type == "ComputeIsotropicElasticityTensor") {
+      require_key("youngs_modulus");
+      require_key("poissons_ratio");
+      const QString young_text =
+          params.value("youngs_modulus").toString().trimmed();
+      bool young_ok = false;
+      const double young = young_text.toDouble(&young_ok);
+      if (!young_text.isEmpty() && (!young_ok || young <= 0.0)) {
+        missing << "youngs_modulus must be > 0";
+      }
+      const QString poisson_text =
+          params.value("poissons_ratio").toString().trimmed();
+      bool poisson_ok = false;
+      const double poisson = poisson_text.toDouble(&poisson_ok);
+      if (!poisson_text.isEmpty() &&
+          (!poisson_ok || poisson <= -1.0 || poisson >= 0.5)) {
+        missing << "poissons_ratio must be between -1 and 0.5";
+      }
     } else if (type == "ComputeSmallStrain") {
       require_key("displacements");
     } else if (type == "ComputeThermalExpansionEigenstrain") {
@@ -1043,6 +1127,67 @@ QStringList PropertyEditor::validate_params(const QString& kind,
       require_key("diffusivity");
     } else if (type == "TensorMechanics") {
       require_key("displacements");
+    } else if (type == "Pressure") {
+      const QString variable = params.value("variable").toString().trimmed();
+      if (!variable.isEmpty() &&
+          !pressure_variable_candidates().contains(variable)) {
+        missing << "variable must reference a displacement variable";
+      }
+      require_key("boundary");
+      const QStringList boundaries =
+          params.value("boundary")
+              .toString()
+              .split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
+      for (const auto& boundary : boundaries) {
+        if (!boundary_groups_.contains(boundary)) {
+          missing << "boundary must reference an existing 2D Physical Group";
+          break;
+        }
+      }
+      if (params.value("factor").toString().trimmed().isEmpty() &&
+          params.value("function").toString().trimmed().isEmpty()) {
+        missing << "factor or function";
+      }
+      const QString component = params.value("component").toString().trimmed();
+      if (!component.isEmpty()) {
+        bool ok = false;
+        const int value = component.toInt(&ok);
+        if (!ok || value < 0 || value > 2) {
+          missing << "component must be 0, 1, or 2";
+        }
+      }
+    }
+  } else if (kind == "Interactions") {
+    const QString type = params.value("type").toString();
+    require_key("type");
+    if (type == "Contact") {
+      require_key("model");
+      require_key("formulation");
+      require_key("primary");
+      require_key("secondary");
+      const QString primary = params.value("primary").toString().trimmed();
+      const QString secondary = params.value("secondary").toString().trimmed();
+      if (!primary.isEmpty() && !boundary_groups_.contains(primary)) {
+        missing << "primary must reference an existing 2D Physical Group";
+      }
+      if (!secondary.isEmpty() && !boundary_groups_.contains(secondary)) {
+        missing << "secondary must reference an existing 2D Physical Group";
+      }
+      if (!primary.isEmpty() && primary == secondary) {
+        missing << "primary and secondary must differ";
+      }
+      const QString friction =
+          params.value("friction_coefficient").toString().trimmed();
+      if (params.value("model").toString() == "coulomb" &&
+          friction.isEmpty()) {
+        missing << "friction_coefficient";
+      } else if (!friction.isEmpty()) {
+        bool ok = false;
+        const double value = friction.toDouble(&ok);
+        if (!ok || value < 0.0) {
+          missing << "friction_coefficient must be >= 0";
+        }
+      }
     }
   } else if (kind == "Physics") {
     // W-03b：Physics action 合同（v01）。block 允许暂空（生成侧警告），
@@ -1106,6 +1251,18 @@ QStringList PropertyEditor::collect_model_names(const QString& root_name) const 
       }
     }
     break;
+  }
+  return names;
+}
+
+QStringList PropertyEditor::pressure_variable_candidates() const {
+  QStringList names = collect_model_names("Variables");
+  // Physics/add_variables can create these at input-generation time, so they
+  // need to be selectable even before the Variables tree has child nodes.
+  for (const auto* displacement : {"disp_x", "disp_y", "disp_z"}) {
+    if (!names.contains(QLatin1String(displacement))) {
+      names << QLatin1String(displacement);
+    }
   }
   return names;
 }
@@ -1217,13 +1374,35 @@ QVariantMap PropertyEditor::build_type_template(const QString& kind,
       t.insert("displacements", "disp_x disp_y");
       t.insert("block", block);
     } else {
-      t.insert("variable", var);
+      t.insert("variable", type == "Pressure" ? "disp_z" : var);
     }
     if (type == "BodyForce") {
       t.insert("value", "1.0");
     } else if (type == "MatDiffusion") {
       t.insert("diffusivity", "diff_u");
+    } else if (type == "Pressure") {
+      t.insert("boundary", bnd);
+      t.insert("factor", "1.0");
+      if (!current_functions_.isEmpty()) {
+        t.insert("function", func);
+      }
+      t.insert("component", "2");
+      t.insert("use_displaced_mesh", "true");
     }
+  } else if (kind == "Interactions") {
+    t.insert("type", type.isEmpty() ? "Contact" : type);
+    t.insert("model", "coulomb");
+    t.insert("formulation", "kinematic");
+    if (!boundary_groups_.isEmpty()) {
+      t.insert("primary", boundary_groups_.first());
+      t.insert("secondary", boundary_groups_.size() > 1
+                                ? boundary_groups_.at(1)
+                                : boundary_groups_.first());
+    }
+    t.insert("friction_coefficient", "0.15");
+    t.insert("tangential_tolerance", "5e-4");
+    t.insert("penalty", "1e12");
+    t.insert("normalize_penalty", "true");
   } else if (kind == "Physics") {
     // W-03b：v01 验收基线默认值（与 default_params_for_kind 对齐）；
     // block 不覆盖（由 Section 指派/chips 填入）。
@@ -1291,6 +1470,8 @@ void PropertyEditor::apply_template_values(const QVariantMap& values,
       allowed = {"expression", "property_name", "coupled_variables"};
     } else if (type == "ComputeElasticityTensor") {
       allowed = {"fill_method", "C_ijkl"};
+    } else if (type == "ComputeIsotropicElasticityTensor") {
+      allowed = {"youngs_modulus", "poissons_ratio"};
     } else if (type == "ComputeSmallStrain") {
       allowed = {"displacements"};
     } else if (type == "ComputeThermalExpansionEigenstrain") {
@@ -1571,7 +1752,7 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
   }
   const QSet<QString> supported = {"Materials", "Sections", "Assembly",
                                    "Steps", "BC", "Loads", "Functions",
-                                   "Physics", "Outputs"};
+                                   "Physics", "Outputs", "Interactions"};
   if (!supported.contains(kind)) {
     form_box_->setVisible(false);
     return;
@@ -1739,9 +1920,11 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
   if (kind == "Materials") {
     add_combo("Type", "type",
               {"GenericConstantMaterial", "ParsedMaterial",
-               "ComputeElasticityTensor", "ComputeSmallStrain",
+               "ComputeElasticityTensor", "ComputeIsotropicElasticityTensor",
+               "ComputeSmallStrain",
                "ComputeLinearElasticStress",
-               "ComputeThermalExpansionEigenstrain", "AbaqusCDP"});
+               "ComputeThermalExpansionEigenstrain", "AbaqusCDP"},
+              "materialTypeCombo");
     add_line("Prop Names", "prop_names");
     add_line("Prop Values", "prop_values");
     add_line("Expression", "expression");
@@ -1749,13 +1932,19 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     add_line("Coupled Vars", "coupled_variables");
     add_line("fill_method", "fill_method");
     add_line("C_ijkl", "C_ijkl");
+    add_line("Block", "block", "materialBlockEdit");
+    if (auto* block = qobject_cast<QLineEdit*>(form_widgets_.value("block"))) {
+      block->setReadOnly(true);
+      block->setToolTip(l10n::tr(
+          "Select physical volumes above and apply them to update this value."));
+    }
     add_line("thermal_expansion_coeff", "thermal_expansion_coeff");
     add_line("temperature", "temperature");
     add_line("stress_free_temperature", "stress_free_temperature");
     add_line("eigenstrain_name", "eigenstrain_name");
     add_line("displacements", "displacements");
-    // ---- W-03a：AbaqusCDP 专用快捷字段（v01 三件套）----
-    // E 在表单按 MPa 显示、params 存 SI（Pa）；其余标量原样存储。
+    // E/nu 同时服务于普通各向同性线弹性和 CDP；E 在表单按 MPa 显示，
+    // params 存 SI（Pa）。仅 CDP 记录额外的 unit_factor_stress 元数据。
     {
       auto* young = new QLineEdit(form_box_);
       young->setObjectName("cdpYoungsModulusMpa");
@@ -1778,8 +1967,12 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
                   // 非数值输入原样写入，由校验如实提示。
                   set_param_value("youngs_modulus", value);
                 }
-                set_param_value("unit_factor_stress",
-                                QString::number(factor, 'g', 17));
+                if (current_item_ &&
+                    current_item_->data(0, kParamsRole).toMap()
+                            .value("type").toString() == "AbaqusCDP") {
+                  set_param_value("unit_factor_stress",
+                                  QString::number(factor, 'g', 17));
+                }
               });
     }
     add_line("Poisson's Ratio", "poissons_ratio", "cdpPoissonsRatio");
@@ -1937,14 +2130,64 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     add_line("Value", "value", "bcValueEdit");
     add_combo("Function", "function", functions, "bcFunctionCombo");
   } else if (kind == "Loads") {
-    add_combo("Type", "type",
-              {"BodyForce", "TimeDerivative", "MatDiffusion",
-               "HeatConduction", "TensorMechanics"});
-    add_combo("Variable", "variable", variables);
-    add_line("Value", "value");
-    add_combo("Function", "function", functions);
-    add_line("Diffusivity", "diffusivity");
-    add_line("Displacements", "displacements");
+    add_combo("Type", "type", load_type_options_, "loadTypeCombo");
+    if (auto* type_combo =
+            qobject_cast<QComboBox*>(form_widgets_.value("type"))) {
+      type_combo->setEditable(false);
+    }
+    const bool pressure = current_item_ &&
+        current_item_->data(0, kParamsRole).toMap().value("type").toString() ==
+            "Pressure";
+    add_combo("Variable", "variable",
+              pressure ? pressure_variable_candidates() : variables,
+              "loadVariableCombo");
+    add_line("Assigned Boundaries", "boundary", "loadBoundaryEdit");
+    if (auto* boundary_edit =
+            qobject_cast<QLineEdit*>(form_widgets_.value("boundary"))) {
+      boundary_edit->setReadOnly(true);
+      boundary_edit->setPlaceholderText(
+          "Choose from the available boundary groups below.");
+    }
+    add_line("Value", "value", "loadValueEdit");
+    add_line("Factor", "factor", "loadFactorEdit");
+    add_combo("Function", "function", functions, "loadFunctionCombo");
+    add_line("Component", "component", "loadComponentEdit");
+    add_combo("Use Displaced Mesh", "use_displaced_mesh",
+              {"true", "false"}, "loadUseDisplacedMeshCombo");
+    add_line("Diffusivity", "diffusivity", "loadDiffusivityEdit");
+    add_line("Displacements", "displacements", "loadDisplacementsEdit");
+  } else if (kind == "Interactions") {
+    add_combo("Type", "type", interaction_type_options_,
+              "interactionTypeCombo");
+    if (auto* type_combo =
+            qobject_cast<QComboBox*>(form_widgets_.value("type"))) {
+      type_combo->setEditable(false);
+    }
+    add_combo("Model", "model", {"frictionless", "coulomb", "glued"},
+              "interactionModelCombo");
+    add_combo("Formulation", "formulation",
+              {"kinematic", "penalty", "augmented_lagrange",
+               "tangential_penalty", "mortar"},
+              "interactionFormulationCombo");
+    add_combo("Primary Surface", "primary", boundary_groups_,
+              "interactionPrimaryCombo");
+    add_combo("Secondary Surface", "secondary", boundary_groups_,
+              "interactionSecondaryCombo");
+    for (const auto& key : {"primary", "secondary"}) {
+      if (auto* combo =
+              qobject_cast<QComboBox*>(form_widgets_.value(key))) {
+        combo->setEditable(false);
+      }
+    }
+    add_line("Friction Coefficient", "friction_coefficient",
+             "interactionFrictionCoefficient");
+    add_line("Normal Smoothing Distance", "normal_smoothing_distance",
+             "interactionNormalSmoothingDistance");
+    add_line("Tangential Tolerance", "tangential_tolerance",
+             "interactionTangentialTolerance");
+    add_line("Penalty", "penalty", "interactionPenalty");
+    add_combo("Normalize Penalty", "normalize_penalty", {"true", "false"},
+              "interactionNormalizePenalty");
   } else if (kind == "Physics") {
     // W-03b：Physics action 快捷表单（v01 QuasiStatic 口径）。
     // block 行编辑 + 体组 chips（groups_box_）；CDPQuasiStatic 候选仅在
@@ -2123,6 +2366,22 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     template_descriptions_.insert(
         "TensorMechanics",
         "Tensor mechanics kernel using displacement variables.");
+    if (load_type_options_.contains("Pressure")) {
+      QVariantMap pressure_template{{"type", "Pressure"},
+                                    {"variable", "disp_z"},
+                                    {"boundary", default_bnd},
+                                    {"factor", "1.0"},
+                                    {"component", "2"},
+                                    {"use_displaced_mesh", "true"}};
+      if (!functions.isEmpty()) {
+        pressure_template.insert("function", default_func);
+      }
+      template_presets_.insert("Surface Pressure", pressure_template);
+      template_descriptions_.insert(
+          "Surface Pressure",
+          "Pressure BC using a named surface Physical Group and optional "
+          "load function.");
+    }
   }
 
   if (template_combo_) {
@@ -2199,12 +2458,13 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
       set_row_visible("coupled_variables", true);
       set_row_visible("fill_method", false);
       set_row_visible("C_ijkl", false);
+      set_row_visible("block", false);
       set_row_visible("thermal_expansion_coeff", false);
       set_row_visible("temperature", false);
       set_row_visible("stress_free_temperature", false);
       set_row_visible("eigenstrain_name", false);
       set_row_visible("displacements", false);
-      // W-03a：CDP 快捷字段仅对 type=AbaqusCDP 显示。
+      // 普通各向同性弹性和 CDP 共用 E/nu；CDP 其余字段只在 CDP 显示。
       const QStringList cdp_keys = {
           "youngs_modulus",
           "poissons_ratio",
@@ -2222,7 +2482,10 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
           "tension_damage_file"};
       const bool is_cdp = (type == "AbaqusCDP");
       for (const auto& cdp_key : cdp_keys) {
-        set_row_visible(cdp_key, is_cdp);
+        set_row_visible(cdp_key,
+                        is_cdp || (type == "ComputeIsotropicElasticityTensor" &&
+                                   (cdp_key == "youngs_modulus" ||
+                                    cdp_key == "poissons_ratio")));
       }
       if (is_cdp) {
         set_row_visible("prop_names", false);
@@ -2245,6 +2508,14 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
         set_row_visible("coupled_variables", false);
         set_row_visible("fill_method", true);
         set_row_visible("C_ijkl", true);
+      } else if (type == "ComputeIsotropicElasticityTensor" ||
+                 type == "ComputeLinearElasticStress") {
+        set_row_visible("prop_names", false);
+        set_row_visible("prop_values", false);
+        set_row_visible("expression", false);
+        set_row_visible("property_name", false);
+        set_row_visible("coupled_variables", false);
+        set_row_visible("block", true);
       } else if (type == "ComputeSmallStrain") {
         set_row_visible("prop_names", false);
         set_row_visible("prop_values", false);
@@ -2285,16 +2556,39 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
       set_row_visible("function", use_function);
       set_row_visible("value", !use_function);
     } else if (kind == "Loads") {
+      const bool pressure = (type == "Pressure");
+      set_row_visible("boundary", pressure);
+      set_row_visible("factor", pressure);
+      set_row_visible("component", pressure);
+      set_row_visible("use_displaced_mesh", pressure);
       set_row_visible("diffusivity", type == "MatDiffusion");
       set_row_visible("displacements", type == "TensorMechanics");
-      if (type == "TimeDerivative") {
-        set_row_visible("value", false);
-        set_row_visible("function", false);
+      set_row_visible("value", type == "BodyForce");
+      set_row_visible("function", type == "BodyForce" || pressure);
+    } else if (kind == "Interactions") {
+      const bool contact = (type == "Contact");
+      for (const auto& key : {"model", "formulation", "primary",
+                              "secondary", "normal_smoothing_distance",
+                              "tangential_tolerance", "penalty",
+                              "normalize_penalty"}) {
+        set_row_visible(key, contact);
       }
+      QString model;
+      if (auto* combo =
+              qobject_cast<QComboBox*>(form_widgets_.value("model"))) {
+        model = combo->currentText();
+      }
+      set_row_visible("friction_coefficient", contact && model == "coulomb");
     }
   };
 
   auto apply_defaults = [this, kind](const QString& type) {
+    if (kind == "Loads" && type == "Pressure" && current_item_) {
+      // A BodyForce variable is not a meaningful Pressure default. On an
+      // explicit type switch use the component-2 displacement convention;
+      // subsequent user edits are left untouched.
+      apply_template_values({{"variable", "disp_z"}}, true);
+    }
     apply_template_values(build_type_template(kind, type), false);
   };
 
@@ -2306,7 +2600,9 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     const QString key = it.key();
     QString value = params.value(key).toString();
     if (key == "youngs_modulus" && kind == "Materials" &&
-        params.value("type").toString() == "AbaqusCDP") {
+        (params.value("type").toString() == "AbaqusCDP" ||
+         params.value("type").toString() ==
+             "ComputeIsotropicElasticityTensor")) {
       // 存储值（SI，Pa）→ 表单显示值（MPa）；换算比例优先取 params 记录的
       // unit_factor_stress，缺省回落到当前档案单位合同/1e6。
       bool stored_ok = false;
@@ -2354,10 +2650,21 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     if (auto* combo =
             qobject_cast<QComboBox*>(form_widgets_.value("type"))) {
       connect(combo, &QComboBox::currentTextChanged, this,
-              [update_visibility, apply_defaults](const QString& value) {
+              [this, kind, update_visibility,
+               apply_defaults](const QString& value) {
                 update_visibility();
                 apply_defaults(value.trimmed());
+                if (kind == "Loads") {
+                  update_group_widget_for_kind(kind);
+                }
               });
+    }
+  }
+  if (kind == "Interactions") {
+    if (auto* combo =
+            qobject_cast<QComboBox*>(form_widgets_.value("model"))) {
+      connect(combo, &QComboBox::currentTextChanged, this,
+              [update_visibility](const QString&) { update_visibility(); });
     }
   }
   update_visibility();

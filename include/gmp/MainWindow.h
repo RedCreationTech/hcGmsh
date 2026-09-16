@@ -191,6 +191,10 @@ class MainWindow : public QMainWindow {
   // 残留的 value，DirichletBC 跳过残留的 function（type 切换后 params
   // 中可能滞留旧键）；含空格的值按 MOOSE 规则加单引号。
   QString build_bcs_block(QTreeWidgetItem* root) const;
+  // G1：Pressure 属于 [BCs] 而不是 [Kernels]；Contact 使用当前
+  // primary/secondary 语法并始终引用命名 Physical Group。
+  QString build_loads_block(QTreeWidgetItem* root) const;
+  QString build_interactions_block(QTreeWidgetItem* root) const;
   // W-01b：Section 指派语义。在 Sections 根中查找 material==material_name
   // 的子项，取其 block 列表（空格分隔）的第一个体组名；多组指派时 console
   // 提示。无指派返回空串。Physics action（W-03b）复用同一解析。
@@ -229,6 +233,9 @@ class MainWindow : public QMainWindow {
   // 由 sync 调用）；build_physics_action_block 按 v01 格式生成
   // [Physics/SolidMechanics/<action>/<name>]。
   QStringList physics_action_options() const;
+  bool active_profile_supports_block(const QString& block_name) const;
+  QStringList load_type_options() const;
+  QStringList interaction_type_options() const;
   QString resolve_displacements() const;
   QString build_global_params_block() const;
   QString build_physics_action_block(QTreeWidgetItem* child,

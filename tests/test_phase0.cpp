@@ -258,6 +258,22 @@ void test_profiles_and_mapping(TestContext& test) {
                   mapping.has_block("Materials") &&
                   mapping.has_block("Contact"),
               "mapping registry covers required baseline blocks");
+  test.expect(mapping.has_object_type("BCs", "Pressure") &&
+                  mapping.has_object_type("Contact", "Contact"),
+              "G1 pressure/contact object mappings are available");
+  const QJsonObject contact =
+      mapping.object_schema("Contact", "Contact");
+  const QJsonArray required = contact.value("required_params").toArray();
+  bool has_primary = false;
+  bool has_secondary = false;
+  bool has_legacy_master = false;
+  for (const auto& value : required) {
+    has_primary = has_primary || value.toString() == "primary";
+    has_secondary = has_secondary || value.toString() == "secondary";
+    has_legacy_master = has_legacy_master || value.toString() == "master";
+  }
+  test.expect(has_primary && has_secondary && !has_legacy_master,
+              "G1 contact mapping uses primary/secondary syntax");
 
   QTemporaryDir invalid_mapping_dir;
   const QString invalid_mapping = invalid_mapping_dir.filePath("mapping.json");

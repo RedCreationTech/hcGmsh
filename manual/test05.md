@@ -1,6 +1,6 @@
 # GMP-ISE UI 重构 Phase 5 人工测试说明
 
-> 版本：2026-09-15 v9
+> 版本：2026-09-16 v17
 > 执行范围：Phase 5 / G1～G3
 > 任务依据：`doc/UI重构下一阶段任务清单.md` 的 `TASK-P5-01`～`TASK-P5-05`
 > 需求依据：`REQ-011`～`REQ-017`
@@ -26,7 +26,9 @@ Phase 5 必须按以下顺序执行，不应在前一闸门未通过时提前关
 | TEST-P5-G1-03 | 已人工通过 | 2026-09-15：可见性、顺序持久化、非法缩放与悬空 Part 引用校验均通过 |
 | TEST-P5-G1-04 | 已人工通过 | 2026-09-15：保存重开、实例属性恢复及上游修改后的过期传播均通过 |
 | TEST-P5-G1-05 | 已人工通过 | 2026-09-15：装配网格、四个实例 Physical Groups、摘要和 SHA-256 均通过 |
-| TEST-P5-G1-06～09 | 实现完成后执行 | 依赖 Load/Contact 真实映射和 M-01 结果闭环 |
+| TEST-P5-G1-06～07 | 待人工验收回填 | Pressure/Contact 真实映射已生成，负向验证与接触量仍需按用例留证 |
+| TEST-P5-G1-08 | 部分完成／环境待测 | 生成报告和内部工作流校验已有证据；目标应用 `--check-input` 未执行 |
+| TEST-P5-G1-09 | 未测试／延期 | 当前无法连接远端计算环境，成功终态和结果制品待后续远端任务验证 |
 | TEST-P5-G2-01～05 | 实现完成后执行 | 依赖 Reference Point/Coupling 能力 |
 | TEST-P5-G3-01～05 | 实现完成后执行 | 依赖认可基准、比较指标和容差冻结 |
 
@@ -385,7 +387,22 @@ SHA-256，本用例关闭。
 
 ### 5.1 冻结活动应用支持矩阵（TEST-P5-G1-06）
 
-本节只能在 `TASK-P5-02` 实现完成后执行。
+> **开发状态（2026-09-16）**：`TASK-P5-02` 已实现。活动档案与 mapping v1 共同提供
+> `Pressure` 和 `Contact`；新增定向合同 `contact_load_mapping_contract` 已验证表单候选、
+> 参数校验、命名面组生成、来源报告和重复同步幂等性。以下步骤现可执行。
+
+本轮冻结矩阵（DamSafetyApp-opt / mapping `1.0.0`）：
+
+| 能力 | UI / MOOSE 类型 | 关键参数 | 生成位置 |
+|---|---|---|---|
+| 固定位移 | `DirichletBC` | `variable`、`boundary`、`value` | `[BCs]` |
+| 函数位移 | `FunctionDirichletBC` | `variable`、`boundary`、`function` | `[BCs]` |
+| 面压力 | `Pressure` | `variable`、`boundary`、`factor/function`、可选 `component` | `[BCs]` |
+| 面—面接触 | `Contact` | `primary`、`secondary`、`model`、`formulation`；Coulomb 使用 `friction_coefficient >= 0` | `[Contact]` |
+
+Contact 模型候选为 `frictionless / coulomb / glued`；算法候选为
+`kinematic / penalty / augmented_lagrange / tangential_penalty / mortar`。本轮 M-01 使用
+`model=coulomb`、`formulation=kinematic`、`friction_coefficient=0.15`。
 
 1. 打开活动应用档案或应用兼容性说明。
 2. 记录 DamSafetyApp 当前实际支持的：
@@ -405,6 +422,12 @@ SHA-256，本用例关闭。
 
 ### 5.2 创建面—面 Contact
 
+> **人工回归记录（2026-09-16）**：主/从面下拉仅列二维 Physical Group、主从面相同的
+> 冲突校验均已通过；通过高级参数把 `primary` 改为三维组 `instance_plate` 时曾可绕过
+> 参数页、校验页和“确定”阻断，登记为 `2026-09-16-013`。现已在公共参数校验入口补齐
+> 二维 Physical Group 成员校验，并纳入 `contact_load_mapping_contract`，等待本节第 7 步
+> 人工复验后关闭。
+
 1. 新建相互作用并重命名为 `contact_plate_concrete`。
 2. 类型选择活动档案中已冻结的面—面 Contact 类型。
 3. 主面选择 `contact_plate`，从面选择 `contact_concrete`；若映射合同规定相反顺序，
@@ -423,15 +446,241 @@ SHA-256，本用例关闭。
 
 ### 5.3 固定、位移加载及 Load 映射（TEST-P5-G1-07）
 
-1. 在 `BC` 下为 `fixed_bottom` 创建三个零位移约束：`disp_x`、`disp_y`、`disp_z`。
-2. 新建 `loading_curve`，使用 `PiecewiseLinear`；填写单调加载的时间—位移数据。
-3. 在钢板 `load_top` 上创建 M-01 所需的位移边界，并引用 `loading_curve`。
-4. 确认位移边界使用活动档案支持的真实类型。
-5. 为验证 Load 映射，另建一份测试副本，在 `Loads` 中选择活动档案支持的面力或压力类型。
-6. 该 Load 的作用面选择 `load_top`，不得输入裸 Gmsh tag。
-7. 同步后检查 Load 被映射到档案声明的真实 Kernel/BC/应用专属对象。
-8. 临时把 Load 作用域改成三维体组，确认维度不匹配被阻断。
-9. 恢复 M-01 的位移加载配置；不要在同一自由度同时保留互相冲突的位移和力加载。
+1. 在模型树 `BC` 根节点下为 `fixed_bottom` 创建三个零位移约束。具体操作如下：
+   1. 展开模型树中的 `BC`，右键 `BC` 根节点并选择 `Add BC`；在名称对话框中依次创建
+      `disp_x`、`disp_y`、`disp_z` 三个对象。对象名用于生成 `[BCs]` 子块，本用例按这三个
+      固定名称记录证据。
+   2. 双击 `disp_x`，进入“参数”页。若准备使用“Fixed (Dirichlet 0)”模板，应先应用模板，
+      再执行下面的边界指派；应用模板会恢复模板默认参数，可能覆盖此前的选择。
+   3. 将“类型”设为 `DirichletBC`，“变量”设为 `disp_x`，“值”设为 `0`。
+   4. 在页面顶部“可选边界分组”列表中单击 `fixed_bottom`，确认“待应用选择”只包含
+      `fixed_bottom`，再点击“应用所选边界”。只有选中列表行还不算完成指派，必须点击该按钮。
+   5. 确认只读字段“已指派边界”从默认占位值 `left` 变为 `fixed_bottom`。`left` 不是本项目
+      Physical Group，不能保留。打开“校验”页确认当前对象无问题，然后点击“确定”。
+   6. 对 `disp_y`、`disp_z` 重复上述操作，只把“变量”分别改为 `disp_y`、`disp_z`；类型、
+      已指派边界和值保持相同。
+
+   三个对象最终参数应为：
+
+   | BC 对象名 | 类型 | 变量 | 已指派边界 | 值 |
+   |---|---|---|---|---|
+   | `disp_x` | `DirichletBC` | `disp_x` | `fixed_bottom` | `0` |
+   | `disp_y` | `DirichletBC` | `disp_y` | `fixed_bottom` | `0` |
+   | `disp_z` | `DirichletBC` | `disp_z` | `fixed_bottom` | `0` |
+
+   完成后模型树应显示 `BC · 就绪 (3)`。此时整个 Workflow 仍可能因 Material、Section、
+   Physics、Step、Load 或 Outputs 尚未配置而保持 blocked，这是分步建模期间的正常状态，
+   不代表这三个 BC 失败。`disp_x/disp_y/disp_z` 是固体力学位移变量候选，本步骤无需再在
+   `Variables` 根节点手工创建同名变量；后续 Physics 应启用 `add_variables=true`。
+
+   同步 MOOSE 输入后，`[BCs]` 中应出现三个独立子块，逐项检查变量、边界和值，不要求参数
+   行顺序完全一致：
+
+   ```text
+   [BCs]
+     [disp_x]
+       type = DirichletBC
+       variable = disp_x
+       boundary = fixed_bottom
+       value = 0
+     []
+     [disp_y]
+       type = DirichletBC
+       variable = disp_y
+       boundary = fixed_bottom
+       value = 0
+     []
+     [disp_z]
+       type = DirichletBC
+       variable = disp_z
+       boundary = fixed_bottom
+       value = 0
+     []
+   []
+   ```
+
+   若生成文本中仍出现 `variable = u` 或 `boundary = left`，说明对应对象仍保留默认值，应返回
+   属性弹窗修正后重新同步。
+2. 在 `Functions` 下创建位移时程 `loading_curve`。具体操作如下：
+   1. 展开模型树中的 `Functions`，右键根节点并选择“添加 Functions”，
+      将新对象命名为 `loading_curve`。
+   2. 双击 `loading_curve` 打开属性弹窗，进入“参数”页，将“类型”选为
+      `PiecewiseLinear`。切换类型后应显示 `X Values` 和 `Y Values`，不再显示
+      `Expression`。
+   3. 本轮 M-01 先使用两个点的单调压缩位移基线：
+
+      | 字段 | 填写值 | 含义 |
+      |---|---|---|
+      | `X Values` | `0 1` | 0～1 s |
+      | `Y Values` | `0 -2.5e-5` | Z 向从 0 单调加载到 -0.025 mm |
+
+      当前装配中钢板位于混凝土上方，因此使用负 Z 压向接触面。若后续重建模型
+      导致局部 Z 方向反转，应把符号改成“朝向接触面”的方向，并在证据中记录；
+      不得同时修改时间点数或未记录地改变幅值。
+   4. 打开“校验”页并点击“刷新”，确认没有 `x/y count mismatch`。`X Values`
+      与 `Y Values` 必须一一对应，本例均为 2 个数。然后点击“确定”。
+   5. 同步 MOOSE 输入后，`[Functions]` 中应出现：
+
+      ```text
+      [loading_curve]
+        type = PiecewiseLinear
+        x = '0 1'
+        y = '0 -2.5e-5'
+      []
+      ```
+
+      不应在该子块内残留 `expression = ...`。生成器可能把 `-2.5e-5` 规范化为
+      等价的科学计数法，只要数值与符号不变即可。
+
+3. 在 `BC` 下为钢板加载面创建函数位移边界。具体操作如下：
+   1. 右键 `BC` 根节点，选择 `Add BC`，将新对象命名为 `load_disp_z`。
+   2. 打开 `load_disp_z` 的“参数”页。可以在“模板”中选择
+      `Prescribed Function` 并点击“应用模板”；若不使用模板，则直接填写后续字段。
+      应先应用模板再选边界，避免模板恢复默认值。
+   3. 将字段设置为：
+
+      | 字段 | 填写/选择值 |
+      |---|---|
+      | 类型 | `FunctionDirichletBC` |
+      | 变量 | `disp_z` |
+      | 函数 | `loading_curve` |
+
+      选中 `FunctionDirichletBC` 后应显示“函数”下拉，并隐藏常量“值”字段。
+   4. 在页面顶部“可选边界分组”中单击 `load_top`，确认“待应用选择”中只有
+      `load_top`，然后点击“应用所选边界”。
+   5. 确认只读字段“已指派边界”为 `load_top`，不是 `left`、`contact_plate`、
+      `instance_plate_surface` 或数字 tag。打开“校验”页确认当前对象无问题，
+      再点击“确定”。
+
+4. 确认位移加载的真实映射。
+   1. 点击“同步 MOOSE 输入”，打开生成的 `.i`。在 `[BCs]` 中应出现：
+
+      ```text
+      [load_disp_z]
+        type = FunctionDirichletBC
+        variable = disp_z
+        boundary = load_top
+        function = loading_curve
+      []
+      ```
+
+   2. 该子块不得出现 `value = ...`；`FunctionDirichletBC` 已由函数给出整个时程，
+      同时保留常量值会造成语义冲突。
+   3. 在属性弹窗“校验”页及全局“校验工作流”中，不应出现
+      `load_disp_z` 的 `function`、`boundary` 或 `variable` 引用错误。此时整个
+      Workflow 仍可能因 Material、Section、Physics、Step 或 Outputs 未完成而 blocked；
+      只要错误不指向 `loading_curve`/`load_disp_z`，不判定本步失败。
+
+5. 使用独立测试副本验证 `Loads → Pressure` 映射，不要直接污染 M-01 主项目。
+   > 若浮动属性窗的模板列表中没有“面压力”（英文界面为 `Surface Pressure`），且“类型”下拉也没有
+   > `Pressure`，先停止本步、重新构建并重启应用；不要用 `BodyForce`、手输不可选的类型
+   > 或编辑 `.i` 代替。此现象曾由浮动窗未继承活动档案的类型候选造成。修复后可继续编辑
+   > 已创建的 `pressure_mapping_check`，无需再建一个同名对象。
+
+   1. 先保存当前主项目 `phase5-g1-assembly-contact.gmp.yaml`。然后使用
+      “项目另存为”创建 `phase5-g1-pressure-mapping-check.gmp.yaml`，确认窗口标题已切换到
+      副本后再继续。
+   2. 在副本中删除 `BC/load_disp_z`。`load_top + disp_z` 在主项目中已由位移边界
+      约束，若不先删除就再加 Pressure，应被判定为同面同自由度冲突，无法单独
+      验证 Pressure 映射。三个 `fixed_bottom` 零位移 BC 保留。
+   3. 在 `Functions` 下新建 `pressure_curve`，类型选择 `PiecewiseLinear`，填写：
+      - `X Values = 0 1`
+      - `Y Values = 0 1`
+
+      这是从 0 到 1 的无量纲幅值函数，实际压力由下面的 `factor` 给出。
+   4. 若 `Loads` 下尚无 `pressure_mapping_check`，右键 `Loads` 根节点并选择“添加 Loads”，
+      将新对象命名为 `pressure_mapping_check`；若该对象已存在且仍为默认 `BodyForce`，
+      直接双击它继续，不要重复创建。打开“参数”页，先确认“类型”下拉中有 `Pressure`，
+      再从“模板”中选择“面压力”（英文界面为 `Surface Pressure`）并点击“应用模板”。应用后确认“类型”变为
+      `Pressure`，页面顶部可选列表从体组 `instance_plate`、`instance_concrete` 切换为
+      包含 `load_top` 的二维边界组；直接把类型从 `BodyForce` 改为 `Pressure` 时也应
+      自动将原先的 `u` 改为 `disp_z`。随后填写如下字段：
+
+      | 字段 | 填写/选择值 | 说明 |
+      |---|---|---|
+      | 类型 | `Pressure` | DamSafetyApp-opt / mapping 1.0.0 的真实映射类型 |
+      | 变量 | `disp_z` | 下拉应列出 `disp_x/disp_y/disp_z`，选 `disp_z`；若只看到 `u`，本项不通过 |
+      | 压力系数 | `-250000` | Pa；本步只验证映射，不用此副本做 M-01 准出求解 |
+      | 函数 | `pressure_curve` | 0～1 幅值 |
+      | 分量 | `2` | Z 分量；`0/1/2` 分别为 X/Y/Z |
+      | 使用变形后网格 | `true` | 保持自动合同基线 |
+
+      应先应用模板再指派边界，避免模板覆盖后续选择。
+      此时 `Variables` 根节点为空属正常：位移变量由后续 Physics 的
+      `add_variables=true` 在生成输入时创建，不能因此把 Pressure 变量留作 `u`。
+      对已保存为 `variable=u` 的测试对象，重新应用“面压力”模板并核对变量已改为
+      `disp_z`；未修正时参数页校验应阻止确认。
+
+6. 把 `pressure_mapping_check` 的作用面指派为命名二维组 `load_top`。
+   1. 在页面顶部“可选边界分组”中选中 `load_top`，确认“待应用选择”只显示
+      `load_top`，再点击“应用所选边界”。
+   2. 确认只读的“已指派边界”为 `load_top`。列表行的选中高亮不等于完成指派，
+      必须点击“应用所选边界”后再检查该只读字段。
+   3. 不得填写 `2:6`、单独数字 tag，也不得使用整个钢板边界组
+      `instance_plate_surface`。本用例要验证的是“命名 Physical Group → MOOSE boundary”
+      映射。
+   4. 打开“校验”页，确认当前 Load 没有缺少 `variable`、`boundary` 或
+      `factor or function` 等问题，再点击“确定”。
+
+7. 同步 MOOSE 输入，检查 Pressure 的生成位置和来源追溯。
+   1. 点击“同步 MOOSE 输入”，在 `.i` 的 `[BCs]` 中查找
+      `[pressure_mapping_check]`，预期子块为：
+
+      ```text
+      [pressure_mapping_check]
+        type = Pressure
+        variable = disp_z
+        boundary = load_top
+        factor = -250000
+        function = pressure_curve
+        component = 2
+        use_displaced_mesh = true
+      []
+      ```
+
+      参数行顺序可不同，但名称与值必须一致。
+   2. 确认 `[pressure_mapping_check]` 出现在 `[BCs]`，而不是 `[Kernels]`。当前
+      DamSafetyApp-opt / mapping `1.0.0` 把 `Loads/Pressure` 真实映射到 MOOSE
+      `BCs/Pressure`，不应将其统一硬编码为 `BodyForce`。
+   3. 打开生成报告，确认能找到来自模型树 `Loads/pressure_mapping_check` 的记录，
+      并包含 `Physical Group=load_top`。若报告显示为 Kernel、`BodyForce` 或无来源占位块，
+      本步失败。
+
+8. 在 Pressure 测试副本中验证三维体组不能冒充二维作用面。
+   1. 重新打开 `pressure_mapping_check`，勾选“高级参数”。在参数表中找到
+      `boundary`，临时把值从 `load_top` 改为三维体组 `instance_plate`。
+      这是负向验证，不是正常配置方式。
+   2. “参数”页应立即提示 `boundary must reference an existing 2D Physical Group`；
+      打开“校验”页并刷新，应看到同一错误。点击“确定”应保持弹窗打开，
+      不得把 `boundary = instance_plate` 写回模型树。点击“取消”退出后重新打开，
+      “已指派边界”仍须为 `load_top`。
+   3. 由于第 2 项已阻止非法编辑写回，正常 UI 路径下此时同步的是原本有效的
+      `load_top`，**不能**以同步成功判定非法 Pressure 未被拦截。对旧项目中已持久化
+      非法边界的情况，主界面“校验工作流”应定位到
+      `Loads/pressure_mapping_check/boundary`，并明确说明 `instance_plate`
+      不存在于网格的二维 Physical Group 清单，例如：
+
+      ```text
+      Physical Group 'instance_plate' (dimension 2) is not present in the mesh.
+      ```
+
+   4. 对这类旧项目非法状态，同步/提交预检还必须阻断，不得生成
+      `boundary = instance_plate` 的可提交输入；定向自动巡览覆盖这条绕过弹窗的路径。
+      人工测试无需手改项目 YAML 来制造非法持久状态。
+
+9. 恢复 M-01 主项目的位移加载，并检查不存在同面同自由度冲突。
+   1. 关闭 Pressure 测试副本；如需保留负向验证现场，可以另存副本，但不得覆盖
+      `phase5-g1-assembly-contact.gmp.yaml`。
+   2. 重新打开主项目 `phase5-g1-assembly-contact.gmp.yaml`，确认：
+      - `BC` 下仍有 `disp_x`、`disp_y`、`disp_z` 和 `load_disp_z`；
+      - `load_disp_z` 仍为 `FunctionDirichletBC + disp_z + load_top + loading_curve`；
+      - `Loads` 下没有 `pressure_mapping_check`；
+      - `Functions` 下没有副本专用的 `pressure_curve`。
+   3. 点击“校验工作流”，确认没有
+      `Pressure conflicts with a prescribed BC on the same boundary and variable.`
+      冲突。同一个 `load_top + disp_z` 最终只保留位移加载。
+   4. 再次同步 MOOSE 输入，确认 `.i` 恢复为 `loading_curve + load_disp_z`，
+      不再包含 `pressure_mapping_check`、`pressure_curve` 或测试性 Pressure。
 
 通过标准：固定端、位移加载和 Load 都引用命名组；Load 不被统一硬编码为无关的
 `BodyForce`；冲突或维度错误能定位到具体对象/字段。
@@ -440,18 +689,150 @@ SHA-256，本用例关闭。
 
 ### 6.1 材料、Section、Physics、Step 和 Outputs
 
-1. 为混凝土和钢板分别创建线弹性材料，使用 M-01 冻结的测试参数和单位。
-2. 创建两个 Section：
-   - 混凝土 Section 指派给 `instance_concrete`；
-   - 钢板 Section 指派给 `instance_plate`。
-3. 确认两个体组不交叉，材料引用存在。
-4. 创建活动档案支持的三维准静态 Physics，block 同时覆盖两个体组或按映射要求拆分。
-5. 创建一个 Step。G1 只允许单 Step；如项目中已有第二个 Step，先删除或禁用，避免把
-   Phase 4 的“只取第一个”过渡行为带入 M-01 准出。
-6. 配置求解控制、时间步和预条件参数。
-7. 配置 Outputs，至少包括位移、应力、应变、接触量、加载面平均位移和反力。
-8. 启用 Exodus、CSV 和求解日志制品。
-9. 保存项目。
+以下操作都在主项目 `phase5-g1-assembly-contact.gmp.yaml` 中进行，不要打开
+§5.3 的 Pressure 测试副本。先确认活动应用为 `DamSafetyApp-opt`，装配网格仍含
+`instance_concrete`、`instance_plate` 两个 **三维体组**，以及 `load_top` 等二维面组；
+`BC/load_disp_z`、`Functions/loading_curve` 和 Contact 均保留。材料、Section 等节点
+创建前工作流报告有缺项是正常的，逐项完成后再用 §6.2 做全局预检。
+
+1. **为混凝土和钢板建立线弹性本构。**
+   1. Abaqus 参考截图中的混凝土为 `E=29791.45978 MPa、ν=0.2`，钢板为
+      `E=206000 MPa、ν=0.3`（见
+      [混凝土截图](../doc/images/abaqus-workflow/08-material-concrete-elastic.png) 和
+      [钢板截图](../doc/images/abaqus-workflow/10-material-steel-elastic.png)）。
+      `DamSafetyApp-opt` 的应力单位为 **Pa**，本项目输入须使用：
+
+      | 区域 | 杨氏模量 `youngs_modulus`（Pa） | 泊松比 `poissons_ratio` |
+      |---|---:|---:|
+      | 混凝土 | `2.979145978e10` | `0.2` |
+      | 钢板 | `2.06e11` | `0.3` |
+
+      这是参考图的 MPa→Pa 换算，不要把 `29791.45978` 或 `206000` 原样填入 Pa 字段。
+      网格坐标本身没有自动 mm→m 换算；在 §6.3 真正求解、解释力和位移前，还必须核对
+      几何、位移与材料使用同一长度单位，不能仅凭输入预检通过认定物理单位正确。
+   2. 模型树右键 `Materials` 根节点，依次选择“添加 Materials”，创建并重命名为
+      `concrete_elasticity`、`concrete_stress`、`steel_elasticity`、`steel_stress`。
+      这里的“两种线弹性材料”各由一个弹性张量对象和一个应力计算对象组成，不能
+      只创建两个弹性张量而遗漏应力计算。MOOSE 的[线弹性入门输入](https://mooseframework.inl.gov/releases/moose/2024-11-11/modules/solid_mechanics/tutorials/introduction/step01.html)
+      也采用这两个对象配对。
+   3. 如果“类型”下拉尚无 `ComputeIsotropicElasticityTensor`，先重新构建并启动包含
+      本节修复的应用；旧进程不会自动更新。分别双击 `concrete_elasticity`、
+      `steel_elasticity`，在“参数 → 快捷参数”直接选择这个类型，并逐项填写：
+
+      | 节点 | 类型 | Young's Modulus (MPa) | Poisson's Ratio | Block/作用区域 |
+      |---|---|---:|---:|---|
+      | `concrete_elasticity` | `ComputeIsotropicElasticityTensor` | `29791.45978` | `0.2` | `instance_concrete` |
+      | `steel_elasticity` | `ComputeIsotropicElasticityTensor` | `206000` | `0.3` | `instance_plate` |
+
+      `Block/作用区域` 是只读回显，不再手工输入：在参数页上方“可选物理体”列表中
+      选中本行的 `instance_*`，点击“应用所选物理体”，确认回显为该组名。
+      列表仅显示当前网格中的物理体组；若为空，先检查装配/网格物理组是否已恢复。
+      同一材料需要覆盖多个物理体时可多选，`block` 以空格分隔保存。
+      “Young's Modulus (MPa)”按 MPa 输入，系统存储为 Pa。若勾选“高级参数”复核，
+      两节点应分别为以下精确键值；**不要**在快捷字段输入 Pa 数值：
+
+      | 节点 | `type` | `youngs_modulus`（Pa） | `poissons_ratio` | `block` |
+      |---|---|---:|---:|---|
+      | `concrete_elasticity` | `ComputeIsotropicElasticityTensor` | `29791459780` | `0.2` | `instance_concrete` |
+      | `steel_elasticity` | `ComputeIsotropicElasticityTensor` | `206000000000` | `0.3` | `instance_plate` |
+
+      从默认 `GenericConstantMaterial` 切换类型后，`prop_names`、`prop_values` 应自动
+      消失；若在高级参数表仍有这两行，逐行选中并点“删除参数”。当前
+      “Linear Elastic (isotropic)”模板仍是示例 `C_ijkl` 路径，**不要**套用
+      `2.1e5 0.8e5`，也不要改用 CDP 模板。
+   4. 分别打开两个 `*_stress` 节点，在“参数 → 快捷参数”填写：
+
+      | 节点 | 类型 | Block/作用区域 |
+      |---|---|---|
+      | `concrete_stress` | `ComputeLinearElasticStress` | `instance_concrete` |
+      | `steel_stress` | `ComputeLinearElasticStress` | `instance_plate` |
+
+      `*_stress` 也使用上方同一物理体列表选择并点击“应用所选物理体”，
+      不要在只读“作用区域”中输入。高级参数或旧项目中若存在不存在的 `block` 名称，
+      参数页和校验页应报错，点击“确定”应被阻断；恢复正确体组后才可确认。
+      这两个节点不需要 `youngs_modulus` 或 `poissons_ratio`；若默认
+      `prop_names`、`prop_values` 仍在高级参数表中，删除它们。逐个打开“校验”页，
+      无当前材料字段错误后点击“确定”；重开核对所有值仍在。若类型下拉或这些快捷
+      字段仍不可用，记录为材料编辑阻塞，不要手改 `.i` 绕过。
+2. **创建两个 Section 并指派体组。**顶部“模块”切到“截面”，点击“新建实体截面”
+   两次，或在 `Sections` 根节点上右键添加两次，命名为 `section_concrete` 和
+   `section_plate`。逐个打开“参数”页：
+   - `section_concrete`：类型保持只读的 `SolidSection`；“材料”下拉选
+     `concrete_elasticity`；在上方“可选物理体”选 `instance_concrete`，点击
+     “应用所选物理体”，确认只读“已指派物理体”为 `instance_concrete`。
+   - `section_plate`：材料选 `steel_elasticity`；只选 `instance_plate` 并点击
+     “应用所选物理体”，确认只读字段为 `instance_plate`。
+
+   列表高亮不等于已指派，必须点击“应用所选物理体”再点“确定”。若可选体组列表为空，
+   返回 Mesh 工作窗“分组与网格场 → 物理组”确认两组三维体组，刷新/重建装配网格后重试。
+3. **检查材料—区域关系。**重开两个 Section，确认它们分别只含自己的体组、材料
+   引用仍存在；重开四个 Material，确认各自的 `block` 与 Section 体组一致，且
+   `instance_concrete`、`instance_plate` 是两个不同的三维组。Section 在生成报告中
+   记录指派关系；本轮普通线弹性 Material 的 `block` 还需按第 1 步明确填写，
+   不要只依赖 Section 名称自动推断。
+4. **创建三维准静态 Physics。**在模型树 `Physics` 根节点右键“添加 Physics”，
+   将子节点命名为 `physics_g1` 并打开“参数”。`Action` 选 `QuasiStatic`，
+   `Strain=SMALL`、`add_variables=true`、`incremental=true`；其余默认
+   `volumetric_locking_correction=true`、`save_in_resid=true` 保持。顶部“可选体组”
+   同时选中 `instance_concrete` 和 `instance_plate`（macOS 按 Command 多选），
+   点击“应用所选分组”，确认 `Block` 为两个名称，以空格分隔。`generate_output`
+   至少保留默认的 `stress_xx … stress_zz` 和 `strain_xx … strain_zz`；`disp_x/y/z`
+   由 `add_variables=true` 的 Physics action 建立，`Variables` 树根为空不等于缺少
+   位移变量。点击“确定”后只应有一个 `physics_g1`。
+5. **创建且只保留一个 Step。**在 `Steps` 根节点右键“添加 Steps”，命名为
+   `step_g1`，打开“参数”。若主项目已经有 Step，优先编辑原节点，不要再添加第二个。
+   若确有多余 Step，先另存项目备份再删除多余节点；当前 G1 不能用“同步只取第一个”
+   的过渡行为冒充多 Step 执行。类型保持 `Transient`：这里通过 0～1 的伪时间推进
+   位移，是准静态加载，不等于切换为动力学问题。
+6. **填写 Step 的求解控制、时间步和预条件。**在 `step_g1` 的“参数”页按下表
+   核对默认值；若值不同，明确改成表中值后点击“确定”：
+
+   | 分组 | 字段和值 |
+   |---|---|
+   | 基本 | `start_time=0`，`end_time=1`，`num_steps=100000` |
+   | 求解控制 | `solve_type=NEWTON`，`line_search=bt`，`automatic_scaling=true`，`nl_rel_tol=1e-9`，`nl_abs_tol=1e-8`，`nl_max_its=50` |
+   | PETSc | `petsc_options_iname=-pc_type -pc_factor_mat_solver_type`，`petsc_options_value=lu mumps` |
+   | 时间步 | `timestepper_type=IterationAdaptiveDT`，`dt=0.01`，`dtmin=1e-15`，`dtmax=1` |
+   | 自适应 | `optimal_iterations=8`，`iteration_window=3`，`growth_factor=1.15`，`cutback_factor=0.5` |
+   | 预条件 | `preconditioning_type=SMP`，`preconditioning_full=true` |
+
+   这些是当前界面 G1/Phase 4 的起始验收配置，不保证所有接触计算都收敛；如
+   §6.2 的目标应用输入检查或 §6.3 运行要求调整，记录修改值及理由，不静默改基线。
+7. **配置场量与历史量 Outputs。**在 `Outputs` 根节点右键“添加 Outputs”，命名
+   `outputs_g1` 并打开“参数”。位移由 Physics 的 `add_variables=true` 输出；应力、
+   应变由第 4 步的 `generate_output` 指定。当前“Field Variables”复选框是 CDP
+   专用的 `DamageC/DamageT/kappa_*` 等诊断量，**本线弹性用例不要勾选它们来冒充
+   接触量**。接着在“历史输出”中：
+   1. 在顶部“可选边界分组”只选择二维组 `load_top`，点击“应用所选边界”，确认
+      “History Boundary/历史输出面组”为 `load_top`。
+   2. 将 `Reaction Force=true`、`Displacement Avg=true`、
+      `Disp Variable=disp_z`；`Extremum=false` 可保持默认。
+   3. 将 `Enable Times=true`、`Times Name=field_output_times`、
+      `start_time=0`、`end_time=1`、`time_interval=0.01`。这样历史量和文件
+      输出都按 0～1 的时间序列采样。
+
+   当前 Outputs 快捷表单**没有独立的接触量选择/映射**；不能把普通应力场或 CDP
+   诊断量算作“接触量已配置”。MOOSE `ContactAction` 可能自动建立 `contact_pressure`
+   等辅助量，因此生成 `.i` 未显式列出接触 AuxKernel 也不能单独判定无输出。
+   检查活动档案的实际行为，并在 §6.3 的 Exodus 结果中核实接触压力、间隙或接触力；
+   如目标应用未生成可用接触量，记录“6.1 接触量输出阻塞”，暂停 G1 准出，
+   不要手改 `.i` 或虚构结果。§6.2 的输入检查不能替代此项结果验证。
+8. **启用结果文件并明确日志来源。**同一 `outputs_g1` 的“Output Files”中确认
+   `Exodus=true`、`CSV=true`，按需填写只含文件名前缀的 `file_base`，然后点击
+   “确定”。`Outputs` 表单没有单独的“求解日志”开关；日志由 §6.3 的作业执行和
+   远程制品流程获取。此处只验证 Exodus/CSV 配置，不能提前宣称日志制品已生成。
+9. **保存并留证。**点击“保存项目”，记下主项目路径；关闭并重开上述各节点，确认
+   四个 Material、两个 Section、一个 Physics、一个 Step、一个 Outputs 的名称和
+   参数保持。保存材料、Section、Physics、Step 与 Outputs 的参数截图。下一步按
+   §6.2 执行“校验工作流 → 同步模型到 MOOSE 输入 → 检查输入”，核对实际生成的
+   `[Materials]`、`[Physics/SolidMechanics/QuasiStatic]`、`[Executioner]`、
+   `[Preconditioning]`、`[Postprocessors]`、`[Outputs]`；仅属性页显示“就绪”
+   不构成目标应用可运行证据。
+
+本节通过条件：所有已列对象可从 UI 保存并重开、材料和体组对应正确、只有一个
+Step，位移/应力/应变与加载面位移均值/反力以及 Exodus/CSV 有真实生成映射。
+接触量输出若仍无映射，应按第 7 步记录阻塞；求解日志须在 §6.3 取得，不能在此
+提前判定 G1 整体验收通过。
 
 ### 6.2 工作流校验、确定性生成与输入预检（TEST-P5-G1-08）
 
@@ -509,12 +890,32 @@ SHA-256，本用例关闭。
 | TEST-P5-G1-03 可见性/顺序/非法参数 | 已人工通过（2026-09-15） |
 | TEST-P5-G1-04 保存重开与过期传播 | 已人工通过（2026-09-15） |
 | TEST-P5-G1-05 装配网格与 Physical Groups | 已人工通过（2026-09-15） |
-| TEST-P5-G1-06 Contact 支持矩阵与真实映射 | 待实现后验证 |
-| TEST-P5-G1-07 BC/Load 选择集和映射 | 待实现后验证 |
-| TEST-P5-G1-08 确定性输入与 `--check-input` | 待实现后验证 |
-| TEST-P5-G1-09 succeeded/Results/回放闭环 | 待实现后验证 |
+| TEST-P5-G1-06 Contact 支持矩阵与真实映射 | 待人工验证 |
+| TEST-P5-G1-07 BC/Load 选择集和映射 | 待人工验证 |
+| TEST-P5-G1-08 确定性输入与 `--check-input` | 部分完成／环境待测（2026-09-17） |
+| TEST-P5-G1-09 succeeded/Results/回放闭环 | 未测试／延期（2026-09-17） |
 
 G1 的所有行都通过、相关缺陷关闭、全量真实点击巡览与 CTest 通过后，才能进入 G2 准出。
+
+### 6.5 阶段性执行记录（2026-09-17，非 G1 准出）
+
+- **项目与静态证据**：`phase5-g1-assembly-contact.gmp.yaml` 的生成报告可追溯
+  Mesh、四个 Material、两个 Section 的材料/三维体组指派、Physics、BC、Contact、
+  Step 与 Outputs；“Workflow ready: no blocking issue found”仅证明应用内部工作流校验通过。
+- **TEST-P5-G1-08：部分完成／环境待测**。操作日志显示多次生成 `.i`，但未提交 A/B
+  文本比较证据；点击“检查输入”时记录 `moose | Executable is empty.`，目标应用
+  `--check-input` 未启动，因此不能将本用例标为通过。用户仅在远端执行；当前计算节点
+  不在可用局域网内，此项按环境待测记录，不据此登记产品缺陷。
+- **TEST-P5-G1-09：未测试／延期**。尚无本轮 M-01 快照对应的远端 `succeeded`、
+  求解日志、Exodus/CSV 制品、Results 回放和接触量数值证据；不得提前标为通过。
+- **本地自动回归**：2026-09-17 提交前构建、CTest `1/1` 和 111 步全量真实点击巡览
+  均通过；这些证据不替代目标应用输入预检或远端求解结果。
+- **恢复条件**：远端环境可用后，保存两次同步输入 A/B 并逐字比较，在实际目标应用上
+  完成 `--check-input`；随后按 §6.3 提交快照并等待 `succeeded`，核对结果文件中的
+  `contact_pressure` 等真实接触量、位移和反力。补齐证据后再分别回填 6.1 第 7 步、
+  TEST-P5-G1-08/09 与 G1 准出清单。
+- **后续边界**：可先分析 G2 的档案支持矩阵、Reference Point/Coupling 映射和验证方案；
+  不将该分析视为 G2 开工或 G1 已准出，G2 的项目复制、实施与准出仍按 §7 和闸门规则执行。
 
 ## 七、G2：Reference Point 与 Coupling Constraint
 
@@ -712,9 +1113,10 @@ GMP_SCREENSHOT_DIR="$tour_dir" \
 ./build/gmp_ise
 ```
 
-当前自动巡览清单为 109 步，其中 `assembly_instance_contract`、
+当前自动巡览清单为 111 步，其中 `assembly_instance_contract`、
 `entity_picker_guidance_contract`、`mesh_property_summary_contract` 与
-`project_save_feedback_contract` 已定向通过；
+`project_save_feedback_contract` 已定向通过；本次 G1 还覆盖
+`g1_isotropic_material_form_contract` 与 `contact_load_mapping_contract`；
 后续新增用例只能递增，不能删除旧断言换取通过。
 
 `assembly_instance_contract` 同时验证 Assembly 自定义 Physical Groups 的项目级持久化：
@@ -740,10 +1142,10 @@ GMP_SCREENSHOT_DIR="$tour_dir" \
 | TEST-P5-G1-03 | 2026-09-15 |  | `phase5-g1-assembly-contact.gmp.yaml` | 人工通过 | 可见性、顺序与非法参数校验通过 |
 | TEST-P5-G1-04 | 2026-09-15 |  | `phase5-g1-assembly-contact.gmp.yaml` | 人工通过 | 保存重开与过期传播通过 |
 | TEST-P5-G1-05 | 2026-09-15 |  | `phase5-g1-assembly-contact.gmp.yaml` | 人工通过 | 项目自有装配网格、四组、网格摘要与 SHA-256 通过 |
-| TEST-P5-G1-06 |  |  |  | 待实现后验证 |  |
-| TEST-P5-G1-07 |  |  |  | 待实现后验证 |  |
-| TEST-P5-G1-08 |  |  |  | 待实现后验证 |  |
-| TEST-P5-G1-09 |  |  |  | 待实现后验证 |  |
+| TEST-P5-G1-06 |  |  |  | 待人工验证 |  |
+| TEST-P5-G1-07 |  |  |  | 待人工验证 |  |
+| TEST-P5-G1-08 | 2026-09-17 |  | `phase5-g1-assembly-contact.gmp.yaml` | 部分完成／环境待测 | 生成报告、内部工作流校验通过；A/B 比较未留证；`Executable is empty.`，目标应用 `--check-input` 未启动 |
+| TEST-P5-G1-09 | 2026-09-17 |  | `phase5-g1-assembly-contact.gmp.yaml` | 未测试／延期 | 远端计算环境当前不可用；无 `succeeded`、日志、Exodus/CSV、Results 与接触量数值证据 |
 | TEST-P5-G2-01～05 |  |  |  | 待实现后验证 |  |
 | TEST-P5-G3-01～05 |  |  |  | 待实现后验证 |  |
 

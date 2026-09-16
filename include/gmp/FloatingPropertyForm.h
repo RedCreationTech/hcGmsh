@@ -22,6 +22,9 @@ class FloatingPropertyForm : public QDialog {
   FloatingPropertyForm(QTreeWidgetItem* target,
                        const QStringList& boundary_groups,
                        const QStringList& volume_groups,
+                       const QStringList& physics_action_options,
+                       const QStringList& load_type_options,
+                       const QStringList& interaction_type_options,
                        QWidget* parent = nullptr);
 
   QTreeWidgetItem* target_item() const { return target_item_; }
