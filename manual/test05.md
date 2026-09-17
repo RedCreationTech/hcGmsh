@@ -1165,7 +1165,7 @@ GMP_SCREENSHOT_DIR="$tour_dir" \
 | TEST-P5-G1-05 | 2026-09-15 |  | `phase5-g1-assembly-contact.gmp.yaml` | 人工通过 | 项目自有装配网格、四组、网格摘要与 SHA-256 通过 |
 | TEST-P5-G1-06 | 2026-09-17 | 8fecf1c（含工作区缺陷修复 019/021） | `phase5-g1-assembly-contact.gmp.yaml` | 人工通过 | Contact 参数/校验/确定三路径阻断复验通过，缺陷 `2026-09-16-013` 关闭 |
 | TEST-P5-G1-07 | 2026-09-17 | 8fecf1c（含工作区缺陷修复 019/021/024） | `phase5-g1-assembly-contact.gmp.yaml` + `phase5-g1-pressure-mapping-check.gmp.yaml` | 人工通过 | 三个固定 BC、`load_disp_z`、Pressure 副本映射与负向阻断、主项目无残留恢复均通过；缺陷 `2026-09-16-014/015/016` 同步人工回归通过 |
-| TEST-P5-G1-08 | 2026-09-17 | 8fecf1c（含工作区缺陷修复 019/021/024） | `phase5-g1-assembly-contact.gmp.yaml` | 部分完成／环境待测 | 网格重生成回基线（175086 节点、Hex8=152950）、校验 0 errors、两次同步 A/B 逐字一致；`--check-input` 待远端环境 |
+| TEST-P5-G1-08 | 2026-09-17 | 8fecf1c（含工作区缺陷修复 019/021/024） | `phase5-g1-assembly-contact.gmp.yaml` | 部分完成／环境待测 | 网格重生成回基线（175086 节点、Hex8=152950）、校验 0 errors、两次同步 A/B 逐字一致、生成报告全对象可追溯；`--check-input` 待远端环境 |
 | TEST-P5-G1-09 | 2026-09-17 |  | `phase5-g1-assembly-contact.gmp.yaml` | 未测试／延期 | 远端计算环境当前不可用；无 `succeeded`、日志、Exodus/CSV、Results 与接触量数值证据 |
 | TEST-P5-G2-01～05 |  |  |  | 待实现后验证 |  |
 | TEST-P5-G3-01～05 |  |  |  | 待实现后验证 |  |
