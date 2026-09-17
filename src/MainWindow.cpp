@@ -182,6 +182,27 @@ bool is_legacy_default_mesh_path(const QString& path) {
   return clean_path.startsWith(legacy_dir + QDir::separator());
 }
 
+// 返回 path 所属的 .work/case/<X>/ 目录（干净路径）；不在任何项目 case
+// 工作目录下时返回空。用于识别“指向其他项目工作目录”的网格路径。
+QString enclosing_case_work_dir(const QString& path) {
+  if (path.trimmed().isEmpty()) {
+    return {};
+  }
+  const QString clean = QDir::fromNativeSeparators(
+      QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+  const QStringList parts = clean.split('/', Qt::SkipEmptyParts);
+  for (int i = 0; i + 2 < parts.size(); ++i) {
+    if (parts.at(i) == ".work" && parts.at(i + 1) == "case") {
+      QString dir = parts.mid(0, i + 3).join('/');
+      if (clean.startsWith('/')) {
+        dir.prepend('/');
+      }
+      return dir;
+    }
+  }
+  return {};
+}
+
 // QStackedWidget 默认以所有页面的最大 size hint 作为自身尺寸，复杂的 Mesh
 // 页面会因此把简单的 Sketch Editor 也撑成同样的大窗。工作窗只显示一个
 // 页面，应由当前页面决定尺寸；各页面仍保留自己的最小尺寸与滚动策略。
@@ -1250,6 +1271,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   std::function<void(int)> apply_toolbar_actions;
 
   property_editor_ = new PropertyEditor(property_stack_);
+  property_editor_->set_model_tree(model_tree_);
   auto* mesh_page = new GmshPanel(property_stack_);
   auto* job_page = new MoosePanel(property_stack_);
   moose_panel_ = job_page;
@@ -7637,6 +7659,7 @@ void MainWindow::refresh_workflow_status() {
 }
 
 QVariantList MainWindow::collect_workflow_issues() const {
+  sync_property_editor_groups_from_snapshot();
   QVariantList issues;
   auto add_issue = [&issues](const QString& severity, const QString& root,
                              const QString& object, const QString& field,
@@ -8016,6 +8039,30 @@ QVariantList MainWindow::collect_workflow_issues() const {
     }
   }
   return issues;
+}
+
+void MainWindow::sync_property_editor_groups_from_snapshot() const {
+  if (!property_editor_) {
+    return;
+  }
+  int model_dim = mesh_snapshot_.mesh_dim;
+  if (model_dim < 0) {
+    for (const auto& group : mesh_snapshot_.groups) {
+      model_dim = qMax(model_dim, group.dim);
+    }
+  }
+  if (model_dim < 0) {
+    return;
+  }
+  const QStringList boundary =
+      mesh_snapshot_.group_names(qMax(0, model_dim - 1));
+  const QStringList volume = mesh_snapshot_.group_names(model_dim);
+  if (property_editor_->boundary_groups() != boundary) {
+    property_editor_->set_boundary_groups(boundary);
+  }
+  if (property_editor_->volume_groups() != volume) {
+    property_editor_->set_volume_groups(volume);
+  }
 }
 
 void MainWindow::focus_workflow_issue(const QVariantMap& issue,
@@ -11734,7 +11781,9 @@ void MainWindow::update_remote_job_files(const QVariantMap& body) {
 void MainWindow::migrate_project_mesh_paths(const QString& project_path) {
   // 旧版本把自动生成网格默认写进应用工作目录 out/，多个项目会共享
   // 同一文件。项目获得保存路径后，把这种“旧默认路径”迁移到自己的
-  // .work/case/<项目名>/；用户明确选择的其他外部路径保持不变。
+  // .work/case/<项目名>/；指向其他项目 .work/case/<其他项目>/ 的网格
+  // （典型来源：另存为副本）同样迁移，保证副本自包含且不会在副本中
+  // 生成网格时覆写原项目文件；.work/case/ 之外的用户外部路径保持不变。
   QStringList project_mesh_paths;
   QString migrated_active_mesh;
   QList<QPair<QString, QString>> migrated_paths;
@@ -11745,6 +11794,8 @@ void MainWindow::migrate_project_mesh_paths(const QString& project_path) {
     return QDir::cleanPath(QFileInfo(lhs).absoluteFilePath()) ==
            QDir::cleanPath(QFileInfo(rhs).absoluteFilePath());
   };
+  const QString own_case_dir = QDir::fromNativeSeparators(
+      QDir::cleanPath(project_case_work_dir(project_path)));
   const QString gmsh_output =
       gmsh_panel_
           ? gmsh_panel_->gmsh_settings().value("output_path").toString()
@@ -11759,7 +11810,11 @@ void MainWindow::migrate_project_mesh_paths(const QString& project_path) {
           mesh_item->data(0, PropertyEditor::kParamsRole).toMap();
       const QString source = params.value("path").toString();
       QString effective = source;
-      if (is_legacy_default_mesh_path(source)) {
+      const QString source_case_dir = enclosing_case_work_dir(source);
+      const bool foreign_case_dir = !own_case_dir.isEmpty() &&
+                                    !source_case_dir.isEmpty() &&
+                                    source_case_dir != own_case_dir;
+      if (is_legacy_default_mesh_path(source) || foreign_case_dir) {
         const QString target = QDir(project_case_work_dir(project_path))
                                    .filePath(QFileInfo(source).fileName().isEmpty()
                                                  ? mesh_item->text(0) + ".msh"
@@ -11768,6 +11823,14 @@ void MainWindow::migrate_project_mesh_paths(const QString& project_path) {
         if (target_ready && QFileInfo::exists(source) &&
             !QFileInfo::exists(target)) {
           target_ready = QFile::copy(source, target);
+        }
+        if (target_ready && !QFileInfo::exists(source) &&
+            !QFileInfo::exists(target)) {
+          gmp::log_operation(
+              "project",
+              QString("Mesh source is missing; redirected into project "
+                      "workspace without copying: %1 -> %2")
+                  .arg(source, target));
         }
         if (target_ready) {
           effective = target;
@@ -11797,13 +11860,23 @@ void MainWindow::migrate_project_mesh_paths(const QString& project_path) {
   if (moose_panel_ && !project_mesh_paths.isEmpty()) {
     const QString current_mesh =
         moose_panel_->moose_settings().value("mesh_path").toString();
+    // 活动网格跟随自己的迁移目标；未参与迁移且不属于项目网格时（含已被
+    // 远程 snapshot 目录污染的情况）才回落到第一个项目网格。
+    QString migrated_current_mesh;
+    for (const auto& migration : migrated_paths) {
+      if (same_path(current_mesh, migration.first)) {
+        migrated_current_mesh = migration.second;
+        break;
+      }
+    }
     bool current_is_project_mesh = false;
     for (const QString& candidate : project_mesh_paths) {
       current_is_project_mesh =
           current_is_project_mesh || same_path(current_mesh, candidate);
     }
-    // 也修复已被远程 snapshot 目录污染的 moose.mesh_path。
-    if (!current_is_project_mesh) {
+    if (!migrated_current_mesh.isEmpty()) {
+      moose_panel_->set_mesh_path(migrated_current_mesh);
+    } else if (!current_is_project_mesh) {
       moose_panel_->set_mesh_path(project_mesh_paths.front());
     }
     // set_mesh_path 会更新当前可见输入，但结构化基线和已保存生成报告
@@ -12075,6 +12148,7 @@ bool MainWindow::load_project(const QString& path) {
     refresh_module_pages();
     add_recent_project(path);
     set_project_dirty(false);
+    update_window_title();
     update_project_status();
     return true;
   } catch (const std::exception& e) {
@@ -14660,6 +14734,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   };
                   const QStringList saved_volumes =
                       property_editor_->volume_groups();
+                  // 全量巡览中前序网格步骤会留下 mesh_snapshot_；本合同模拟
+                  // 全新 G1 项目状态，按新建项目的清理逻辑复位快照，否则
+                  // 工作流校验（2026-09-17-019 的快照对齐）会把下方注入的
+                  // 体组候选覆盖回陈旧快照组。
+                  const PhysicalGroupManifest saved_snapshot = mesh_snapshot_;
+                  mesh_snapshot_ = PhysicalGroupManifest();
                   property_editor_->set_volume_groups(
                       {"instance_concrete", "instance_plate"});
                   auto* elasticity = add_child_item(
@@ -14900,6 +14980,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   property_editor_->set_item(nullptr);
                   delete root->takeChild(root->indexOfChild(elasticity));
                   property_editor_->set_volume_groups(saved_volumes);
+                  mesh_snapshot_ = saved_snapshot;
                   refresh_module_pages();
                 },
                 this});
@@ -15713,6 +15794,288 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   QFile::remove(path);
                   refresh_module_pages();
+                },
+                this});
+  steps.append({"project_reopen_group_contract",
+                [this]() {
+                  // 2026-09-17-019：含持久化 mesh_snapshot 的项目纯重开
+                  // （不重新生成网格、不点构建装配、不选中任何树节点）后，
+                  // 工作流校验不得误报 Materials block / Contact 面组 /
+                  // Section 材料引用 / Assembly 部件引用，且 PropertyEditor
+                  // 组缓存必须与 mesh_snapshot_ 一致。
+                  auto* parts = find_root_item("Parts");
+                  auto* materials = find_root_item("Materials");
+                  auto* sections = find_root_item("Sections");
+                  auto* assembly = find_root_item("Assembly");
+                  auto* interactions = find_root_item("Interactions");
+                  if (!parts || !materials || !sections || !assembly ||
+                      !interactions || !property_editor_ || !model_tree_) {
+                    throw std::runtime_error(
+                        "Project reopen contract fixture is missing");
+                  }
+                  const PhysicalGroupManifest saved_snapshot = mesh_snapshot_;
+                  PhysicalGroupManifest snapshot;
+                  snapshot.mesh_dim = 3;
+                  snapshot.mesh_path =
+                      QDir::tempPath() + "/gmp_tour_reopen_mesh.msh";
+                  snapshot.mesh_sha256 = QString(64, 'a');
+                  auto add_group = [&snapshot](const QString& name, int dim,
+                                               int tag) {
+                    PhysicalGroupEntry entry;
+                    entry.name = name;
+                    entry.dim = dim;
+                    entry.tags = {tag};
+                    entry.entity_count = 1;
+                    entry.element_count = 1;
+                    snapshot.groups.append(entry);
+                  };
+                  add_group("fixed", 2, 1);
+                  add_group("load", 2, 2);
+                  add_group("contact_a", 2, 3);
+                  add_group("contact_b", 2, 4);
+                  add_group("solid", 3, 1);
+                  mesh_snapshot_ = snapshot;
+                  auto* part = add_child_item(parts, "reopen_part", "Parts",
+                                              {{"type", "Part"}});
+                  auto* material = add_child_item(
+                      materials, "reopen_material", "Materials",
+                      {{"type", "ComputeIsotropicElasticityTensor"},
+                       {"youngs_modulus", "3e10"},
+                       {"poissons_ratio", "0.2"},
+                       {"block", "solid"}});
+                  auto* section = add_child_item(
+                      sections, "reopen_section", "Sections",
+                      {{"type", "SolidSection"},
+                       {"material", "reopen_material"},
+                       {"block", "solid"}});
+                  auto* instance =
+                      add_child_item(assembly, "reopen_instance", "Assembly",
+                                     {{"part", "reopen_part"}, {"order", "1"}});
+                  auto* contact = add_child_item(
+                      interactions, "reopen_contact", "Interactions",
+                      {{"type", "Contact"},
+                       {"model", "coulomb"},
+                       {"formulation", "kinematic"},
+                       {"primary", "contact_a"},
+                       {"secondary", "contact_b"},
+                       {"friction_coefficient", "0.1"}});
+                  if (!part || !material || !section || !instance || !contact) {
+                    throw std::runtime_error(
+                        "Project reopen fixture nodes could not be created");
+                  }
+                  const QString path =
+                      QDir::tempPath() + "/gmp_tour_reopen_groups.gmp.yaml";
+                  if (!save_project(path) || !load_project(path)) {
+                    throw std::runtime_error(
+                        "Project reopen round-trip failed");
+                  }
+                  // 模拟真实重开后的空选择态：跨节点引用校验不得依赖
+                  // current_item_。
+                  model_tree_->clearSelection();
+                  model_tree_->setCurrentItem(nullptr);
+                  property_editor_->set_item(nullptr);
+                  QString failure;
+                  const QStringList volume = property_editor_->volume_groups();
+                  const QStringList boundary =
+                      property_editor_->boundary_groups();
+                  if (!volume.contains("solid") ||
+                      !boundary.contains("fixed") ||
+                      !boundary.contains("contact_a") ||
+                      !boundary.contains("contact_b")) {
+                    failure =
+                        "Property editor group caches diverged from the "
+                        "persisted mesh snapshot after project reopen";
+                  }
+                  for (const auto& value : collect_workflow_issues()) {
+                    const QString message =
+                        value.toMap().value("message").toString();
+                    if (message.contains(
+                            "must reference an existing volume Physical Group") ||
+                        message.contains(
+                            "must reference an existing 2D Physical Group") ||
+                        message.contains("material reference") ||
+                        message.contains("part reference")) {
+                      failure = "Workflow validation false positive after "
+                                "project reopen: " +
+                                message;
+                      break;
+                    }
+                  }
+                  // 清理：恢复巡览演示会话状态并删除临时工程文件。
+                  auto remove_child = [this](const QString& root_name,
+                                             const QString& name) {
+                    if (auto* root = find_root_item(root_name)) {
+                      for (int i = 0; i < root->childCount(); ++i) {
+                        if (root->child(i)->text(0) == name) {
+                          delete root->takeChild(i);
+                          break;
+                        }
+                      }
+                    }
+                  };
+                  remove_child("Parts", "reopen_part");
+                  remove_child("Materials", "reopen_material");
+                  remove_child("Sections", "reopen_section");
+                  remove_child("Assembly", "reopen_instance");
+                  remove_child("Interactions", "reopen_contact");
+                  mesh_snapshot_ = saved_snapshot;
+                  int model_dim = mesh_snapshot_.mesh_dim;
+                  if (model_dim < 0) {
+                    for (const auto& group : mesh_snapshot_.groups) {
+                      model_dim = qMax(model_dim, group.dim);
+                    }
+                  }
+                  property_editor_->set_boundary_groups(
+                      model_dim >= 0
+                          ? mesh_snapshot_.group_names(qMax(0, model_dim - 1))
+                          : QStringList());
+                  property_editor_->set_volume_groups(
+                      model_dim >= 0
+                          ? mesh_snapshot_.group_names(model_dim)
+                          : QStringList());
+                  QFile::remove(path);
+                  refresh_module_pages();
+                  if (!failure.isEmpty()) {
+                    throw std::runtime_error(failure.toStdString());
+                  }
+                },
+                this});
+  steps.append({"project_save_as_mesh_migration_contract",
+                [this]() {
+                  // 2026-09-17-024：含项目工作目录网格的项目“另存为”新
+                  // 文件名后，副本的 Mesh 节点路径、mesh_snapshot_、gmsh
+                  // 输出路径、moose mesh_path 与同步后 .i 的 [Mesh/file]
+                  // 都必须指向副本自己的 .work/case/<副本名>/，网格文件
+                  // 被复制且原项目网格文件内容不变。
+                  auto* mesh_root = find_root_item("Mesh");
+                  if (!mesh_root || !moose_panel_ || !gmsh_panel_) {
+                    throw std::runtime_error(
+                        "Save-as mesh migration fixture is missing");
+                  }
+                  const QString base_dir =
+                      QDir::tempPath() + "/gmp_tour_saveas_case";
+                  QDir(base_dir).removeRecursively();
+                  const QString project_a = base_dir + "/saveas_a.gmp.yaml";
+                  const QString project_b = base_dir + "/saveas_b.gmp.yaml";
+                  const QString case_a = project_case_work_dir(project_a);
+                  const QString case_b = project_case_work_dir(project_b);
+                  const QString mesh_a = case_a + "/mesh_assembly_g1.msh";
+                  const QString mesh_b = case_b + "/mesh_assembly_g1.msh";
+                  if (case_a.isEmpty() || case_b.isEmpty() ||
+                      case_a == case_b) {
+                    throw std::runtime_error(
+                        "Save-as case work dir fixture is invalid");
+                  }
+                  if (!QDir().mkpath(case_a)) {
+                    throw std::runtime_error(
+                        "Save-as source case dir could not be created");
+                  }
+                  const QByteArray mesh_content =
+                      "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n";
+                  {
+                    QFile file(mesh_a);
+                    if (!file.open(QIODevice::WriteOnly | QIODevice::Text) ||
+                        file.write(mesh_content) != mesh_content.size()) {
+                      throw std::runtime_error(
+                          "Save-as source mesh file could not be written");
+                    }
+                  }
+                  const PhysicalGroupManifest saved_snapshot = mesh_snapshot_;
+                  const QVariantMap saved_moose_settings =
+                      moose_panel_->moose_settings();
+                  const QString saved_project_path = project_path_;
+                  const QString saved_gmsh_output =
+                      gmsh_panel_->gmsh_settings()
+                          .value("output_path")
+                          .toString();
+                  PhysicalGroupManifest snapshot;
+                  snapshot.mesh_dim = 3;
+                  snapshot.mesh_path = mesh_a;
+                  snapshot.mesh_sha256 = QString(64, 'a');
+                  mesh_snapshot_ = snapshot;
+                  auto* mesh_item = add_child_item(
+                      mesh_root, "saveas_mesh", "Mesh",
+                      {{"path", mesh_a}, {"source", "gmsh"}});
+                  if (!mesh_item) {
+                    throw std::runtime_error(
+                        "Save-as Mesh fixture node could not be created");
+                  }
+                  QVariantMap moose_settings = saved_moose_settings;
+                  moose_settings.insert("mesh_path", mesh_a);
+                  moose_panel_->apply_moose_settings(moose_settings);
+                  gmsh_panel_->set_mesh_output_path(mesh_a);
+                  QString failure;
+                  project_path_ = project_a;
+                  if (!save_project(project_a)) {
+                    failure = "Save-as fixture project A could not be saved";
+                  }
+                  // 另存为：与 action_save_as_ 相同的顺序。
+                  project_path_ = project_b;
+                  if (failure.isEmpty() && !save_project(project_b)) {
+                    failure = "Save-as to project B failed";
+                  }
+                  QString mesh_b_text;
+                  QString mesh_a_after;
+                  {
+                    QFile file_b(mesh_b);
+                    QFile file_a(mesh_a);
+                    if (file_b.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                      mesh_b_text = QString::fromUtf8(file_b.readAll());
+                    }
+                    if (file_a.open(QIODevice::ReadOnly | QIODevice::Text)) {
+                      mesh_a_after = QString::fromUtf8(file_a.readAll());
+                    }
+                  }
+                  const QVariantMap migrated_params =
+                      mesh_item->data(0, PropertyEditor::kParamsRole).toMap();
+                  const QString migrated_mesh_path =
+                      migrated_params.value("path").toString();
+                  const QString moose_mesh_path =
+                      moose_panel_->moose_settings()
+                          .value("mesh_path")
+                          .toString();
+                  const QString input_text = moose_panel_->input_text();
+                  const QString gmsh_output_after =
+                      gmsh_panel_->gmsh_settings()
+                          .value("output_path")
+                          .toString();
+                  if (failure.isEmpty()) {
+                    if (migrated_mesh_path != mesh_b) {
+                      failure = "Save-as Mesh node path was not redirected: " +
+                                migrated_mesh_path;
+                    } else if (mesh_snapshot_.mesh_path != mesh_b) {
+                      failure =
+                          "Save-as mesh_snapshot path was not redirected";
+                    } else if (moose_mesh_path != mesh_b) {
+                      failure = "Save-as moose mesh_path was not redirected: " +
+                                moose_mesh_path;
+                    } else if (gmsh_output_after != mesh_b) {
+                      failure =
+                          "Save-as gmsh output path was not redirected: " +
+                          gmsh_output_after;
+                    } else if (mesh_b_text != QString::fromUtf8(mesh_content)) {
+                      failure = "Save-as did not copy the mesh file";
+                    } else if (mesh_a_after != QString::fromUtf8(mesh_content)) {
+                      failure = "Save-as modified the source project mesh";
+                    } else if (!input_text.contains(mesh_b) ||
+                                 input_text.contains(mesh_a)) {
+                      failure =
+                          "Save-as [Mesh/file] still references the source "
+                          "project mesh";
+                    }
+                  }
+                  // 清理：恢复巡览会话状态并删除临时工程目录。
+                  delete mesh_root->takeChild(
+                      mesh_root->indexOfChild(mesh_item));
+                  mesh_snapshot_ = saved_snapshot;
+                  moose_panel_->apply_moose_settings(saved_moose_settings);
+                  gmsh_panel_->set_mesh_output_path(saved_gmsh_output);
+                  project_path_ = saved_project_path;
+                  QDir(base_dir).removeRecursively();
+                  refresh_module_pages();
+                  if (!failure.isEmpty()) {
+                    throw std::runtime_error(failure.toStdString());
+                  }
                 },
                 this});
   steps.append({"operation_log_smoke",
@@ -17153,6 +17516,11 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       property_editor_->boundary_groups();
                   const QStringList saved_volumes =
                       property_editor_->volume_groups();
+                  // 同 g1_isotropic_material_form_contract：全量巡览中前序
+                  // 网格步骤留下的 mesh_snapshot_ 会让工作流校验把下方注入
+                  // 的 G1 组候选覆盖回陈旧快照组，先按新建项目逻辑复位。
+                  const PhysicalGroupManifest saved_snapshot = mesh_snapshot_;
+                  mesh_snapshot_ = PhysicalGroupManifest();
                   property_editor_->set_boundary_groups(
                       {"load_top", "contact_plate", "contact_concrete"});
                   property_editor_->set_volume_groups(
@@ -17572,6 +17940,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       interactions_root->indexOfChild(contact));
                   property_editor_->set_boundary_groups(saved_boundaries);
                   property_editor_->set_volume_groups(saved_volumes);
+                  mesh_snapshot_ = saved_snapshot;
                   sync_model_to_input();
                   refresh_module_pages();
                 },

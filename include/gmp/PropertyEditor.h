@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QMap>
+#include <QPointer>
 #include <QWidget>
 
 class QLabel;
@@ -8,6 +9,7 @@ class QLineEdit;
 class QPushButton;
 class QTabWidget;
 class QTableWidget;
+class QTreeWidget;
 class QTreeWidgetItem;
 class QListWidget;
 class QGroupBox;
@@ -26,6 +28,9 @@ class PropertyEditor : public QWidget {
   explicit PropertyEditor(QWidget* parent = nullptr);
 
   void set_item(QTreeWidgetItem* item);
+  // 跨节点引用校验（Sections.material、Assembly.part 等）需要稳定的模型树
+  // 句柄；仅依赖 current_item_ 时，项目重开后未选中任何节点会误判引用悬空。
+  void set_model_tree(QTreeWidget* tree);
   void set_boundary_groups(const QStringList& names);
   void set_volume_groups(const QStringList& names);
   // W-03a：显示→求解单位换算因子（decision 7），键为量纲（pressure 等），
@@ -86,6 +91,7 @@ class PropertyEditor : public QWidget {
   double display_unit_factor(const QString& quantity, double fallback) const;
 
   QTreeWidgetItem* current_item_ = nullptr;
+  QPointer<QTreeWidget> model_tree_;
   QLabel* header_label_ = nullptr;
   QLabel* kind_label_ = nullptr;
   QLabel* status_label_ = nullptr;

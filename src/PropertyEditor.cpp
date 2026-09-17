@@ -294,6 +294,10 @@ void PropertyEditor::set_item(QTreeWidgetItem* item) {
   load_from_item();
 }
 
+void PropertyEditor::set_model_tree(QTreeWidget* tree) {
+  model_tree_ = tree;
+}
+
 void PropertyEditor::set_boundary_groups(const QStringList& names) {
   boundary_groups_ = names;
   const QString kind =
@@ -1232,10 +1236,11 @@ QStringList PropertyEditor::validate_params(const QString& kind,
 
 QStringList PropertyEditor::collect_model_names(const QString& root_name) const {
   QStringList names;
-  if (!current_item_) {
-    return names;
+  const QTreeWidget* tree =
+      current_item_ ? current_item_->treeWidget() : nullptr;
+  if (!tree) {
+    tree = model_tree_.data();
   }
-  auto* tree = current_item_->treeWidget();
   if (!tree) {
     return names;
   }

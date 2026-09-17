@@ -166,9 +166,14 @@ class MainWindow : public QMainWindow {
                                             bool physical_group);
   void invalidate_downstream_from(const QString& source_kind);
   void start_submit_workflow();
-  // G0 / W-05：收集并展示无副作用的工作流预检结果。错误阻止快照与提交，
-  // 警告仅提示；定位时选中模型树对象并打开对应属性表单。
+  // G0 / W-05：收集并展示工作流预检结果，不修改模型树与输入文本。错误阻止
+  // 快照与提交，警告仅提示；定位时选中模型树对象并打开对应属性表单。
+  // 校验前仅按 mesh_snapshot_ 对齐 PropertyEditor 的派生组缓存。
   QVariantList collect_workflow_issues() const;
+  // 工作流校验以项目持久化的 mesh_snapshot_ 为组清单真源：校验前把
+  // PropertyEditor 的边界/体组缓存对齐到清单，避免 Gmsh 模型重建空窗期
+  // 的空发射让 Materials/Contact 校验误报。无清单时保留实时发射的候选。
+  void sync_property_editor_groups_from_snapshot() const;
   bool validate_workflow_for_submit(bool show_report = true);
   void show_workflow_validation_report(const QVariantList& issues);
   void focus_workflow_issue(const QVariantMap& issue,

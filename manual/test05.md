@@ -21,13 +21,14 @@ Phase 5 必须按以下顺序执行，不应在前一闸门未通过时提前关
 
 | 用例 | 当前可执行性 | 说明 |
 |---|---|---|
-| TEST-P5-G1-01 | 可执行 | 两个独立 Part 已作为 G1-02 前置实际使用；单项结论按执行记录回填 |
+| TEST-P5-G1-01 | 已人工通过 | 2026-09-17：两个 Part 独立可重建、BREP 路径不同且可读、当前 Feature/草图与实例引用链核对一致 |
 | TEST-P5-G1-02 | 已人工通过 | 2026-09-15：两个 Part 独立实例化、平移/旋转及恢复、装配预览均通过 |
 | TEST-P5-G1-03 | 已人工通过 | 2026-09-15：可见性、顺序持久化、非法缩放与悬空 Part 引用校验均通过 |
 | TEST-P5-G1-04 | 已人工通过 | 2026-09-15：保存重开、实例属性恢复及上游修改后的过期传播均通过 |
 | TEST-P5-G1-05 | 已人工通过 | 2026-09-15：装配网格、四个实例 Physical Groups、摘要和 SHA-256 均通过 |
-| TEST-P5-G1-06～07 | 待人工验收回填 | Pressure/Contact 真实映射已生成，负向验证与接触量仍需按用例留证 |
-| TEST-P5-G1-08 | 部分完成／环境待测 | 生成报告和内部工作流校验已有证据；目标应用 `--check-input` 未执行 |
+| TEST-P5-G1-06 | 已人工通过 | 2026-09-17：Contact 支持矩阵、真实映射与缺陷 `2026-09-16-013` 三条路径复验均通过 |
+| TEST-P5-G1-07 | 已人工通过 | 2026-09-17：固定/位移加载与 Pressure 真实映射、副本隔离、负向维度验证与主项目恢复均通过 |
+| TEST-P5-G1-08 | 部分完成／环境待测 | 网格重生成回基线、校验 0 errors、两次同步 A/B 逐字一致已留证（2026-09-17）；目标应用 `--check-input` 未执行 |
 | TEST-P5-G1-09 | 未测试／延期 | 当前无法连接远端计算环境，成功终态和结果制品待后续远端任务验证 |
 | TEST-P5-G2-01～05 | 实现完成后执行 | 依赖 Reference Point/Coupling 能力 |
 | TEST-P5-G3-01～05 | 实现完成后执行 | 依赖认可基准、比较指标和容差冻结 |
@@ -425,8 +426,16 @@ Contact 模型候选为 `frictionless / coulomb / glued`；算法候选为
 > **人工回归记录（2026-09-16）**：主/从面下拉仅列二维 Physical Group、主从面相同的
 > 冲突校验均已通过；通过高级参数把 `primary` 改为三维组 `instance_plate` 时曾可绕过
 > 参数页、校验页和“确定”阻断，登记为 `2026-09-16-013`。现已在公共参数校验入口补齐
-> 二维 Physical Group 成员校验，并纳入 `contact_load_mapping_contract`，等待本节第 7 步
-> 人工复验后关闭。
+> 二维 Physical Group 成员校验，并纳入 `contact_load_mapping_contract`。
+>
+> **人工复验记录（2026-09-17）**：缺陷 `2026-09-16-013` 三条路径复验全部通过——
+> 高级参数把 `primary` 改为 `instance_plate` 后，参数页即时报错
+> `primary must reference an existing 2D Physical Group`；点击“确定”弹窗保持打开并显示
+> “请修正”，非法值未写回；“取消”后重开主面仍为 `contact_plate`；校验页汇总表列出同一
+> 错误且可定位。正向配置（主面 `contact_plate`、从面 `contact_concrete`、
+> coulomb/kinematic/0.15）重开核对一致。缺陷 `2026-09-16-013` 关闭。
+> 复验期间同时修复 `2026-09-17-019`（重开后校验物理组清单误报，人工回归通过）与
+> `2026-09-17-021`（项目打开后标题栏未刷新，待人工回归）。
 
 1. 新建相互作用并重命名为 `contact_plate_concrete`。
 2. 类型选择活动档案中已冻结的面—面 Contact 类型。
@@ -685,6 +694,17 @@ Contact 模型候选为 `frictionless / coulomb / glued`；算法候选为
 通过标准：固定端、位移加载和 Load 都引用命名组；Load 不被统一硬编码为无关的
 `BodyForce`；冲突或维度错误能定位到具体对象/字段。
 
+> **人工验证记录（2026-09-17）**：主项目中三个 `DirichletBC`（`disp_x/y/z` +
+> `fixed_bottom` + 0）、`loading_curve`（PiecewiseLinear `0 1` / `0 -2.5e-5`）与
+> `load_disp_z`（FunctionDirichletBC + `disp_z` + `load_top`，子块无 `value=`）逐项核对
+> 通过；Pressure 测试副本中 `pressure_mapping_check`（Pressure + `disp_z` + factor
+> `-250000` + `pressure_curve` + 分量 2 + `load_top`）生成于 `[BCs]` 且生成报告含
+> `Physical Group=load_top` 来源；高级参数改 `instance_plate` 的负向验证三路径
+> （参数页/校验页/确定阻断）通过，“取消”后恢复 `load_top`；回主项目后四个 BC 完好、
+> `Loads` 无 Pressure 残留、校验工作流无冲突、同步 `.i` 恢复为位移加载。期间发现并修复
+> `2026-09-17-024`（另存为副本网格路径未迁移，已人工回归通过）；缺陷
+> `2026-09-16-014/015/016` 同步人工回归通过。
+
 ## 六、G1：M-01 线弹性接触案例与结果闭环
 
 ### 6.1 材料、Section、Physics、Step 和 Outputs
@@ -885,14 +905,14 @@ Step，位移/应力/应变与加载面位移均值/反力以及 Exodus/CSV 有�
 
 | 检查项 | 结果 |
 |---|---|
-| TEST-P5-G1-01 两个 Part 独立可重建 | 待验证 |
+| TEST-P5-G1-01 两个 Part 独立可重建 | 已人工通过（2026-09-17） |
 | TEST-P5-G1-02 实例平移/旋转真实生效 | 已人工通过（2026-09-15） |
 | TEST-P5-G1-03 可见性/顺序/非法参数 | 已人工通过（2026-09-15） |
 | TEST-P5-G1-04 保存重开与过期传播 | 已人工通过（2026-09-15） |
 | TEST-P5-G1-05 装配网格与 Physical Groups | 已人工通过（2026-09-15） |
-| TEST-P5-G1-06 Contact 支持矩阵与真实映射 | 待人工验证 |
-| TEST-P5-G1-07 BC/Load 选择集和映射 | 待人工验证 |
-| TEST-P5-G1-08 确定性输入与 `--check-input` | 部分完成／环境待测（2026-09-17） |
+| TEST-P5-G1-06 Contact 支持矩阵与真实映射 | 已人工通过（2026-09-17） |
+| TEST-P5-G1-07 BC/Load 选择集和映射 | 已人工通过（2026-09-17） |
+| TEST-P5-G1-08 确定性输入与 `--check-input` | 部分完成／环境待测（2026-09-17，A/B 一致性已通过，`--check-input` 待远端） |
 | TEST-P5-G1-09 succeeded/Results/回放闭环 | 未测试／延期（2026-09-17） |
 
 G1 的所有行都通过、相关缺陷关闭、全量真实点击巡览与 CTest 通过后，才能进入 G2 准出。
@@ -902,10 +922,11 @@ G1 的所有行都通过、相关缺陷关闭、全量真实点击巡览与 CTes
 - **项目与静态证据**：`phase5-g1-assembly-contact.gmp.yaml` 的生成报告可追溯
   Mesh、四个 Material、两个 Section 的材料/三维体组指派、Physics、BC、Contact、
   Step 与 Outputs；“Workflow ready: no blocking issue found”仅证明应用内部工作流校验通过。
-- **TEST-P5-G1-08：部分完成／环境待测**。操作日志显示多次生成 `.i`，但未提交 A/B
-  文本比较证据；点击“检查输入”时记录 `moose | Executable is empty.`，目标应用
-  `--check-input` 未启动，因此不能将本用例标为通过。用户仅在远端执行；当前计算节点
-  不在可用局域网内，此项按环境待测记录，不据此登记产品缺陷。
+- **TEST-P5-G1-08：部分完成／环境待测**。2026-09-17 晚补齐：重新生成 3D 网格回基线
+  （175086 节点、顶维 Hexahedron 8=152950、minSICN min=0.999962、8 个物理组单元数一致，
+  Mesh 节点恢复“已生成”）；校验工作流 `0 errors`；不修改任何对象连续两次同步，A/B
+  文本逐字一致。目标应用 `--check-input` 仍未执行（本地 `Executable is empty.`，用户仅在
+  远端执行，当前计算节点不在可用局域网内），此项继续按环境待测记录，不据此登记产品缺陷。
 - **TEST-P5-G1-09：未测试／延期**。尚无本轮 M-01 快照对应的远端 `succeeded`、
   求解日志、Exodus/CSV 制品、Results 回放和接触量数值证据；不得提前标为通过。
 - **本地自动回归**：2026-09-17 提交前构建、CTest `1/1` 和 111 步全量真实点击巡览
@@ -1137,14 +1158,14 @@ GMP_SCREENSHOT_DIR="$tour_dir" \
 
 | 用例 | 日期 | Git 提交 | 项目/快照/Job | 结果 | 缺陷或证据 |
 |---|---|---|---|---|---|
-| TEST-P5-G1-01 |  |  |  | 待验证 |  |
+| TEST-P5-G1-01 | 2026-09-17 | 8fecf1c | `phase5-g1-assembly-contact.gmp.yaml` | 人工通过 | 两 Part 独立 BREP 可读且不同；`part_concrete→feature_1`、`part_plate→feature_3`；实例引用正确 |
 | TEST-P5-G1-02 | 2026-09-15 |  | `phase5-g1-assembly-contact.gmp.yaml` | 人工通过 | 独立实例、定位、旋转与恢复通过 |
 | TEST-P5-G1-03 | 2026-09-15 |  | `phase5-g1-assembly-contact.gmp.yaml` | 人工通过 | 可见性、顺序与非法参数校验通过 |
 | TEST-P5-G1-04 | 2026-09-15 |  | `phase5-g1-assembly-contact.gmp.yaml` | 人工通过 | 保存重开与过期传播通过 |
 | TEST-P5-G1-05 | 2026-09-15 |  | `phase5-g1-assembly-contact.gmp.yaml` | 人工通过 | 项目自有装配网格、四组、网格摘要与 SHA-256 通过 |
-| TEST-P5-G1-06 |  |  |  | 待人工验证 |  |
-| TEST-P5-G1-07 |  |  |  | 待人工验证 |  |
-| TEST-P5-G1-08 | 2026-09-17 |  | `phase5-g1-assembly-contact.gmp.yaml` | 部分完成／环境待测 | 生成报告、内部工作流校验通过；A/B 比较未留证；`Executable is empty.`，目标应用 `--check-input` 未启动 |
+| TEST-P5-G1-06 | 2026-09-17 | 8fecf1c（含工作区缺陷修复 019/021） | `phase5-g1-assembly-contact.gmp.yaml` | 人工通过 | Contact 参数/校验/确定三路径阻断复验通过，缺陷 `2026-09-16-013` 关闭 |
+| TEST-P5-G1-07 | 2026-09-17 | 8fecf1c（含工作区缺陷修复 019/021/024） | `phase5-g1-assembly-contact.gmp.yaml` + `phase5-g1-pressure-mapping-check.gmp.yaml` | 人工通过 | 三个固定 BC、`load_disp_z`、Pressure 副本映射与负向阻断、主项目无残留恢复均通过；缺陷 `2026-09-16-014/015/016` 同步人工回归通过 |
+| TEST-P5-G1-08 | 2026-09-17 | 8fecf1c（含工作区缺陷修复 019/021/024） | `phase5-g1-assembly-contact.gmp.yaml` | 部分完成／环境待测 | 网格重生成回基线（175086 节点、Hex8=152950）、校验 0 errors、两次同步 A/B 逐字一致；`--check-input` 待远端环境 |
 | TEST-P5-G1-09 | 2026-09-17 |  | `phase5-g1-assembly-contact.gmp.yaml` | 未测试／延期 | 远端计算环境当前不可用；无 `succeeded`、日志、Exodus/CSV、Results 与接触量数值证据 |
 | TEST-P5-G2-01～05 |  |  |  | 待实现后验证 |  |
 | TEST-P5-G3-01～05 |  |  |  | 待实现后验证 |  |

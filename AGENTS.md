@@ -43,6 +43,7 @@ GMP_TOUR_REAL_CLICKS=1 GMP_TOUR_STEP_FILTER=<步骤名片段> \
 | 应用档案选择器 | `app_profile_selector_contract` |
 | 网格清单摘要（需先生成网格，含 fixture） | `mesh_manifest_summary`（单独跑缺 fixture 会失败，用全量） |
 | CDP 材料表单 | `cdp_material_form` |
+| G1 各向同性材料表单（夹具自建快照隔离） | `g1_isotropic_material_form_contract` |
 | Exodus 网格导入 | `exodus_import` |
 | Section 指派语义（W-01b） | `section_assignment_contract` |
 | 物理组新建选择集（W-01c） | `selection_from_group_contract` |
@@ -51,3 +52,5 @@ GMP_TOUR_REAL_CLICKS=1 GMP_TOUR_STEP_FILTER=<步骤名片段> \
 | Physics action 生成（W-03b） | `physics_action_contract` |
 | 场/历史输出套餐（W-03d） | `outputs_package_contract` |
 | 新建项目 MOOSE 上下文隔离 | `project_context_isolation_contract` |
+| 项目重开物理组清单/引用校验恢复（2026-09-17-019） | `project_reopen_group_contract` |
+| 另存为副本网格路径迁移（2026-09-17-024） | `project_save_as_mesh_migration_contract` |
