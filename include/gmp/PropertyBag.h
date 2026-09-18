@@ -45,6 +45,8 @@ class PropertyBag {
   // 值真正变化时返回 true 并触发 onChanged 回调；同值写入返回 false。
   bool set(const QString& key, const QVariant& value);
   bool contains(const QString& key) const;
+  // 移除键；存在并移除返回 true（触发 onChanged）。供事务 revert 使用。
+  bool remove(const QString& key);
   QStringList keys() const;
 
   void setOnChanged(std::function<void(const QString& key)> callback);

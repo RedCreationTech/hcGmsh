@@ -18,6 +18,7 @@
 #include "gmp/PropertyBag.h"
 #include "gmp/SimClient.h"
 #include "gmp/SketchDocument.h"
+#include "gmp/TransactionManager.h"
 
 namespace {
 
@@ -1153,6 +1154,77 @@ void test_dependency_graph_contract(TestContext& test) {
               "all remaining root kinds propagate to Mesh/Input Cases/Jobs");
 }
 
+// TASK-V02-013：TransactionManager 骨架合同。参考用法映射
+// FloatingPropertyForm 缓冲语义：打开表单=begin、编辑=execute、
+// 确定=commit、取消/校验失败=rollback。Q4 红线：不提供用户可见
+// Undo/Redo 入口（本层无此类 API）。
+void test_transaction_manager_contract(TestContext& test) {
+  using namespace gmp::core;
+
+  PropertyBag form_buffer = PropertyBag::from_variant_map(
+      QVariantMap{{"type", "ComputeIsotropicElasticityTensor"},
+                  {"youngs_modulus", 29791459780.0},
+                  {"poissons_ratio", 0.2}});
+
+  TransactionManager tm;
+  test.expect(!tm.commit() && !tm.rollback() &&
+                  !tm.execute(std::make_unique<SetPropertyValueCommand>(
+                      form_buffer, "poissons_ratio", 0.3)),
+              "commit/rollback/execute without a transaction are rejected");
+
+  // 取消路径：编辑后 rollback，缓冲还原且审计记录 rolled back。
+  test.expect(tm.begin("edit Materials/concrete_elasticity") &&
+                  !tm.begin("nested"),
+              "nested begin is rejected while a transaction is active");
+  test.expect(tm.execute(std::make_unique<SetPropertyValueCommand>(
+                  form_buffer, "poissons_ratio", 0.25)),
+              "command executes inside the transaction");
+  test.expect(form_buffer.get<double>("poissons_ratio") == 0.25,
+              "edits are visible on the buffer before commit");
+  test.expect(tm.auditLog().isEmpty(),
+              "open transaction is not yet in the audit log");
+  test.expect(tm.rollback() &&
+                  form_buffer.get<double>("poissons_ratio") == 0.2,
+              "rollback restores the buffer to its pre-edit state");
+  test.expect(tm.auditLog().size() == 1 && !tm.auditLog().first().committed &&
+                  tm.auditLog().first().label ==
+                      "edit Materials/concrete_elasticity" &&
+                  tm.auditLog().first().commands ==
+                      QStringList{"set poissons_ratio"} &&
+                  tm.auditLog().first().before.first() ==
+                      QVariantMap{{"poissons_ratio", 0.2}} &&
+                  tm.auditLog().first().after.first() ==
+                      QVariantMap{{"poissons_ratio", 0.25}},
+              "rolled-back transaction keeps a full audit record");
+
+  // 确定路径：多命令提交后生效，审计记录 committed。
+  test.expect(tm.begin("edit Materials/concrete_elasticity (retry)"),
+              "second transaction begins after rollback");
+  tm.execute(std::make_unique<SetPropertyValueCommand>(
+      form_buffer, "youngs_modulus", 3.0e10));
+  tm.execute(std::make_unique<SetPropertyValueCommand>(form_buffer, "note",
+                                                       "added"));
+  test.expect(tm.commit() &&
+                  form_buffer.get<double>("youngs_modulus") == 3.0e10 &&
+                  form_buffer.get<QString>("note") == "added",
+              "committed transaction keeps all edits");
+  const TransactionRecord& committed = tm.auditLog().last();
+  test.expect(committed.committed && committed.commands.size() == 2 &&
+                  committed.after.first().value("youngs_modulus") == 3.0e10,
+              "committed transaction records before/after per command");
+
+  // 校验失败即取消：新增键在 rollback 后必须完全消失。
+  test.expect(tm.begin("edit with invalid field"),
+              "third transaction begins after commit");
+  tm.execute(std::make_unique<SetPropertyValueCommand>(form_buffer, "temp_key",
+                                                       "temp"));
+  test.expect(form_buffer.contains("temp_key"), "new key visible pre-commit");
+  test.expect(tm.rollback() && !form_buffer.contains("temp_key"),
+              "rollback removes keys that did not exist before the edit");
+  test.expect(tm.auditLog().size() == 3,
+              "every finished transaction appends one audit record");
+}
+
 void test_submission_manifest(TestContext& test) {
 
   const QByteArray unicode_disposition =
@@ -1268,6 +1340,7 @@ int main(int argc, char* argv[]) {
   test_project_document_contract(test);
   test_property_bag_contract(test);
   test_dependency_graph_contract(test);
+  test_transaction_manager_contract(test);
   test_submission_manifest(test);
   if (test.failures == 0) {
     qInfo("Phase 0 contract tests PASSED");

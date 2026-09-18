@@ -36,6 +36,17 @@ bool PropertyBag::contains(const QString& key) const {
   return values_.contains(key);
 }
 
+bool PropertyBag::remove(const QString& key) {
+  if (!values_.contains(key)) {
+    return false;
+  }
+  values_.remove(key);
+  if (on_changed_) {
+    on_changed_(key);
+  }
+  return true;
+}
+
 QStringList PropertyBag::keys() const {
   return values_.keys();
 }
