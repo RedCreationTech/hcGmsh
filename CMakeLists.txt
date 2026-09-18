@@ -104,6 +104,8 @@ add_executable(gmp_ise
   include/gmp/Env.h
   resources/icons.qrc
   src/MainWindow.cpp
+  src/ModelTreeAdapter.cpp
+  include/gmp/ModelTreeAdapter.h
   src/OperationLog.cpp
   include/gmp/OperationLog.h
   src/StageLeftToolbar.cpp
@@ -125,6 +127,10 @@ add_executable(gmp_ise
   include/gmp/ApplicationProfile.h
   src/PhysicalGroupManifest.cpp
   include/gmp/PhysicalGroupManifest.h
+  src/ProjectDocument.cpp
+  include/gmp/ProjectDocument.h
+  src/PropertyBag.cpp
+  include/gmp/PropertyBag.h
   src/ProjectSchema.cpp
   include/gmp/ProjectSchema.h
   src/SimClient.cpp
