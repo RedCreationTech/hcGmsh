@@ -12,7 +12,9 @@
 #include "gmp/MooseMappingRegistry.h"
 #include "gmp/MooseSnapshot.h"
 #include "gmp/PhysicalGroupManifest.h"
+#include "gmp/ProjectDocument.h"
 #include "gmp/ProjectSchema.h"
+#include "gmp/PropertyBag.h"
 #include "gmp/SimClient.h"
 #include "gmp/SketchDocument.h"
 
@@ -696,6 +698,375 @@ void test_snapshot_v2_manifest_contract(TestContext& test) {
               "traversal/absolute/empty");
 }
 
+// TASK-V02-010：ProjectDocument / ProjectObject / ObjectId 骨架合同。
+// 本测试不得构造 QTreeWidget（或任何 QWidget）。
+void test_project_document_contract(TestContext& test) {
+  using namespace gmp::core;
+
+  // CRUD 与 ID 稳定性：显式 ID 原样保留，缺省 ID 由文档分配且唯一。
+  ProjectDocument doc;
+  const ObjectId part_id(QStringLiteral("obj-part-1"));
+  test.expect(doc.addObject(std::make_unique<ProjectObject>(
+                  QStringLiteral("Parts"), QStringLiteral("part_concrete"),
+                  part_id)) == part_id,
+              "explicit object id is preserved on add");
+  const ObjectId generated =
+      doc.addObject(std::make_unique<ProjectObject>(QStringLiteral("Materials"),
+                                                    QStringLiteral("mat")));
+  test.expect(generated.isValid() && generated != part_id &&
+                  doc.contains(generated),
+              "document assigns a unique stable id when absent");
+  test.expect(doc.addObject(std::make_unique<ProjectObject>(
+                  QStringLiteral("Parts"), QStringLiteral("dup"), part_id)) ==
+                  ObjectId(),
+              "duplicate object id is rejected");
+  test.expect(doc.count() == 2 && doc.object(part_id) &&
+                  doc.object(part_id)->name() == "part_concrete",
+              "objects are retrievable by id");
+
+  // 层级：挂载顺序保持、子树递归删除、无效父拒绝。
+  const ObjectId sketch_id =
+      doc.addObject(std::make_unique<ProjectObject>(QStringLiteral("Sketches"),
+                                                    QStringLiteral("sk")),
+                    part_id);
+  const ObjectId feature_id =
+      doc.addObject(std::make_unique<ProjectObject>(QStringLiteral("Features"),
+                                                    QStringLiteral("feat")),
+                    part_id);
+  test.expect(sketch_id.isValid() && feature_id.isValid() &&
+                  doc.children(part_id) == QList<ObjectId>{sketch_id, feature_id} &&
+                  doc.parentOf(feature_id) == part_id &&
+                  doc.roots().contains(part_id) &&
+                  !doc.roots().contains(sketch_id),
+              "hierarchy keeps mount order and parent linkage");
+  test.expect(doc.addObject(std::make_unique<ProjectObject>(
+                  QStringLiteral("Mesh"), QStringLiteral("orphan"),
+                  ObjectId(QStringLiteral("obj-orphan"))),
+                  ObjectId(QStringLiteral("obj-missing"))) == ObjectId(),
+              "mounting under an unknown parent is rejected");
+  test.expect(doc.removeObject(part_id) && !doc.contains(part_id) &&
+                  !doc.contains(sketch_id) && !doc.contains(feature_id) &&
+                  doc.count() == 1 && !doc.removeObject(part_id),
+              "removeObject deletes the whole subtree exactly once");
+
+  // 状态机：五个状态与现有 status 字符串逐字对齐，空串/大小写兼容。
+  test.expect(to_string(ObjectStatus::Ready) == "ready" &&
+                  to_string(ObjectStatus::Incomplete) == "incomplete" &&
+                  to_string(ObjectStatus::Invalid) == "invalid" &&
+                  to_string(ObjectStatus::Stale) == "stale" &&
+                  to_string(ObjectStatus::Disabled) == "disabled",
+              "object status strings match the schema vocabulary");
+  bool parse_ok = false;
+  test.expect(object_status_from_string("Stale", &parse_ok) ==
+                  ObjectStatus::Stale &&
+                  parse_ok,
+              "status parsing is case-insensitive");
+  test.expect(object_status_from_string("", &parse_ok) == ObjectStatus::Ready &&
+                  parse_ok,
+              "empty status parses as ready (legacy projects)");
+  test.expect(object_status_from_string("bogus", &parse_ok) ==
+                  ObjectStatus::Ready &&
+                  !parse_ok,
+              "unknown status is reported without crashing");
+  test.expect(doc.setStatus(generated, ObjectStatus::Stale) &&
+                  doc.object(generated)->status() == ObjectStatus::Stale &&
+                  !doc.setStatus(ObjectId(QStringLiteral("obj-missing")),
+                                 ObjectStatus::Ready),
+              "status transitions apply to existing objects only");
+
+  // 序列化 round-trip：ID/名称/类别/状态/层级/参数全部稳定。
+  ProjectDocument roundtrip_source;
+  const ObjectId root_id(QStringLiteral("11111111-1111-4111-8111-111111111111"));
+  const ObjectId child_id(QStringLiteral("22222222-2222-4222-8222-222222222222"));
+  auto root_object = std::make_unique<ProjectObject>(
+      QStringLiteral("Parts"), QStringLiteral("part_concrete"), root_id);
+  root_object->properties().set(QStringLiteral("type"),
+                                QStringLiteral("Part"));
+  root_object->properties().set(QStringLiteral("gmsh_volume_tag"), 1);
+  roundtrip_source.addObject(std::move(root_object));
+  auto child_object = std::make_unique<ProjectObject>(
+      QStringLiteral("Features"), QStringLiteral("feature_1"), child_id);
+  child_object->setStatus(ObjectStatus::Stale);
+  roundtrip_source.addObject(std::move(child_object), root_id);
+  ProjectDocument roundtrip_target;
+  QString load_error;
+  test.expect(roundtrip_target.from_variant_list(
+                  roundtrip_source.to_variant_list(), &load_error) &&
+                  load_error.isEmpty(),
+              "document variant-list round-trip loads");
+  const ProjectObject* reloaded = roundtrip_target.object(child_id);
+  test.expect(reloaded && reloaded->name() == "feature_1" &&
+                  reloaded->kind() == "Features" &&
+                  reloaded->status() == ObjectStatus::Stale &&
+                  roundtrip_target.parentOf(child_id) == root_id &&
+                  roundtrip_target.children(root_id) == QList<ObjectId>{child_id},
+              "object identity and hierarchy survive serialization");
+  const ProjectObject* reloaded_root = roundtrip_target.object(root_id);
+  test.expect(reloaded_root &&
+                  reloaded_root->properties().get<int>(
+                      QStringLiteral("gmsh_volume_tag")) == 1 &&
+                  reloaded_root->properties().get<QString>(
+                      QStringLiteral("type")) == "Part",
+              "object properties survive serialization with value types");
+  // 损坏输入：缺 id / 未知父 / 未知状态必须拒绝且不破坏既有内容。
+  test.expect(!roundtrip_target.from_variant_list(
+                  QVariantList{QVariantMap{{"name", "no-id"}}}),
+              "entries without a stable id are rejected");
+  test.expect(roundtrip_target.count() == 2,
+              "rejected load leaves the current document untouched");
+}
+
+// TASK-V02-011：PropertyBag ↔ QVariantMap 双向无损合同。
+// 样本取自 phase5-g1-assembly-contact.gmp.yaml 的 model 段（Phase 5 真实
+// 节点类型；CDP 样本取自内置模板 "CDP Concrete (Abaqus)" 参数集）。
+void test_property_bag_contract(TestContext& test) {
+  using namespace gmp::core;
+
+  const QList<QPair<QString, QVariantMap>> g1_samples = {
+      {QStringLiteral("Part"),
+       {{"type", "Part"},
+        {"sketch", "sketch_concrete"},
+        {"feature", "feature_1"},
+        {"brep", "/work/features/extrude_1.brep"},
+        {"mesh", "/work/features/extrude_1.msh"},
+        {"description", ""},
+        {"gmsh_volume_tag", 1},
+        {"gmsh_volume_tags", QVariantList{1}}}},
+      {QStringLiteral("Feature"),
+       {{"type", "Extrude"},
+        {"sketch", "sketch_concrete"},
+        {"part", "part_concrete"},
+        {"distance", 20.0},
+        {"brep", "/work/features/extrude_1.brep"},
+        {"mesh", "/work/features/extrude_1.msh"},
+        {"gmsh_volume_tag", 1},
+        {"gmsh_volume_tags", QVariantList{1}}}},
+      {QStringLiteral("Assembly instance"),
+       {{"type", "PartInstance"},
+        {"part", "part_plate"},
+        {"order", 1},
+        {"translate_x", 0.0},
+        {"translate_y", 0.0},
+        {"translate_z", 20.0},
+        {"rotate_x", 0.0},
+        {"rotate_y", 0.0},
+        {"rotate_z", 30.0},
+        {"scale_x", 1.0},
+        {"scale_y", 1.0},
+        {"scale_z", 1.0},
+        {"visible", true}}},
+      {QStringLiteral("Material (isotropic)"),
+       {{"type", "ComputeIsotropicElasticityTensor"},
+        {"block", "instance_concrete"},
+        {"youngs_modulus", 29791459780.0},
+        {"poissons_ratio", 0.2}}},
+      {QStringLiteral("Material (CDP)"),
+       {{"type", "AbaqusCDP"},
+        {"youngs_modulus", "29791500000"},
+        {"poissons_ratio", "0.2"},
+        {"dilation_angle", "36"},
+        {"eccentricity", "0.1"},
+        {"biaxial_to_uniaxial_compression_ratio", "1.16"},
+        {"tensile_meridian_ratio", "0.667"},
+        {"viscosity", "5e-4"},
+        {"tension_recovery", "0"},
+        {"compression_recovery", "1"},
+        {"maximum_substeps", "256"},
+        {"maximum_strain_increment", "2.5e-5"},
+        {"enable_performance_diagnostics", "true"},
+        {"unit_factor_stress", "1000000"}}},
+      {QStringLiteral("Section"),
+       {{"type", "SolidSection"},
+        {"material", "concrete_elasticity"},
+        {"block", "instance_concrete"}}},
+      {QStringLiteral("Physics"),
+       {{"action", "QuasiStatic"},
+        {"add_variables", true},
+        {"block", "instance_plate instance_concrete"},
+        {"generate_output", "stress_xx stress_yy vonmises_stress"},
+        {"incremental", true},
+        {"save_in_resid", true},
+        {"strain", "SMALL"},
+        {"volumetric_locking_correction", true}}},
+      {QStringLiteral("Step"),
+       {{"type", "Transient"},
+        {"start_time", 0.0},
+        {"end_time", 1.0},
+        {"solve_type", "NEWTON"},
+        {"line_search", "bt"},
+        {"automatic_scaling", true},
+        {"nl_rel_tol", 1e-09},
+        {"nl_abs_tol", 1e-08},
+        {"nl_max_its", 50},
+        {"num_steps", 100000},
+        {"dtmin", 1e-15},
+        {"dtmax", 1.0},
+        {"timestepper_type", "IterationAdaptiveDT"},
+        {"dt", 0.01},
+        {"optimal_iterations", 8},
+        {"iteration_window", 3},
+        {"growth_factor", 1.15},
+        {"cutback_factor", 0.5},
+        {"preconditioning_type", "SMP"},
+        {"preconditioning_full", true},
+        {"petsc_options_iname", "-pc_type -pc_factor_mat_solver_type"},
+        {"petsc_options_value", "lu mumps"},
+        {"variable", "disp_z"}}},
+      {QStringLiteral("BC (Dirichlet)"),
+       {{"type", "DirichletBC"},
+        {"boundary", "fixed_bottom"},
+        {"value", 0},
+        {"variable", "disp_x"}}},
+      {QStringLiteral("BC (FunctionDirichlet)"),
+       {{"type", "FunctionDirichletBC"},
+        {"boundary", "load_top"},
+        {"function", "loading_curve"},
+        {"value", 0},
+        {"variable", "disp_z"}}},
+      {QStringLiteral("Function (PiecewiseLinear)"),
+       {{"type", "PiecewiseLinear"},
+        {"expression", "1"},
+        {"x", "0 1"},
+        {"y", "0 -2.5e-5"}}},
+      {QStringLiteral("Interaction (Contact)"),
+       {{"type", "Contact"},
+        {"model", "coulomb"},
+        {"formulation", "kinematic"},
+        {"friction_coefficient", 0.15},
+        {"tangential_tolerance", 0.0005},
+        {"penalty", 1000000000000.0},
+        {"normalize_penalty", true},
+        {"primary", "contact_plate"},
+        {"secondary", "contact_concrete"}}},
+      {QStringLiteral("Outputs"),
+       {{"type", "Exodus"},
+        {"field_outputs", ""},
+        {"file_base", ""},
+        {"hist_boundary", "load_top"},
+        {"hist_disp_variable", "disp_z"},
+        {"hist_displacement_avg", true},
+        {"hist_extremum", false},
+        {"hist_extremum_types", "min max"},
+        {"hist_extremum_variables", ""},
+        {"hist_reaction_force", true},
+        {"output_csv", true},
+        {"output_exodus", true},
+        {"times_enabled", true},
+        {"times_start", 0.0},
+        {"times_end", 1.0},
+        {"times_interval", 0.01},
+        {"times_name", "field_output_times"}}},
+      {QStringLiteral("Mesh"),
+       {{"model_source", "assembly: active"},
+        {"path", "/work/.work/case/proj/mesh_assembly_g1.msh"},
+        {"source", "gmsh"},
+        {"status", "New"},
+        {"physical_group_names",
+         QVariantList{"instance_plate_surface", "fixed_bottom"}}}},
+  };
+  for (const auto& sample : g1_samples) {
+    const QVariantMap& params = sample.second;
+    const PropertyBag bag = PropertyBag::from_variant_map(params);
+    const QVariantMap roundtrip = bag.to_variant_map();
+    test.expect(roundtrip == params &&
+                    PropertyBag::from_variant_map(roundtrip).to_variant_map() ==
+                        params,
+                sample.first + ": params round-trip is lossless");
+    test.expect(bag.keys().size() == params.size(),
+                sample.first + ": no key is injected or dropped");
+  }
+
+  // 类型化读取。
+  const PropertyBag assembly = PropertyBag::from_variant_map(
+      g1_samples.at(2).second);
+  test.expect(assembly.get<QString>(QStringLiteral("part")) == "part_plate" &&
+                  assembly.get<double>(QStringLiteral("rotate_z")) == 30.0 &&
+                  assembly.get<bool>(QStringLiteral("visible")) &&
+                  assembly.get<int>(QStringLiteral("order")) == 1,
+              "typed getters return stored value types");
+
+  // 变更回调只在值真正变化时触发。
+  PropertyBag bag = PropertyBag::from_variant_map(g1_samples.at(3).second);
+  QStringList changed_keys;
+  bag.setOnChanged([&changed_keys](const QString& key) {
+    changed_keys << key;
+  });
+  test.expect(!bag.set(QStringLiteral("poissons_ratio"), 0.2) &&
+                  changed_keys.isEmpty(),
+              "rewriting an identical value does not fire changed");
+  test.expect(bag.set(QStringLiteral("poissons_ratio"), 0.25) &&
+                  changed_keys == QStringList{"poissons_ratio"} &&
+                  bag.get<double>(QStringLiteral("poissons_ratio")) == 0.25,
+              "value change fires changed exactly once");
+
+  // 定义驱动校验：required / enum / validator 钩子；未定义键不受影响。
+  QList<PropertyDefinition> definitions;
+  PropertyDefinition type_def;
+  type_def.key = QStringLiteral("type");
+  type_def.displayName = QStringLiteral("Type");
+  type_def.type = QStringLiteral("enum");
+  type_def.required = true;
+  type_def.enumValues = {QStringLiteral("ComputeIsotropicElasticityTensor"),
+                         QStringLiteral("AbaqusCDP")};
+  definitions << type_def;
+  PropertyDefinition young_def;
+  young_def.key = QStringLiteral("youngs_modulus");
+  young_def.displayName = QStringLiteral("Young's Modulus");
+  young_def.type = QStringLiteral("number");
+  young_def.unit = QStringLiteral("pressure");
+  young_def.required = true;
+  young_def.validator = [](const QVariant& value, QString* error) {
+    bool ok = false;
+    const double v = value.toDouble(&ok);
+    if (!ok || v <= 0.0) {
+      if (error) {
+        *error = QStringLiteral("youngs_modulus must be > 0");
+      }
+      return false;
+    }
+    return true;
+  };
+  definitions << young_def;
+  PropertyDefinition block_def;
+  block_def.key = QStringLiteral("block");
+  block_def.type = QStringLiteral("reference");
+  block_def.referenceKind = QStringLiteral("Mesh");
+  definitions << block_def;
+  bag.setDefinitions(definitions);
+  test.expect(bag.validate().isEmpty(),
+              "defined properties validate clean against the sample");
+  PropertyBag broken = PropertyBag::from_variant_map(
+      QVariantMap{{"type", "NotAType"}, {"youngs_modulus", "-1"}});
+  broken.setDefinitions(definitions);
+  const QStringList violations = broken.validate();
+  test.expect(violations.contains("type") &&
+                  violations.contains("youngs_modulus"),
+              "enum violation and validator failure are both reported");
+  PropertyBag missing = PropertyBag::from_variant_map(
+      QVariantMap{{"block", "instance_concrete"}});
+  missing.setDefinitions(definitions);
+  test.expect(missing.validate().contains("type") &&
+                  missing.validate().contains("youngs_modulus"),
+              "required keys missing from params are reported");
+
+  // 默认值只经显式 apply_defaults 注入；round-trip 不隐式改写加载值。
+  PropertyDefinition dt_def;
+  dt_def.key = QStringLiteral("dt");
+  dt_def.type = QStringLiteral("number");
+  dt_def.defaultValue = 0.01;
+  PropertyBag with_defaults = PropertyBag::from_variant_map(
+      QVariantMap{{"type", "Transient"}});
+  with_defaults.setDefinitions({dt_def});
+  test.expect(with_defaults.to_variant_map() == QVariantMap{{"type", "Transient"}},
+              "round-trip never injects definition defaults implicitly");
+  with_defaults.apply_defaults();
+  test.expect(with_defaults.get<double>(QStringLiteral("dt")) == 0.01,
+              "apply_defaults fills only missing defined keys");
+  with_defaults.apply_defaults();
+  test.expect(with_defaults.get<double>(QStringLiteral("dt")) == 0.01,
+              "apply_defaults never overwrites an existing value");
+}
+
 void test_submission_manifest(TestContext& test) {
   const QByteArray unicode_disposition =
       gmp::SimClient::multipart_file_content_disposition(
@@ -807,6 +1178,8 @@ int main(int argc, char* argv[]) {
   test_physical_group_manifest_contract(test);
   test_snapshot_v2(test);
   test_snapshot_v2_manifest_contract(test);
+  test_project_document_contract(test);
+  test_property_bag_contract(test);
   test_submission_manifest(test);
   if (test.failures == 0) {
     qInfo("Phase 0 contract tests PASSED");
