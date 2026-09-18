@@ -64,6 +64,7 @@ model:
   Variables: []
   Outputs: []
   Mesh: []
+  Input Cases: []
   Jobs: []
   Results: []
 

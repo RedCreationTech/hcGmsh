@@ -89,14 +89,23 @@ gmp::PhysicalGroupManifest valid_physical_groups(const QString& mesh_hash) {
 
 void test_project_schema(TestContext& test) {
   using namespace gmp::project_schema;
-  const QStringList roots = model_root_nodes();
-  for (const QString& required : {QStringLiteral("Assembly"),
-                                  QStringLiteral("Physics"),
-                                  QStringLiteral("Constraints"),
-                                  QStringLiteral("Selections"),
-                                  QStringLiteral("Input Cases")}) {
-    test.expect(roots.contains(required), "schema root exists: " + required);
-  }
+  // 根节点清单冻结合同（A-019）：代码清单与 doc/schema/project-v2.md 顶层
+  // model 示例必须完全一致，防止文档再次漂移。
+  const QStringList frozen_roots = {
+      QStringLiteral("Parts"),       QStringLiteral("Sketches"),
+      QStringLiteral("Features"),    QStringLiteral("Datums"),
+      QStringLiteral("Materials"),   QStringLiteral("Sections"),
+      QStringLiteral("Assembly"),    QStringLiteral("Physics"),
+      QStringLiteral("Steps"),       QStringLiteral("BC"),
+      QStringLiteral("Loads"),       QStringLiteral("Interactions"),
+      QStringLiteral("Constraints"), QStringLiteral("Selections"),
+      QStringLiteral("Functions"),   QStringLiteral("Variables"),
+      QStringLiteral("Outputs"),     QStringLiteral("Mesh"),
+      QStringLiteral("Input Cases"), QStringLiteral("Jobs"),
+      QStringLiteral("Results"),
+  };
+  test.expect(model_root_nodes() == frozen_roots,
+              "model root nodes match the frozen schema contract list");
 
   const YAML::Node yaml = YAML::Load(R"(
 name: SI
