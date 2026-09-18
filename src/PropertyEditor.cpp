@@ -549,6 +549,7 @@ void PropertyEditor::on_name_changed(const QString& value) {
     return;
   }
   current_item_->setText(0, value);
+  emit item_written(current_item_);
   refresh_preview();
 }
 
@@ -682,6 +683,7 @@ void PropertyEditor::save_params_to_item() {
     params.insert(key, value);
   }
   current_item_->setData(0, kParamsRole, params);
+  emit item_written(current_item_);
   refresh_preview();
 }
 

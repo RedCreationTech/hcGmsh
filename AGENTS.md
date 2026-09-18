@@ -11,7 +11,7 @@ cmake --build build -j4
 # 单元测试
 ctest --test-dir build --output-on-failure
 
-# 全量真实点击 GUI 巡览（当前基线 111 步）
+# 全量真实点击 GUI 巡览（当前基线 114 步）
 mkdir -p /tmp/gmp-ui-tour
 GMP_TOUR_REAL_CLICKS=1 GMP_SCREENSHOT_DIR=/tmp/gmp-ui-tour ./build/gmp_ise
 
@@ -25,7 +25,7 @@ GMP_TOUR_REAL_CLICKS=1 GMP_TOUR_STEP_FILTER=<步骤名片段> \
 1. **日常修改**：每次代码修改后，只运行与本次修改直接相关的 1~2 个测试用例：
    - 优先用 `GMP_TOUR_STEP_FILTER` 定向运行对应巡览步骤；
    - 涉及数据合同/schema 时运行 `ctest`。
-2. **全量巡检**（111 步真实点击巡览 + CTest）只在以下时机执行：
+2. **全量巡检**（114 步真实点击巡览 + CTest）只在以下时机执行：
    - `git commit` 之前；
    - 用户明确要求全量验证时。
 3. 全量巡览基线只增不减：新增用例在既有基线上递增，不得删减既有断言换取通过。
@@ -54,3 +54,4 @@ GMP_TOUR_REAL_CLICKS=1 GMP_TOUR_STEP_FILTER=<步骤名片段> \
 | 新建项目 MOOSE 上下文隔离 | `project_context_isolation_contract` |
 | 项目重开物理组清单/引用校验恢复（2026-09-17-019） | `project_reopen_group_contract` |
 | 另存为副本网格路径迁移（2026-09-17-024） | `project_save_as_mesh_migration_contract` |
+| 树↔文档投影一致性（TASK-V02-014，含真实 G1 等价判据） | `model_tree_projection_contract` |

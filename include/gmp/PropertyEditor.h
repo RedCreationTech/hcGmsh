@@ -56,6 +56,11 @@ class PropertyEditor : public QWidget {
   static constexpr int kParamsRole = Qt::UserRole + 2;
   static constexpr int kStatusRole = Qt::UserRole + 3;
 
+ signals:
+  // TASK-V02-014：表单对 current_item_ 的每次写入（名称/参数）经此信号
+  // 通知 ModelTreeAdapter 标脏投影；读路径仍走 Tree Data Role。
+  void item_written(QTreeWidgetItem* item);
+
  private slots:
   void on_name_changed(const QString& value);
   void on_add_param();

@@ -50,6 +50,7 @@ class PartFeaturePanel;
 class SketchDocument;
 class StageLeftToolbar;
 class FloatingPropertyForm;
+class ModelTreeAdapter;
 
 class MainWindow : public QMainWindow {
   Q_OBJECT
@@ -330,6 +331,9 @@ class MainWindow : public QMainWindow {
   QLineEdit* results_tree_filter_ = nullptr;
   QStackedWidget* property_stack_ = nullptr;
   PropertyEditor* property_editor_ = nullptr;
+  // TASK-V02-014：Tree→Document 投影适配器（懒同步）。Tree 仍是唯一操作
+  // 入口；本适配器在每次树变更时标脏，任何 document() 读取先重建。
+  ModelTreeAdapter* model_tree_adapter_ = nullptr;
   FloatingPropertyForm* floating_property_form_ = nullptr;
   QPlainTextEdit* console_ = nullptr;
   VtkViewer* viewer_ = nullptr;

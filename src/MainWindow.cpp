@@ -80,7 +80,9 @@
 
 #include "gmp/GmshPanel.h"
 #include "gmp/FloatingPropertyForm.h"
+#include "gmp/ModelTreeAdapter.h"
 #include "gmp/MoosePanel.h"
+#include "gmp/PropertyBag.h"
 #include "gmp/OccBridge.h"
 #include "gmp/OperationLog.h"
 #include "gmp/PartFeaturePanel.h"
@@ -1272,6 +1274,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   property_editor_ = new PropertyEditor(property_stack_);
   property_editor_->set_model_tree(model_tree_);
+  // TASK-V02-014：Tree→Document 投影。itemChanged 覆盖未阻塞的
+  // setData/setText（含 PropertyEditor 直写与重命名）；结构增删经
+  // refresh_module_pages 标脏；阻塞信号的浮动窗提交经 committed 标脏。
+  model_tree_adapter_ = new ModelTreeAdapter(model_tree_);
+  connect(model_tree_, &QTreeWidget::itemChanged, model_tree_adapter_,
+          [this]() { model_tree_adapter_->mark_dirty(); });
+  connect(property_editor_, &PropertyEditor::item_written,
+          model_tree_adapter_,
+          [this]() { model_tree_adapter_->mark_dirty(); });
   auto* mesh_page = new GmshPanel(property_stack_);
   auto* job_page = new MoosePanel(property_stack_);
   moose_panel_ = job_page;
@@ -6199,6 +6210,11 @@ void MainWindow::open_property_form(QTreeWidgetItem* item,
   l10n::apply(form);
   connect(form, &FloatingPropertyForm::committed, this,
           [this](QTreeWidgetItem* committed_item) {
+            if (model_tree_adapter_) {
+              // 提交在 QSignalBlocker 下写目标项，itemChanged 被抑制，
+              // 投影在此显式标脏。
+              model_tree_adapter_->mark_dirty();
+            }
             if (committed_item) {
               invalidate_downstream_from(
                   committed_item->data(0, PropertyEditor::kKindRole)
@@ -6312,6 +6328,9 @@ QString MainWindow::build_step_sequence_preview() const {
 }
 
 void MainWindow::refresh_module_pages() {
+  if (model_tree_adapter_) {
+    model_tree_adapter_->mark_dirty();
+  }
   refresh_module_node_list(module_part_list_, "Parts", "No parts yet.");
   refresh_module_node_list(module_material_list_, "Materials", "No materials yet.");
   refresh_module_node_list(module_section_list_, "Sections", "No sections yet.");
@@ -19747,6 +19766,255 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         "G0 managed-root conflict was not rejected");
                   }
                   moose_panel_->apply_moose_settings(original);
+                },
+                this});
+  steps.append({"model_tree_projection_contract",
+                [this]() {
+                  // TASK-V02-014：Tree→Document 投影一致性合同。Tree 仍是
+                  // 唯一操作入口；经业务漏斗（add_child_item/remove_item）
+                  // 与 itemChanged 覆盖的直写（重命名/参数）后，Document
+                  // 必须与 Tree 完全一致。随后用真实 G1 项目做等价判据：
+                  // 打开后 Document==Tree，两次同步 .i 逐字一致（同步指向
+                  // 临时目录，不触碰用户项目文件）。
+                  if (!model_tree_adapter_ || !model_tree_) {
+                    throw std::runtime_error(
+                        "Model tree projection fixture is missing");
+                  }
+                  auto assert_consistent = [this](const QString& tag) {
+                    const core::ProjectDocument& doc =
+                        model_tree_adapter_->document();
+                    int tree_items = 0;
+                    bool consistent = true;
+                    for (int i = 0; i < model_tree_->topLevelItemCount(); ++i) {
+                      const QTreeWidgetItem* root = model_tree_->topLevelItem(i);
+                      if (!root) {
+                        continue;
+                      }
+                      ++tree_items;
+                      consistent =
+                          consistent &&
+                          doc.object(ModelTreeAdapter::id_for_path(
+                              root->text(0), QString())) != nullptr;
+                      for (int row = 0; row < root->childCount(); ++row) {
+                        const QTreeWidgetItem* child = root->child(row);
+                        if (!child) {
+                          continue;
+                        }
+                        ++tree_items;
+                        const core::ProjectObject* object =
+                            doc.object(model_tree_adapter_->id_for_item(child));
+                        if (!object) {
+                          consistent = false;
+                          continue;
+                        }
+                        consistent =
+                            consistent &&
+                            object->name() == child->text(0) &&
+                            object->kind() ==
+                                child->data(0, PropertyEditor::kKindRole)
+                                    .toString() &&
+                            object->status() ==
+                                core::object_status_from_string(
+                                    child->data(0, PropertyEditor::kStatusRole)
+                                        .toString()) &&
+                            object->properties().to_variant_map() ==
+                                child->data(0, PropertyEditor::kParamsRole)
+                                    .toMap();
+                      }
+                    }
+                    if (!consistent || doc.count() != tree_items) {
+                      throw std::runtime_error(
+                          QString("Tree/Document projection diverged: %1")
+                              .arg(tag)
+                              .toStdString());
+                    }
+                  };
+
+                  // G1 形态节点集夹具（业务漏斗 add_child_item 写入）。
+                  struct FixtureNode {
+                    QString root;
+                    QString name;
+                    QVariantMap params;
+                  };
+                  const QList<FixtureNode> fixture = {
+                      {"Parts", "proj_part", {{"type", "Part"}}},
+                      {"Features", "proj_feature", {{"type", "Extrude"}}},
+                      {"Assembly",
+                       "proj_instance",
+                       {{"type", "PartInstance"}, {"part", "proj_part"}}},
+                      {"Materials",
+                       "proj_mat",
+                       {{"type", "ComputeIsotropicElasticityTensor"},
+                        {"youngs_modulus", "3e10"},
+                        {"poissons_ratio", "0.2"},
+                        {"block", "solid"}}},
+                      {"Sections",
+                       "proj_section",
+                       {{"type", "SolidSection"},
+                        {"material", "proj_mat"},
+                        {"block", "solid"}}},
+                      {"Physics",
+                       "proj_physics",
+                       {{"action", "QuasiStatic"}, {"strain", "SMALL"}}},
+                      {"Steps", "proj_step", {{"type", "Transient"}}},
+                      {"BC",
+                       "proj_bc",
+                       {{"type", "DirichletBC"},
+                        {"boundary", "fixed"},
+                        {"variable", "disp_x"},
+                        {"value", "0"}}},
+                      {"Functions",
+                       "proj_func",
+                       {{"type", "PiecewiseLinear"}, {"x", "0 1"}, {"y", "0 1"}}},
+                      {"Interactions",
+                       "proj_contact",
+                       {{"type", "Contact"},
+                        {"primary", "contact_a"},
+                        {"secondary", "contact_b"}}},
+                      {"Outputs", "proj_outputs", {{"type", "Exodus"}}},
+                      {"Mesh", "proj_mesh", {{"path", "mesh/proj.msh"}}},
+                  };
+                  QTreeWidgetItem* mat_item = nullptr;
+                  QTreeWidgetItem* func_item = nullptr;
+                  for (const auto& node : fixture) {
+                    auto* root = find_root_item(node.root);
+                    auto* item = add_child_item(root, node.name, node.root,
+                                                node.params);
+                    if (!item) {
+                      throw std::runtime_error(
+                          "Projection fixture node could not be created");
+                    }
+                    if (node.name == "proj_mat") {
+                      mat_item = item;
+                    }
+                    if (node.name == "proj_func") {
+                      func_item = item;
+                    }
+                  }
+                  assert_consistent("fixture mount");
+
+                  // 重命名传播（itemChanged 钩子）：旧 ID 消失、新 ID 出现。
+                  mat_item->setText(0, "proj_mat_renamed");
+                  assert_consistent("rename");
+                  if (model_tree_adapter_->document().object(
+                          ModelTreeAdapter::id_for_path("Materials",
+                                                        "proj_mat"))) {
+                    throw std::runtime_error(
+                        "Projection kept the pre-rename object id");
+                  }
+                  // 参数直写传播（itemChanged 钩子）。
+                  auto* bc_root = find_root_item("BC");
+                  QTreeWidgetItem* bc_item = nullptr;
+                  for (int i = 0; bc_root && i < bc_root->childCount(); ++i) {
+                    if (bc_root->child(i)->text(0) == "proj_bc") {
+                      bc_item = bc_root->child(i);
+                    }
+                  }
+                  QVariantMap edited = bc_item->data(0, PropertyEditor::kParamsRole)
+                                           .toMap();
+                  edited.insert("value", "0.5");
+                  bc_item->setData(0, PropertyEditor::kParamsRole, edited);
+                  assert_consistent("param edit");
+                  // 删除传播（业务漏斗 remove_item）。
+                  remove_item(func_item);
+                  assert_consistent("remove");
+                  if (model_tree_adapter_->document().object(
+                          ModelTreeAdapter::id_for_path("Functions",
+                                                        "proj_func"))) {
+                    throw std::runtime_error(
+                        "Projection kept the removed object");
+                  }
+
+                  // 清理夹具节点。
+                  for (const auto& node : fixture) {
+                    if (node.name == "proj_func") {
+                      continue;  // 已删
+                    }
+                    auto* root = find_root_item(node.root);
+                    const QString name = node.name == "proj_mat"
+                                             ? QString("proj_mat_renamed")
+                                             : node.name;
+                    for (int i = 0; root && i < root->childCount(); ++i) {
+                      if (root->child(i)->text(0) == name) {
+                        delete root->takeChild(i);
+                        break;
+                      }
+                    }
+                  }
+                  refresh_module_pages();
+                  assert_consistent("cleanup");
+
+                  // 真实 G1 项目等价判据（文件存在时执行，否则跳过）。
+                  const QString g1_project =
+                      "/Users/a123/Desktop/test/moose/workspace/0915/"
+                      "phase5-g1-assembly-contact.gmp.yaml";
+                  if (QFileInfo::exists(g1_project)) {
+                    const PhysicalGroupManifest saved_snapshot = mesh_snapshot_;
+                    const QString saved_project = project_path_;
+                    if (!load_project(g1_project)) {
+                      throw std::runtime_error(
+                          "G1 project failed to load for projection check");
+                    }
+                    assert_consistent("g1 load");
+                    const core::ProjectDocument& g1_doc =
+                        model_tree_adapter_->document();
+                    if (!g1_doc.object(ModelTreeAdapter::id_for_path(
+                            "Materials", "concrete_elasticity")) ||
+                        !g1_doc.object(ModelTreeAdapter::id_for_path(
+                            "Interactions", "contact_plate_concrete")) ||
+                        !g1_doc.object(ModelTreeAdapter::id_for_path(
+                            "Assembly", "instance_plate"))) {
+                      throw std::runtime_error(
+                          "G1 projection is missing known objects");
+                    }
+                    // 两次同步逐字一致（写入临时目录，不触碰用户项目）。
+                    const QString equiv_dir =
+                        QDir::tempPath() + "/gmp_tour_v02_014";
+                    QDir(equiv_dir).removeRecursively();
+                    const bool sync_a_ok =
+                        sync_model_to_input(equiv_dir + "/equiv.gmp.yaml");
+                    const QString synced_a = moose_panel_->input_text();
+                    const bool sync_b_ok =
+                        sync_model_to_input(equiv_dir + "/equiv.gmp.yaml");
+                    const QString synced_b = moose_panel_->input_text();
+                    QDir(equiv_dir).removeRecursively();
+                    if (!sync_a_ok || !sync_b_ok || synced_a.isEmpty() ||
+                        synced_a != synced_b ||
+                        !synced_a.contains("[Contact]") ||
+                        !synced_a.contains("primary = contact_plate")) {
+                      throw std::runtime_error(
+                          "G1 projection-era input sync is not deterministic");
+                    }
+                    // 重载后 ID 集一致。
+                    const QVariantList ids_before =
+                        g1_doc.to_variant_list();
+                    if (!load_project(g1_project)) {
+                      throw std::runtime_error(
+                          "G1 project failed to reload for id stability check");
+                    }
+                    QStringList id_set_a;
+                    for (const auto& value : ids_before) {
+                      id_set_a << value.toMap().value("id").toString();
+                    }
+                    QStringList id_set_b;
+                    for (const auto& value :
+                         model_tree_adapter_->document().to_variant_list()) {
+                      id_set_b << value.toMap().value("id").toString();
+                    }
+                    if (id_set_a.isEmpty() || id_set_a != id_set_b) {
+                      throw std::runtime_error(
+                          "G1 object ids are not stable across reloads");
+                    }
+                    // 恢复巡览会话：演示模型 + 原快照。
+                    load_demo_diffusion(false);
+                    mesh_snapshot_ = saved_snapshot;
+                    project_path_ = saved_project;
+                    refresh_module_pages();
+                    assert_consistent("restore");
+                  } else {
+                    qInfo("[tour] G1 project file not present; skipping "
+                          "real-project projection equivalence");
+                  }
                 },
                 this});
   steps.append({"main_window_maximize_expands",
