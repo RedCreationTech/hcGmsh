@@ -3,6 +3,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
 #include <vector>
@@ -413,6 +414,288 @@ void test_snapshot_v2(TestContext& test) {
               "Exodus input with explicit initial_state role is accepted");
 }
 
+// TASK-V02-003：G1 关键链路（装配 → 网格清单 → .i 生成 → 快照导出）中
+// 已可无 QWidget 调用的环节，在此固化为服务级合同测试。
+// Stage 3 迁移候选（当前依赖 MainWindow/GmshPanel，仅由 GUI 巡览覆盖，
+// 抽服务后应迁入本级）：
+//   - MainWindow::build_*_block / sync_model_to_input 的 .i 全文本不变量
+//     （Materials block、BC boundary、Contact primary/secondary、
+//     [Executioner]/[Preconditioning] 单一性、Outputs 套餐、A/B 逐字一致）；
+//   - MainWindow::build_generation_report 的全对象可追溯行；
+//   - GmshPanel 装配构建 → mesh_manifest 清单产出（owner+bbox 恢复）。
+void test_physical_group_manifest_contract(TestContext& test) {
+  // G1 基线形态的清单（2 体组 + 6 面组）必须零错误通过。
+  auto make_entry = [](const QString& name, int dim, int tag, int elements) {
+    gmp::PhysicalGroupEntry entry;
+    entry.name = name;
+    entry.dim = dim;
+    entry.tags = {tag};
+    entry.entity_count = 1;
+    entry.element_count = elements;
+    return entry;
+  };
+  gmp::PhysicalGroupManifest g1;
+  g1.mesh_path = "mesh/mesh_assembly_g1.msh";
+  g1.mesh_sha256 = QString(64, 'a');
+  g1.mesh_dim = 3;
+  g1.node_count = 175086;
+  g1.element_count = 152950;
+  g1.element_type = "HEX8";
+  g1.quality_summary.insert("minSICN", 0.999962);
+  g1.groups.append(make_entry("instance_plate", 3, 1, 67510));
+  g1.groups.append(make_entry("instance_concrete", 3, 2, 85440));
+  g1.groups.append(make_entry("instance_plate_surface", 2, 3, 56438));
+  g1.groups.append(make_entry("instance_concrete_surface", 2, 4, 22568));
+  g1.groups.append(make_entry("fixed_bottom", 2, 5, 8544));
+  g1.groups.append(make_entry("load_top", 2, 6, 27004));
+  g1.groups.append(make_entry("contact_concrete", 2, 7, 8544));
+  g1.groups.append(make_entry("contact_plate", 2, 8, 27004));
+  g1.groups.last().bound_object_ids = {"contact_plate_concrete"};
+  bool has_error = false;
+  for (const auto& issue : g1.validate()) {
+    has_error = has_error || issue.severity == "error";
+  }
+  test.expect(!has_error && g1.is_valid(),
+              "G1-shaped manifest (2 volumes + 6 surfaces) validates clean");
+
+  // 组查询语义：维度过滤、缺失组回退、名称去重。
+  test.expect(g1.group_names(3) == QStringList{"instance_plate", "instance_concrete"},
+              "volume group names are dim-3 filtered and ordered");
+  test.expect(g1.group_names(2).size() == 6 &&
+                  g1.group_names().size() == 8,
+              "boundary group names are dim-2 filtered");
+  test.expect(g1.has_group("contact_plate", 2) &&
+                  !g1.has_group("contact_plate", 3) &&
+                  !g1.has_group("missing", 2),
+              "has_group honors the dimension argument");
+  test.expect(!gmp::PhysicalGroupEntry().is_valid() &&
+                  !g1.group("missing").is_valid(),
+              "missing group lookup returns an invalid entry");
+
+  // 项目 mesh_snapshot_ 持久化路径：to/from_variant_map 必须无损。
+  const auto restored =
+      gmp::PhysicalGroupManifest::from_variant_map(g1.to_variant_map());
+  const gmp::PhysicalGroupManifest& original = g1;
+  bool roundtrip_equal =
+      restored.mesh_path == original.mesh_path &&
+      restored.mesh_sha256 == original.mesh_sha256 &&
+      restored.mesh_dim == original.mesh_dim &&
+      restored.node_count == original.node_count &&
+      restored.element_count == original.element_count &&
+      restored.element_type == original.element_type &&
+      restored.quality_summary == original.quality_summary &&
+      restored.groups.size() == original.groups.size();
+  for (int i = 0; roundtrip_equal && i < original.groups.size(); ++i) {
+    const auto& lhs = original.groups.at(i);
+    const auto& rhs = restored.groups.at(i);
+    roundtrip_equal = lhs.name == rhs.name && lhs.dim == rhs.dim &&
+                      lhs.tags == rhs.tags &&
+                      lhs.entity_count == rhs.entity_count &&
+                      lhs.element_count == rhs.element_count &&
+                      lhs.bound_object_ids == rhs.bound_object_ids;
+  }
+  test.expect(roundtrip_equal && restored.is_valid(),
+              "manifest survives the variant-map persistence round-trip");
+
+  // 拒绝路径：每条校验规则都要能把坏清单打成 error。
+  auto expect_rejected = [&test](gmp::PhysicalGroupManifest manifest,
+                                 const QString& message) {
+    bool rejected = false;
+    for (const auto& issue : manifest.validate()) {
+      rejected = rejected || issue.severity == "error";
+    }
+    test.expect(rejected && !manifest.is_valid(), message);
+  };
+  expect_rejected([&] {
+    auto m = g1;
+    m.groups.first().dim = 4;
+    return m;
+  }(), "group dimension out of range is rejected");
+  expect_rejected([&] {
+    auto m = g1;
+    m.mesh_dim = 2;  // 体组 dim=3 超过 mesh_dim
+    return m;
+  }(), "group dimension exceeding mesh_dim is rejected");
+  expect_rejected([&] {
+    auto m = g1;
+    m.groups.first().tags.clear();
+    return m;
+  }(), "group without entity tags is rejected");
+  expect_rejected([&] {
+    auto m = g1;
+    m.groups.first().tags = {1, -2};
+    return m;
+  }(), "non-positive entity tag is rejected");
+  expect_rejected([&] {
+    auto m = g1;
+    m.groups.first().tags = {1, 1};
+    return m;
+  }(), "duplicate entity tags in one group are rejected");
+  expect_rejected([&] {
+    auto m = g1;
+    m.groups.first().entity_count = 0;
+    return m;
+  }(), "group without entities is rejected");
+  expect_rejected([&] {
+    auto m = g1;
+    m.groups.first().element_count = 0;
+    return m;
+  }(), "group without mesh elements is rejected");
+  expect_rejected([&] {
+    auto m = g1;
+    m.groups.first().name = "   ";
+    return m;
+  }(), "whitespace-only group name is rejected");
+  expect_rejected([&] {
+    auto m = g1;
+    m.groups.append(make_entry("fixed_bottom", 2, 9, 1));
+    return m;
+  }(), "duplicate group name within one dimension is rejected");
+  expect_rejected([&] {
+    auto m = g1;
+    m.mesh_sha256 = QString(63, 'a');
+    return m;
+  }(), "malformed mesh sha256 is rejected");
+  expect_rejected([&] {
+    auto m = g1;
+    m.mesh_dim = 0;
+    return m;
+  }(), "mesh_dim outside 1..3 is rejected");
+  expect_rejected([&] {
+    auto m = g1;
+    m.mesh_path = "/abs/outside.msh";
+    return m;
+  }(), "absolute mesh path is rejected");
+}
+
+void test_snapshot_v2_manifest_contract(TestContext& test) {
+  QTemporaryDir workspace;
+  const QString source_dir = workspace.filePath("g1-source");
+  const QByteArray mesh_data("$MeshFormat\n2.2 0 8\n$EndMeshFormat\n");
+  const QByteArray csv_data("strain,stress\n0,0\n");
+  write_file(QDir(source_dir).filePath("mesh/mesh_assembly_g1.msh"), mesh_data);
+  write_file(QDir(source_dir).filePath("extra/compression_hardening.csv"),
+             csv_data);
+
+  gmp::MooseTemplateInfo tpl;
+  tpl.valid = true;
+  tpl.key = "g1-assembly";
+  tpl.dir = source_dir;
+  tpl.mesh_files = {"mesh/mesh_assembly_g1.msh"};
+  tpl.extra_files = {"extra/compression_hardening.csv"};
+
+  gmp::SnapshotExportConfig cfg;
+  cfg.case_name = "phase5-g1-assembly-contact";
+  cfg.case_id = "g1-001";
+  cfg.input_mode = "structured";
+  cfg.generator_version = "gmp-ise-test";
+  cfg.base_model_hash = QString(64, 'c');
+  cfg.profile = valid_profile();
+  cfg.physical_groups = valid_physical_groups(gmp::sha256_hex(mesh_data));
+  cfg.physical_groups.mesh_path = "mesh/mesh_assembly_g1.msh";
+
+  const QString input_text =
+      "[Mesh/file]\n  type = FileMeshGenerator\n"
+      "  file = 'mesh/mesh_assembly_g1.msh'\n[]\n"
+      "[Materials]\n  compression_hardening_file = "
+      "'extra/compression_hardening.csv'\n[]\n";
+
+  // 哈希与角色：manifest 中的哈希必须等于内容真实 SHA-256。
+  const auto result = gmp::export_job_snapshot_v2(
+      workspace.filePath("snap-a"), input_text, "case.i", tpl, cfg);
+  test.expect(result.ok, "G1-shaped snapshot v2 exports");
+  const QString input_hash = gmp::sha256_hex(input_text.toUtf8());
+  test.expect(result.input_sha256 == input_hash &&
+                  result.manifest.value("final_input_hash").toString() ==
+                      input_hash,
+              "manifest input hash matches the exported .i content");
+  const QJsonObject snapshot_obj =
+      result.manifest.value("input_snapshot").toObject();
+  test.expect(snapshot_obj.value("input_sha256").toString() == input_hash &&
+                  snapshot_obj.value("input_role").toString() ==
+                      "input_config",
+              "input snapshot carries the input_config role and hash");
+  const QJsonArray mesh_entries = snapshot_obj.value("mesh_files").toArray();
+  const QJsonArray extra_entries = snapshot_obj.value("extra_files").toArray();
+  test.expect(mesh_entries.size() == 1 &&
+                  mesh_entries.first().toObject().value("sha256").toString() ==
+                      gmp::sha256_hex(mesh_data) &&
+                  mesh_entries.first().toObject().value("role").toString() ==
+                      "input_mesh",
+              "mesh entry hash and role match the source file");
+  test.expect(extra_entries.size() == 1 &&
+                  extra_entries.first().toObject().value("sha256").toString() ==
+                      gmp::sha256_hex(csv_data),
+              "extra file entry hash matches the source file");
+
+  // A/B 确定性：同一输入两次导出，manifest 除 created_at 外逐字节一致。
+  const auto result_b = gmp::export_job_snapshot_v2(
+      workspace.filePath("snap-b"), input_text, "case.i", tpl, cfg);
+  QJsonObject manifest_a = result.manifest;
+  QJsonObject manifest_b = result_b.manifest;
+  manifest_a.remove("created_at");
+  manifest_b.remove("created_at");
+  test.expect(result_b.ok &&
+                  QJsonDocument(manifest_a) == QJsonDocument(manifest_b) &&
+                  read_file(QDir(workspace.filePath("snap-a"))
+                                .filePath("case.i")) ==
+                      read_file(QDir(workspace.filePath("snap-b"))
+                                     .filePath("case.i")),
+              "repeated export is byte-identical apart from created_at");
+
+  // 拒绝路径：合同缺项或不安全引用必须失败且给出可读错误。
+  auto expect_export_rejected = [&test, &tpl](gmp::SnapshotExportConfig bad_cfg,
+                                              const QString& text,
+                                              const QString& file,
+                                              const QString& message,
+                                              const QString& dest_name) {
+    QTemporaryDir dir;
+    const auto rejected =
+        gmp::export_job_snapshot_v2(dir.filePath(dest_name), text, file, tpl,
+                                    bad_cfg);
+    test.expect(!rejected.ok && !rejected.error.isEmpty(), message);
+  };
+  auto bad_mode = cfg;
+  bad_mode.input_mode = "bogus";
+  expect_export_rejected(bad_mode, input_text, "case.i",
+                         "invalid input_mode is rejected", "reject-mode");
+  auto bad_case = cfg;
+  bad_case.case_id.clear();
+  expect_export_rejected(bad_case, input_text, "case.i",
+                         "missing case_id is rejected", "reject-case");
+  auto bad_profile = cfg;
+  bad_profile.profile.valid = false;
+  expect_export_rejected(bad_profile, input_text, "case.i",
+                         "invalid application profile is rejected",
+                         "reject-profile");
+  auto bad_groups = cfg;
+  bad_groups.physical_groups = gmp::PhysicalGroupManifest();
+  expect_export_rejected(bad_groups, input_text, "case.i",
+                         "invalid physical group manifest is rejected",
+                         "reject-groups");
+  expect_export_rejected(cfg, input_text, "../case.i",
+                         "unsafe input file name is rejected", "reject-name");
+  expect_export_rejected(cfg,
+                         "[Mesh]\n  file = '/abs/elsewhere.msh'\n[]\n",
+                         "case.i",
+                         "absolute file reference in input is rejected",
+                         "reject-absref");
+
+  // 引用扫描与相对路径规则的单元级合同。
+  test.expect(gmp::scan_input_file_refs(
+                  "[Mesh]\n  file = 'mesh/case.msh'\n[]\n"
+                  "[Materials]\n  data_file = none\n"
+                  "  compression_hardening_file = \"ch.csv\"\n[]\n") ==
+                  QStringList{"mesh/case.msh", "ch.csv"},
+              "input file reference scan keeps order and skips none values");
+  test.expect(gmp::is_safe_snapshot_relative_path("mesh/case.msh") &&
+                  !gmp::is_safe_snapshot_relative_path("../outside.msh") &&
+                  !gmp::is_safe_snapshot_relative_path("/abs/outside.msh") &&
+                  !gmp::is_safe_snapshot_relative_path(""),
+              "snapshot relative path rules accept in-root and reject "
+              "traversal/absolute/empty");
+}
+
 void test_submission_manifest(TestContext& test) {
   const QByteArray unicode_disposition =
       gmp::SimClient::multipart_file_content_disposition(
@@ -521,7 +804,9 @@ int main(int argc, char* argv[]) {
   test_sketch_entity_translation(test);
   test_profiles_and_mapping(test);
   test_physical_groups(test);
+  test_physical_group_manifest_contract(test);
   test_snapshot_v2(test);
+  test_snapshot_v2_manifest_contract(test);
   test_submission_manifest(test);
   if (test.failures == 0) {
     qInfo("Phase 0 contract tests PASSED");
