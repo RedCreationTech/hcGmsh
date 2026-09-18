@@ -196,6 +196,7 @@ add_executable(gmp_ise_phase0_test tests/test_phase0.cpp
   src/MooseSnapshot.cpp include/gmp/MooseSnapshot.h
   src/MooseTemplates.cpp include/gmp/MooseTemplates.h
   src/PhysicalGroupManifest.cpp include/gmp/PhysicalGroupManifest.h
+  src/DependencyGraph.cpp include/gmp/DependencyGraph.h
   src/ProjectDocument.cpp include/gmp/ProjectDocument.h
   src/PropertyBag.cpp include/gmp/PropertyBag.h
   src/ProjectSchema.cpp include/gmp/ProjectSchema.h

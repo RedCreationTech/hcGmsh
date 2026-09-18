@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "gmp/ApplicationProfile.h"
+#include "gmp/DependencyGraph.h"
 #include "gmp/MooseMappingRegistry.h"
 #include "gmp/MooseSnapshot.h"
 #include "gmp/PhysicalGroupManifest.h"
@@ -1067,7 +1068,93 @@ void test_property_bag_contract(TestContext& test) {
               "apply_defaults never overwrites an existing value");
 }
 
+// TASK-V02-012：DependencyGraph 机制 + legacy stale 规则对照合同。
+// 期望矩阵手工转录自 MainWindow::invalidate_downstream_from()
+// （src/MainWindow.cpp 7543-7561）：两侧任一改动的分歧都会变红。
+void test_dependency_graph_contract(TestContext& test) {
+  using namespace gmp::core;
+
+  // 机制：自环/重复边拒绝，下游/上游查询按登记序，remove 生效。
+  DependencyGraph graph;
+  test.expect(!graph.addDependency("A", "A") &&
+                  !graph.addDependency(QString(), "B"),
+              "self-loop and empty endpoints are rejected");
+  test.expect(graph.addDependency("A", "B") && graph.addDependency("A", "C") &&
+                  graph.addDependency("B", "D") &&
+                  !graph.addDependency("A", "B") &&
+                  graph.edgeCount() == 3,
+              "edges register once in declaration order");
+  test.expect(graph.downstream("A") == QStringList{"B", "C"} &&
+                  graph.upstream("D") == QStringList{"B"},
+              "direct downstream/upstream queries follow registration order");
+  test.expect(graph.removeDependency("A", "C") &&
+                  !graph.removeDependency("A", "C") &&
+                  graph.downstream("A") == QStringList{"B"},
+              "removeDependency detaches exactly the named edge");
+
+  // 传播闭包与拓扑排序。
+  DependencyGraph chain;
+  chain.addDependency("a", "b");
+  chain.addDependency("b", "c");
+  chain.addDependency("a", "d");
+  test.expect(chain.markStaleFrom("a") == QStringList{"b", "d", "c"} &&
+                  chain.markStaleFrom("b") == QStringList{"c"} &&
+                  chain.markStaleFrom("c").isEmpty(),
+              "markStaleFrom returns the transitive downstream closure");
+  const QStringList order = chain.topologicalOrder();
+  test.expect(order.indexOf("a") < order.indexOf("b") &&
+                  order.indexOf("b") < order.indexOf("c") &&
+                  order.indexOf("a") < order.indexOf("d"),
+              "topological order places upstream before downstream");
+  chain.addDependency("c", "a");
+  test.expect(chain.hasCycle() && chain.topologicalOrder().isEmpty(),
+              "cyclic graph is detected and yields no topological order");
+  test.expect(!graph.hasCycle() && !DependencyGraph().hasCycle(),
+              "acyclic and empty graphs report no cycle");
+
+  // 对照测试：legacy_stale_rule_edges() 注册的 kind 级边集，其传播闭包
+  // 必须与 invalidate_downstream_from() 的手工转录矩阵逐条一致。
+  // （旧规则中 run/queue/submit 状态对象跳过是应用侧过滤，非边规则。）
+  DependencyGraph legacy;
+  for (const auto& edge : legacy_stale_rule_edges()) {
+    legacy.addDependency(edge.first, edge.second);
+  }
+  auto sorted = [](QStringList values) {
+    values.sort();
+    return values;
+  };
+  const QStringList mesh_chain = {"Input Cases", "Jobs"};
+  const QStringList full_chain = {"Input Cases", "Jobs", "Mesh"};
+  const QMap<QString, QStringList> expected_matrix = {
+      {"Parts", sorted({"Assembly", "Mesh", "Input Cases", "Jobs"})},
+      {"Features", sorted({"Assembly", "Mesh", "Input Cases", "Jobs"})},
+      {"Sketches", sorted({"Assembly", "Mesh", "Input Cases", "Jobs"})},
+      {"Mesh", sorted(mesh_chain)},
+      {"Input Cases", {"Jobs"}},
+      {"Jobs", {}},
+      {"Results", {}},
+  };
+  for (auto it = expected_matrix.cbegin(); it != expected_matrix.cend(); ++it) {
+    test.expect(sorted(legacy.markStaleFrom(it.key())) == it.value(),
+                "legacy stale matrix matches graph closure: " + it.key());
+  }
+  // 其余一切根节点（Materials/Sections/Assembly/Physics/Steps/BC/Loads/
+  // Interactions/Constraints/Selections/Functions/Variables/Outputs/Datums）
+  // 在旧 else 分支下都传播到 Mesh/Input Cases/Jobs。
+  bool others_match = true;
+  for (const QString& root : gmp::project_schema::model_root_nodes()) {
+    if (expected_matrix.contains(root)) {
+      continue;
+    }
+    others_match =
+        others_match && sorted(legacy.markStaleFrom(root)) == full_chain;
+  }
+  test.expect(others_match,
+              "all remaining root kinds propagate to Mesh/Input Cases/Jobs");
+}
+
 void test_submission_manifest(TestContext& test) {
+
   const QByteArray unicode_disposition =
       gmp::SimClient::multipart_file_content_disposition(
           QString::fromUtf8("测试03.i"));
@@ -1180,6 +1267,7 @@ int main(int argc, char* argv[]) {
   test_snapshot_v2_manifest_contract(test);
   test_project_document_contract(test);
   test_property_bag_contract(test);
+  test_dependency_graph_contract(test);
   test_submission_manifest(test);
   if (test.failures == 0) {
     qInfo("Phase 0 contract tests PASSED");
