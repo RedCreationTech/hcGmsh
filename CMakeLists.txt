@@ -134,6 +134,8 @@ add_executable(gmp_ise
   src/ProjectSchema.cpp
   include/gmp/ProjectSchema.h
   src/SimClient.cpp
+  src/UnitDisplay.cpp
+  include/gmp/UnitDisplay.h
   src/ArtifactDialog.cpp
   include/gmp/MooseTemplates.h
   include/gmp/MooseSnapshot.h
@@ -208,6 +210,7 @@ add_executable(gmp_ise_phase0_test tests/test_phase0.cpp
   src/PropertyBag.cpp include/gmp/PropertyBag.h
   src/ProjectSchema.cpp include/gmp/ProjectSchema.h
   src/SimClient.cpp include/gmp/SimClient.h
+  src/UnitDisplay.cpp include/gmp/UnitDisplay.h
   src/SketchDocument.cpp include/gmp/SketchDocument.h
   src/Env.cpp include/gmp/Env.h
 )

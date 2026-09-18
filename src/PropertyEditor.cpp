@@ -2,6 +2,7 @@
 
 #include "gmp/L10n.h"
 #include "gmp/SketchDocument.h"
+#include "gmp/UnitDisplay.h"
 
 #include <QFormLayout>
 #include <QHeaderView>
@@ -356,6 +357,49 @@ double PropertyEditor::display_unit_factor(const QString& quantity,
   return factor > 0.0 ? factor : fallback;
 }
 
+QString PropertyEditor::unit_tooltip_for_param(const QString& key,
+                                               const QString& stored_text) const {
+  gmp::UnitKeyInfo info;
+  if (!gmp::unit_key_info(key, &info)) {
+    return QString();
+  }
+  const bool chinese =
+      gmp::l10n::current_language() == gmp::l10n::Language::Chinese;
+  // 换算比例与快捷字段显示路径一致：优先 params 记录的 unit_factor_stress，
+  // 缺省回落到当前档案单位合同/1e6。
+  double factor = 0.0;
+  if (current_item_) {
+    bool factor_ok = false;
+    const double stored_factor =
+        current_item_->data(0, kParamsRole)
+            .toMap()
+            .value("unit_factor_stress")
+            .toString()
+            .toDouble(&factor_ok);
+    if (factor_ok && stored_factor > 0.0) {
+      factor = stored_factor;
+    }
+  }
+  if (factor <= 0.0) {
+    factor = display_unit_factor(info.quantity, 1e6);
+  }
+  const QString stored_unit_note =
+      chinese
+          ? QString::fromUtf8("存储单位：%1（SI 求解值）").arg(info.stored_unit)
+          : QString("Stored in %1 (SI solver value)").arg(info.stored_unit);
+  bool stored_ok = false;
+  const double stored = stored_text.trimmed().toDouble(&stored_ok);
+  if (!stored_ok) {
+    return stored_unit_note;
+  }
+  const QString display_value = gmp::format_unit_display_value(stored, factor);
+  return chinese
+             ? QString::fromUtf8("%1；快捷字段按 %2 显示：%3")
+                   .arg(stored_unit_note, info.display_unit, display_value)
+             : QString("%1; quick field displays %2: %3")
+                   .arg(stored_unit_note, info.display_unit, display_value);
+}
+
 void PropertyEditor::refresh_form_options() {
   if (!current_item_) {
     return;
@@ -515,8 +559,13 @@ void PropertyEditor::load_from_item() {
   for (auto it = params.begin(); it != params.end(); ++it) {
     params_table_->insertRow(row);
     params_table_->setItem(row, 0, new QTableWidgetItem(it.key()));
-    params_table_->setItem(row, 1,
-                           new QTableWidgetItem(it.value().toString()));
+    auto* value_item = new QTableWidgetItem(it.value().toString());
+    const QString unit_tooltip =
+        unit_tooltip_for_param(it.key(), it.value().toString());
+    if (!unit_tooltip.isEmpty()) {
+      value_item->setToolTip(unit_tooltip);
+    }
+    params_table_->setItem(row, 1, value_item);
     ++row;
   }
 
@@ -638,8 +687,7 @@ void PropertyEditor::on_param_changed(int row, int column) {
                           factor_ok && stored_factor > 0.0
                       ? stored_factor
                       : display_unit_factor("pressure", 1e6);
-              value = QString::number(
-                  stored / factor, 'g', 17);
+              value = gmp::format_unit_display_value(stored, factor);
             }
           }
           edit->setText(value);
@@ -2066,8 +2114,8 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     // （*Static 四参数语义），分组：基本/求解控制/时间步进/预处理。
     add_section("Basic");
     add_combo("Type", "type", {"Transient", "Steady"}, "stepType");
-    add_line("start_time", "start_time", "stepStartTime");
-    add_line("end_time", "end_time", "stepEndTime");
+    add_line("Start Time (s)", "start_time", "stepStartTime");
+    add_line("End Time (s)", "end_time", "stepEndTime");
     add_line("num_steps", "num_steps", "stepNumSteps");
     add_section("Solve Control");
     add_combo("solve_type", "solve_type", {"NEWTON", "PJFNK"},
@@ -2090,14 +2138,14 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     add_section("Time Stepping");
     add_combo("timestepper_type", "timestepper_type", {"IterationAdaptiveDT"},
               "stepTimeStepperType");
-    add_line("dt", "dt", "stepDt");
+    add_line("dt (s)", "dt", "stepDt");
     add_line("optimal_iterations", "optimal_iterations",
              "stepOptimalIterations");
     add_line("iteration_window", "iteration_window", "stepIterationWindow");
     add_line("growth_factor", "growth_factor", "stepGrowthFactor");
     add_line("cutback_factor", "cutback_factor", "stepCutbackFactor");
-    add_line("dtmin", "dtmin", "stepDtMin");
-    add_line("dtmax", "dtmax", "stepDtMax");
+    add_line("dtmin (s)", "dtmin", "stepDtMin");
+    add_line("dtmax (s)", "dtmax", "stepDtMax");
     add_section("Preconditioning");
     add_combo("preconditioning_type", "preconditioning_type", {"SMP"},
               "stepPreconditioningType");
@@ -2622,7 +2670,7 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
         if (!factor_ok || factor <= 0.0) {
           factor = display_unit_factor("pressure", 1e6);
         }
-        value = QString::number(stored / factor, 'g', 17);
+        value = gmp::format_unit_display_value(stored, factor);
       }
     }
     if (auto* edit = qobject_cast<QLineEdit*>(it.value())) {
@@ -2712,6 +2760,8 @@ void PropertyEditor::set_param_value(const QString& key,
     params_table_->setItem(target_row, 1, val_item);
   }
   val_item->setText(value);
+  const QString unit_tooltip = unit_tooltip_for_param(key, value);
+  val_item->setToolTip(unit_tooltip);
   for (int row = params_table_->rowCount() - 1; row >= 0; --row) {
     if (row == target_row) {
       continue;

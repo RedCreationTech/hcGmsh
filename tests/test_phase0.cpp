@@ -19,6 +19,7 @@
 #include "gmp/SimClient.h"
 #include "gmp/SketchDocument.h"
 #include "gmp/TransactionManager.h"
+#include "gmp/UnitDisplay.h"
 
 namespace {
 
@@ -1225,6 +1226,40 @@ void test_transaction_manager_contract(TestContext& test) {
               "every finished transaction appends one audit record");
 }
 
+// 缺陷 2026-09-19-025/026：单位换算显示合同（可无 Widget 测试部分）。
+void test_unit_display_contract(TestContext& test) {
+  // 显示格式：不暴露 double 伪精度。
+  const QString young_display =
+      gmp::format_unit_display_value(29791459780.0, 1e6);
+  test.expect(young_display == "29791.45978" &&
+                  !young_display.contains("0000001"),
+              "Pa->MPa display does not expose double noise");
+  test.expect(gmp::format_unit_display_value(206000000000.0, 1e6) == "206000" &&
+                  gmp::format_unit_display_value(500.0, 1e6) == "0.0005" &&
+                  gmp::format_unit_display_value(0.0, 1e6) == "0",
+              "unit display stays clean for integer/scientific samples");
+  test.expect(gmp::format_unit_display_value(29791459780.0, 0.0) ==
+                  "29791459780",
+              "non-positive factor falls back to 1 without division by zero");
+
+  // 往返：显示值回解析 ×factor 与存储值在双精度噪声内一致。
+  bool parse_ok = false;
+  const double roundtrip = young_display.toDouble(&parse_ok) * 1e6;
+  test.expect(parse_ok && qFuzzyCompare(roundtrip + 1.0, 29791459780.0 + 1.0),
+              "display value round-trips to the stored value within double "
+              "noise");
+
+  // 单位键登记：youngs_modulus 有单位机制，其余键如实返回无。
+  gmp::UnitKeyInfo info;
+  test.expect(gmp::unit_key_info("youngs_modulus", &info) &&
+                  info.quantity == "pressure" && info.stored_unit == "Pa" &&
+                  info.display_unit == "MPa",
+              "youngs_modulus is registered as Pa-stored/MPa-displayed");
+  test.expect(!gmp::unit_key_info("poissons_ratio", nullptr) &&
+                  !gmp::unit_key_info("dt", nullptr),
+              "keys without a unit mechanism report none");
+}
+
 void test_submission_manifest(TestContext& test) {
 
   const QByteArray unicode_disposition =
@@ -1341,6 +1376,7 @@ int main(int argc, char* argv[]) {
   test_property_bag_contract(test);
   test_dependency_graph_contract(test);
   test_transaction_manager_contract(test);
+  test_unit_display_contract(test);
   test_submission_manifest(test);
   if (test.failures == 0) {
     qInfo("Phase 0 contract tests PASSED");

@@ -82,6 +82,10 @@ class PropertyEditor : public QWidget {
   void update_validation();
   void build_form_for_kind(const QString& kind);
   void set_param_value(const QString& key, const QString& value);
+  // 缺陷 2026-09-19-026：已知单位键（unit_key_info 登记的键）的高级表
+  // 值单元格提示存储单位与换算后显示值；无单位机制时返回空。
+  QString unit_tooltip_for_param(const QString& key,
+                                 const QString& stored_text) const;
   void clear_form();
   void update_group_summary();
   void update_advanced_visibility();

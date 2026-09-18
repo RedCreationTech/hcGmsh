@@ -14919,6 +14919,34 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     throw std::runtime_error(
                         "G1 isotropic material quick-form round trip failed");
                   }
+                  // 2026-09-19-025：显示不得暴露 double 伪精度尾巴。
+                  if (reopened_young->text() != "29791.45978" ||
+                      reopened_young->text().contains("0000001")) {
+                    throw std::runtime_error(
+                        "G1 MPa display exposes double pseudo-precision");
+                  }
+                  // 2026-09-19-026：高级表带单位键的值单元格必须给出
+                  // 存储单位 + 换算显示值提示（中英文都含单位符号）。
+                  auto* unit_table = property_editor_->findChild<QTableWidget*>(
+                      "propertyParamsTable");
+                  QString young_tooltip;
+                  for (int row = 0; unit_table && row < unit_table->rowCount();
+                       ++row) {
+                    if (unit_table->item(row, 0) &&
+                        unit_table->item(row, 0)->text() ==
+                            "youngs_modulus" &&
+                        unit_table->item(row, 1)) {
+                      young_tooltip = unit_table->item(row, 1)->toolTip();
+                      break;
+                    }
+                  }
+                  if (young_tooltip.isEmpty() ||
+                      !young_tooltip.contains("Pa") ||
+                      !young_tooltip.contains("MPa") ||
+                      !young_tooltip.contains("29791.45978")) {
+                    throw std::runtime_error(
+                        "G1 advanced table unit tooltip is missing");
+                  }
                   open_property_form(elasticity);
                   qApp->processEvents();
                   auto* floating = findChild<FloatingPropertyForm*>(
