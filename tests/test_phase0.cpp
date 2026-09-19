@@ -9,6 +9,8 @@
 #include <vector>
 
 #include "gmp/ApplicationProfile.h"
+#include "gmp/AssemblyGeometryService.h"
+#include "gmp/GmshMesher.h"
 #include "gmp/DependencyGraph.h"
 #include "gmp/MooseMappingRegistry.h"
 #include "gmp/MooseInputGenerator.h"
@@ -1889,6 +1891,31 @@ void test_physical_group_service_contract(TestContext& test) {
               "dim:tag token parsing matches the panel semantics");
 }
 
+// TASK-V02-040：装配/网格服务可无 Widget 调用的边界合同。本测试目标未
+// 启用 GMP_ENABLE_GMSH_GUI，断言守护分支；真实 gmsh 会话路径（装配重建、
+// 组恢复、清单产出）由巡览 assembly_instance_contract/mesh_manifest_summary
+// 与真实 G1 重开路径覆盖。
+void test_assembly_mesher_service_contract(TestContext& test) {
+  gmp::PhysicalGroupService groups;
+  const auto result = gmp::AssemblyGeometryService::build(
+      QVariantList{QVariantMap{{"name", "inst"}, {"source_path", "x.brep"}}},
+      &groups);
+  test.expect(!result.ok && !result.error.isEmpty(),
+              "assembly build without gmsh reports a readable error");
+
+  gmp::MeshJobSpec spec;
+  bool threw = false;
+  QString message;
+  try {
+    gmp::GmshMesher::prepare(spec, nullptr);
+  } catch (const gmp::MeshJobError& ex) {
+    threw = true;
+    message = ex.message();
+  }
+  test.expect(threw && message.contains("Gmsh is not enabled"),
+              "mesher prepare without gmsh throws a readable MeshJobError");
+}
+
 void test_submission_manifest(TestContext& test) {
 
   const QByteArray unicode_disposition =
@@ -2010,6 +2037,7 @@ int main(int argc, char* argv[]) {
   test_moose_input_generator_contract(test);
   test_snapshot_service_contract(test);
   test_physical_group_service_contract(test);
+  test_assembly_mesher_service_contract(test);
   test_submission_manifest(test);
   if (test.failures == 0) {
     qInfo("Phase 0 contract tests PASSED");

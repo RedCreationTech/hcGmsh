@@ -144,6 +144,8 @@ add_executable(gmp_ise
   include/gmp/PhysicalGroupService.h
   src/GmshMesher.cpp
   include/gmp/GmshMesher.h
+  src/AssemblyGeometryService.cpp
+  include/gmp/AssemblyGeometryService.h
   src/SnapshotService.cpp
   include/gmp/SnapshotService.h
   src/ArtifactDialog.cpp
@@ -224,6 +226,8 @@ add_executable(gmp_ise_phase0_test tests/test_phase0.cpp
   src/ProjectStore.cpp include/gmp/ProjectStore.h
   src/MooseInputGenerator.cpp include/gmp/MooseInputGenerator.h
   src/PhysicalGroupService.cpp include/gmp/PhysicalGroupService.h
+  src/AssemblyGeometryService.cpp include/gmp/AssemblyGeometryService.h
+  src/GmshMesher.cpp include/gmp/GmshMesher.h
   src/SnapshotService.cpp include/gmp/SnapshotService.h
   src/OperationLog.cpp include/gmp/OperationLog.h
   src/SketchDocument.cpp include/gmp/SketchDocument.h

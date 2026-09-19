@@ -1,6 +1,7 @@
 #include "gmp/GmshPanel.h"
 #include "gmp/L10n.h"
 #include "gmp/GmshMesher.h"
+#include "gmp/AssemblyGeometryService.h"
 #include "gmp/OperationLog.h"
 
 #include <QCheckBox>
@@ -1274,22 +1275,27 @@ bool GmshPanel::build_assembly(QString* error) {
   }
   return false;
 #else
-  auto fail = [this, error](const QString& message) {
+  // TASK-V02-040：装配几何构建下沉到 AssemblyGeometryService；面板保留
+  // 模型选择器重登记、清单失效与日志/发射编排（019 时序不变：服务内
+  // 已完成组恢复，之后才是选择器与 note_external_model_loaded）。
+  ensure_gmsh();
+  const gmp::AssemblyBuildResult result = gmp::AssemblyGeometryService::build(
+      assembly_instances_, &physical_group_service_);
+  for (const QString& line : result.log_lines) {
+    append_log(line);
+  }
+  if (!result.ok) {
     if (error) {
-      *error = message;
+      *error = result.error;
     }
-    append_log("Assembly build failed: " + message);
+    append_log("Assembly build failed: " + result.error);
+    external_model_name_.clear();
+    model_loaded_ = false;
     return false;
-  };
-  if (assembly_instances_.isEmpty()) {
-    return fail("No assembly instances are configured.");
   }
 
-  struct SourceEntry {
-    QString label;
-    QString path;
-  };
-  QList<SourceEntry> part_sources;
+  // 重登记 Part 来源到模型选择器（UI）。
+  QList<QPair<QString, QString>> part_sources;
   if (model_selector_) {
     for (int i = 0; i < model_selector_->count(); ++i) {
       const QString label = model_selector_->itemText(i);
@@ -1300,167 +1306,28 @@ bool GmshPanel::build_assembly(QString* error) {
       }
     }
   }
-
-  QList<QVariantMap> instances;
-  for (const QVariant& value : assembly_instances_) {
-    instances.append(value.toMap());
+  if (model_selector_) {
+    const QSignalBlocker blocker(model_selector_);
+    model_selector_->clear();
+    for (const auto& entry : part_sources) {
+      model_selector_->addItem(entry.first, entry.first);
+      model_selector_->setItemData(model_selector_->count() - 1, entry.second,
+                                   Qt::UserRole + 1);
+    }
   }
-  std::stable_sort(instances.begin(), instances.end(),
-                   [](const QVariantMap& lhs, const QVariantMap& rhs) {
-                     return lhs.value("order").toInt() <
-                            rhs.value("order").toInt();
-                   });
-
-  try {
-    ensure_gmsh();
-    gmsh::clear();
-    external_model_name_.clear();
-    gmsh::model::add("assembly");
-
-    struct InstanceEntities {
-      QString name;
-      int dim = -1;
-      std::vector<int> tags;
-    };
-    QList<InstanceEntities> groups;
-    int visible_count = 0;
-    for (const QVariantMap& instance : instances) {
-      const QString visible =
-          instance.value("visible", "true").toString().trimmed().toLower();
-      if (visible == "false" || visible == "0") {
-        continue;
-      }
-      const QString name = instance.value("name").toString().trimmed();
-      const QString source =
-          instance.value("source_path").toString().trimmed();
-      if (name.isEmpty() || source.isEmpty() || !QFileInfo::exists(source)) {
-        throw std::runtime_error(
-            QString("Instance '%1' has no readable Part BREP source.")
-                .arg(name.isEmpty() ? QString("(unnamed)") : name)
-                .toStdString());
-      }
-
-      gmsh::vectorpair imported;
-      gmsh::model::occ::importShapes(source.toStdString(), imported, true,
-                                     "brep");
-      if (imported.empty()) {
-        throw std::runtime_error(
-            QString("Instance '%1' produced no geometry.").arg(name).toStdString());
-      }
-
-      const double sx = instance.value("scale_x", "1").toDouble();
-      const double sy = instance.value("scale_y", "1").toDouble();
-      const double sz = instance.value("scale_z", "1").toDouble();
-      if (sx <= 0.0 || sy <= 0.0 || sz <= 0.0) {
-        throw std::runtime_error(
-            QString("Instance '%1' scale must be positive.").arg(name).toStdString());
-      }
-      if (sx != 1.0 || sy != 1.0 || sz != 1.0) {
-        gmsh::model::occ::dilate(imported, 0.0, 0.0, 0.0, sx, sy, sz);
-      }
-      const double pi = 3.14159265358979323846;
-      const double rx = instance.value("rotate_x", "0").toDouble() * pi / 180.0;
-      const double ry = instance.value("rotate_y", "0").toDouble() * pi / 180.0;
-      const double rz = instance.value("rotate_z", "0").toDouble() * pi / 180.0;
-      if (rx != 0.0) {
-        gmsh::model::occ::rotate(imported, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, rx);
-      }
-      if (ry != 0.0) {
-        gmsh::model::occ::rotate(imported, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, ry);
-      }
-      if (rz != 0.0) {
-        gmsh::model::occ::rotate(imported, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, rz);
-      }
-      gmsh::model::occ::translate(
-          imported, instance.value("translate_x", "0").toDouble(),
-          instance.value("translate_y", "0").toDouble(),
-          instance.value("translate_z", "0").toDouble());
-
-      int top_dim = -1;
-      for (const auto& entity : imported) {
-        top_dim = std::max(top_dim, entity.first);
-      }
-      InstanceEntities group;
-      group.name = name;
-      group.dim = top_dim;
-      for (const auto& entity : imported) {
-        if (entity.first == top_dim) {
-          group.tags.push_back(entity.second);
-        }
-      }
-      groups.append(group);
-      ++visible_count;
-    }
-    if (visible_count == 0) {
-      throw std::runtime_error("No visible assembly instances are configured.");
-    }
-
-    gmsh::model::occ::synchronize();
-    for (const auto& group : groups) {
-      if (group.dim < 0 || group.tags.empty()) {
-        continue;
-      }
-      const int volume_group =
-          gmsh::model::addPhysicalGroup(group.dim, group.tags);
-      gmsh::model::setPhysicalName(group.dim, volume_group,
-                                   group.name.toStdString());
-
-      gmsh::vectorpair top_entities;
-      for (int tag : group.tags) {
-        top_entities.emplace_back(group.dim, tag);
-      }
-      gmsh::vectorpair boundary;
-      gmsh::model::getBoundary(top_entities, boundary, true, false, false);
-      std::set<int> boundary_tags;
-      for (const auto& entity : boundary) {
-        if (entity.first == group.dim - 1) {
-          boundary_tags.insert(std::abs(entity.second));
-        }
-      }
-      if (!boundary_tags.empty()) {
-        const std::vector<int> tags(boundary_tags.begin(), boundary_tags.end());
-        const int surface_group =
-            gmsh::model::addPhysicalGroup(group.dim - 1, tags);
-        gmsh::model::setPhysicalName(group.dim - 1, surface_group,
-                                     (group.name + "_surface").toStdString());
-      }
-    }
-
-    // 用户定义的接触/固定/加载专用面组在默认实例组之后恢复。恢复逻辑
-    // 只接受所属实例内几何签名一致的实体，防止 Part 修改后把旧组静默
-    // 绑定到同 tag 的另一张面。
-    restore_custom_physical_groups();
-
-    if (model_selector_) {
-      const QSignalBlocker blocker(model_selector_);
-      model_selector_->clear();
-      for (const auto& entry : part_sources) {
-        model_selector_->addItem(entry.label, entry.label);
-        model_selector_->setItemData(model_selector_->count() - 1, entry.path,
-                                     Qt::UserRole + 1);
-      }
-    }
-    // Assembly 已重建，旧网格清单不再能代表当前几何；项目加载路径会在
-    // build 完成后重新注入同一项目已保存的清单。
-    physical_group_element_counts_.clear();
-    note_external_model_loaded("assembly: active");
-    append_log(QString("Assembly built: %1 visible instance(s).")
-                   .arg(visible_count));
-    if (error) {
-      error->clear();
-    }
-    return true;
-  } catch (const std::exception& ex) {
-    try {
-      gmsh::clear();
-    } catch (...) {
-    }
-    external_model_name_.clear();
-    model_loaded_ = false;
-    return fail(QString::fromUtf8(ex.what()));
+  // Assembly 已重建，旧网格清单不再能代表当前几何；项目加载路径会在
+  // build 完成后重新注入同一项目已保存的清单。
+  physical_group_element_counts_.clear();
+  note_external_model_loaded("assembly: active");
+  append_log(QString("Assembly built: %1 visible instance(s).")
+                 .arg(result.visible_count));
+  if (error) {
+    error->clear();
   }
+  return true;
 #endif
 }
+
 
 void GmshPanel::set_mesh_output_path(const QString& path) {
   if (output_path_ && !path.isEmpty()) {
