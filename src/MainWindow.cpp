@@ -81,6 +81,7 @@
 #include "gmp/GmshPanel.h"
 #include "gmp/FloatingPropertyForm.h"
 #include "gmp/ModelTreeAdapter.h"
+#include "gmp/ProjectStore.h"
 #include "gmp/MoosePanel.h"
 #include "gmp/PropertyBag.h"
 #include "gmp/OccBridge.h"
@@ -141,68 +142,6 @@ QVariantMap normalize_remote_job_params(QVariantMap params) {
   }
   params.remove("mesh");
   return params;
-}
-
-QString project_case_work_dir(const QString& project_path) {
-  if (project_path.trimmed().isEmpty()) {
-    return {};
-  }
-  const QFileInfo project_info(project_path);
-  QString project_name = project_info.fileName();
-  if (project_name.endsWith(".gmp.yaml", Qt::CaseInsensitive)) {
-    project_name.chop(QString(".gmp.yaml").size());
-  } else {
-    project_name = project_info.completeBaseName();
-  }
-  project_name.replace(QRegularExpression("[\\\\/:*?\"<>|]"), "_");
-  if (project_name.isEmpty()) {
-    return {};
-  }
-  return QDir(project_info.absolutePath())
-      .absoluteFilePath(".work/case/" + project_name);
-}
-
-QString default_mesh_output_path(const QString& project_path,
-                                 const QString& mesh_name) {
-  const QString file_name =
-      (mesh_name.trimmed().isEmpty() ? QStringLiteral("mesh")
-                                     : mesh_name.trimmed()) +
-      QStringLiteral(".msh");
-  const QString project_dir = project_case_work_dir(project_path);
-  return project_dir.isEmpty()
-             ? QDir::current().absoluteFilePath("out/" + file_name)
-             : QDir(project_dir).absoluteFilePath(file_name);
-}
-
-bool is_legacy_default_mesh_path(const QString& path) {
-  if (path.trimmed().isEmpty()) {
-    return false;
-  }
-  const QString clean_path = QDir::cleanPath(QFileInfo(path).absoluteFilePath());
-  const QString legacy_dir =
-      QDir::cleanPath(QDir::current().absoluteFilePath("out"));
-  return clean_path.startsWith(legacy_dir + QDir::separator());
-}
-
-// 返回 path 所属的 .work/case/<X>/ 目录（干净路径）；不在任何项目 case
-// 工作目录下时返回空。用于识别“指向其他项目工作目录”的网格路径。
-QString enclosing_case_work_dir(const QString& path) {
-  if (path.trimmed().isEmpty()) {
-    return {};
-  }
-  const QString clean = QDir::fromNativeSeparators(
-      QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
-  const QStringList parts = clean.split('/', Qt::SkipEmptyParts);
-  for (int i = 0; i + 2 < parts.size(); ++i) {
-    if (parts.at(i) == ".work" && parts.at(i + 1) == "case") {
-      QString dir = parts.mid(0, i + 3).join('/');
-      if (clean.startsWith('/')) {
-        dir.prepend('/');
-      }
-      return dir;
-    }
-  }
-  return {};
 }
 
 // QStackedWidget 默认以所有页面的最大 size hint 作为自身尺寸，复杂的 Mesh
@@ -11798,11 +11737,10 @@ void MainWindow::update_remote_job_files(const QVariantMap& body) {
 }
 
 void MainWindow::migrate_project_mesh_paths(const QString& project_path) {
-  // 旧版本把自动生成网格默认写进应用工作目录 out/，多个项目会共享
-  // 同一文件。项目获得保存路径后，把这种“旧默认路径”迁移到自己的
-  // .work/case/<项目名>/；指向其他项目 .work/case/<其他项目>/ 的网格
-  // （典型来源：另存为副本）同样迁移，保证副本自包含且不会在副本中
-  // 生成网格时覆写原项目文件；.work/case/ 之外的用户外部路径保持不变。
+  // 迁移决策/复制/日志已下沉到 ProjectStore（TASK-V02-020）；此处只做
+  // 活体状态（树节点/快照/面板）的编排与写回，规则不变：legacy out/
+  // 与他项目 .work/case/<X>/ 的网格迁移到当前项目自有工作目录，
+  // .work/case/ 之外的用户外部路径保持不变。
   QStringList project_mesh_paths;
   QString migrated_active_mesh;
   QList<QPair<QString, QString>> migrated_paths;
@@ -11813,8 +11751,6 @@ void MainWindow::migrate_project_mesh_paths(const QString& project_path) {
     return QDir::cleanPath(QFileInfo(lhs).absoluteFilePath()) ==
            QDir::cleanPath(QFileInfo(rhs).absoluteFilePath());
   };
-  const QString own_case_dir = QDir::fromNativeSeparators(
-      QDir::cleanPath(project_case_work_dir(project_path)));
   const QString gmsh_output =
       gmsh_panel_
           ? gmsh_panel_->gmsh_settings().value("output_path").toString()
@@ -11829,43 +11765,18 @@ void MainWindow::migrate_project_mesh_paths(const QString& project_path) {
           mesh_item->data(0, PropertyEditor::kParamsRole).toMap();
       const QString source = params.value("path").toString();
       QString effective = source;
-      const QString source_case_dir = enclosing_case_work_dir(source);
-      const bool foreign_case_dir = !own_case_dir.isEmpty() &&
-                                    !source_case_dir.isEmpty() &&
-                                    source_case_dir != own_case_dir;
-      if (is_legacy_default_mesh_path(source) || foreign_case_dir) {
-        const QString target = QDir(project_case_work_dir(project_path))
-                                   .filePath(QFileInfo(source).fileName().isEmpty()
-                                                 ? mesh_item->text(0) + ".msh"
-                                                 : QFileInfo(source).fileName());
-        bool target_ready = QDir().mkpath(QFileInfo(target).absolutePath());
-        if (target_ready && QFileInfo::exists(source) &&
-            !QFileInfo::exists(target)) {
-          target_ready = QFile::copy(source, target);
+      const QString target = project_store_.migrate_mesh_path(
+          project_path, source, mesh_item->text(0));
+      if (!target.isEmpty()) {
+        effective = target;
+        migrated_paths.append(qMakePair(source, target));
+        params.insert("path", target);
+        mesh_item->setData(0, PropertyEditor::kParamsRole, params);
+        if (same_path(mesh_snapshot_.mesh_path, source)) {
+          mesh_snapshot_.mesh_path = target;
         }
-        if (target_ready && !QFileInfo::exists(source) &&
-            !QFileInfo::exists(target)) {
-          gmp::log_operation(
-              "project",
-              QString("Mesh source is missing; redirected into project "
-                      "workspace without copying: %1 -> %2")
-                  .arg(source, target));
-        }
-        if (target_ready) {
-          effective = target;
-          migrated_paths.append(qMakePair(source, target));
-          params.insert("path", target);
-          mesh_item->setData(0, PropertyEditor::kParamsRole, params);
-          if (same_path(mesh_snapshot_.mesh_path, source)) {
-            mesh_snapshot_.mesh_path = target;
-          }
-          if (same_path(gmsh_output, source)) {
-            migrated_active_mesh = target;
-          }
-          gmp::log_operation(
-              "project",
-              QString("Mesh output migrated into project workspace: %1")
-                  .arg(target));
+        if (same_path(gmsh_output, source)) {
+          migrated_active_mesh = target;
         }
       }
       if (!effective.trimmed().isEmpty()) {
@@ -11920,117 +11831,30 @@ void MainWindow::migrate_project_mesh_paths(const QString& project_path) {
 bool MainWindow::load_project(const QString& path) {
   try {
     suppress_dirty_ = true;
-    YAML::Node root = YAML::LoadFile(path.toStdString());
-
-    // Phase 0：schema 版本识别与兼容
-    int loaded_schema_version = project_schema::kCurrentVersion;
-    if (root["schema_version"] && root["schema_version"].IsScalar()) {
-      loaded_schema_version = root["schema_version"].as<int>();
-    } else if (root["version"] && root["version"].IsScalar()) {
-      const int old_version = root["version"].as<int>();
-      if (old_version > 2) {
-        QMessageBox::warning(this, "Project Load",
-                             "Unsupported project version.");
-        suppress_dirty_ = false;
-        return false;
-      }
-      loaded_schema_version = project_schema::kCurrentVersion;
-    }
-    if (loaded_schema_version < 1 ||
-        loaded_schema_version > project_schema::kCurrentVersion) {
-      QMessageBox::warning(this, "Project Load",
-                           QString("Unsupported schema version: %1")
-                               .arg(loaded_schema_version));
+    // TASK-V02-020：YAML 解析、schema 版本闸门与模型条目装配下沉到
+    // ProjectStore；此处只做 Tree/面板应用与 UI 联动。条目名已在
+    // ProjectStore 按 unique_child_name 同款规则去重。
+    ProjectData data;
+    QString load_error;
+    if (!project_store_.load_file(path, &data, &load_error)) {
       suppress_dirty_ = false;
+      QMessageBox::warning(this, "Project Load", load_error);
       return false;
     }
 
-    // 读取应用档案与单位合同
-    const QVariantMap loaded_application_profile =
-        project_schema::yaml_map_to_variant_map(root["application_profile"]);
-    const QVariantMap loaded_unit_contract =
-        project_schema::yaml_map_to_variant_map(root["unit_contract"]);
-
-    // 读取网格快照
-    const PhysicalGroupManifest loaded_mesh_snapshot =
-        project_schema::mesh_snapshot_from_yaml(root["mesh_snapshot"]);
-
-    auto parse_map = [](const YAML::Node& node,
-                        const QSet<QString>& force_string) {
-      QVariantMap map;
-      if (!node || !node.IsMap()) {
-        return map;
-      }
-      for (const auto& it : node) {
-        const QString key = QString::fromStdString(it.first.as<std::string>());
-        const YAML::Node value = it.second;
-        if (!value.IsScalar()) {
-          continue;
-        }
-        const QString raw = QString::fromStdString(value.as<std::string>());
-        if (force_string.contains(key)) {
-          map.insert(key, raw);
-          continue;
-        }
-        const QString lower = raw.toLower();
-        if (lower == "true" || lower == "false") {
-          map.insert(key, lower == "true");
-          continue;
-        }
-        bool ok_int = false;
-        const int int_val = raw.toInt(&ok_int);
-        if (ok_int && !raw.contains('.')
-            && !raw.contains('e', Qt::CaseInsensitive)) {
-          map.insert(key, int_val);
-          continue;
-        }
-        bool ok_double = false;
-        const double dbl_val = raw.toDouble(&ok_double);
-        if (ok_double) {
-          map.insert(key, dbl_val);
-          continue;
-        }
-        map.insert(key, raw);
-      }
-      return map;
-    };
-    YAML::Node model = root["model"];
-    if (!model || !model.IsMap()) {
-      suppress_dirty_ = false;
-      QMessageBox::warning(this, "Project Load",
-                           "Invalid project file (missing model).");
-      return false;
-    }
     clear_model_tree_children();
-    for (const auto& it : model) {
-      const QString kind = QString::fromStdString(it.first.as<std::string>());
-      auto* root_item = find_root_item(kind);
+    for (const auto& entry : data.model_entries) {
+      auto* root_item = find_root_item(entry.kind);
       if (!root_item) {
         continue;
       }
-      const YAML::Node list = it.second;
-      if (!list.IsSequence()) {
-        continue;
-      }
-      for (const auto& entry : list) {
-        const QString name =
-            QString::fromStdString(entry["name"].as<std::string>(""));
-        if (name.isEmpty()) {
-          continue;
-        }
-        auto* child = new QTreeWidgetItem(root_item);
-        child->setText(0, unique_child_name(root_item, name));
-        child->setData(0, PropertyEditor::kKindRole, kind);
-        child->setIcon(0, root_item->icon(0));
-        QVariantMap params =
-            project_schema::yaml_map_to_variant_map(entry["params"]);
-        const QString status = QString::fromStdString(
-            entry["status"].as<std::string>(params.value("status").toString()
-                                                .toStdString()));
-        child->setData(0, PropertyEditor::kStatusRole, status);
-        child->setData(0, PropertyEditor::kParamsRole,
-                       normalize_params_for_kind(kind, params));
-      }
+      auto* child = new QTreeWidgetItem(root_item);
+      child->setText(0, entry.name);
+      child->setData(0, PropertyEditor::kKindRole, entry.kind);
+      child->setIcon(0, root_item->icon(0));
+      child->setData(0, PropertyEditor::kStatusRole, entry.status);
+      child->setData(0, PropertyEditor::kParamsRole,
+                     normalize_params_for_kind(entry.kind, entry.params));
     }
     project_path_ = path;
     gmp::log_operation("project", "Project loaded: " + path);
@@ -12048,15 +11872,13 @@ bool MainWindow::load_project(const QString& path) {
         }
       }
     }
-    YAML::Node gmsh_node = root["gmsh"];
-    QVariantMap gmsh_settings;
+    QVariantMap gmsh_settings = data.gmsh_settings;
     if (gmsh_panel_) {
       // 项目专属的 Physical Group 定义不得从先前打开的项目泄漏进来；
       // 老项目没有 gmsh 节点时也必须回到干净状态。
       gmsh_panel_->reset_project_physical_groups();
     }
-    if (gmsh_node && gmsh_node.IsMap() && gmsh_panel_) {
-      gmsh_settings = parse_map(gmsh_node, {});
+    if (!gmsh_settings.isEmpty() && gmsh_panel_) {
       gmsh_panel_->apply_gmsh_settings(gmsh_settings);
     }
     if (gmsh_panel_ && !part_sources.isEmpty()) {
@@ -12073,27 +11895,19 @@ bool MainWindow::load_project(const QString& path) {
       }
     }
 
-    YAML::Node moose_node = root["moose"];
     // 打开项目前先清理上一项目的路径、输入与快照上下文。
     // 这样旧项目即使缺少某个 moose 字段，也会回落到干净默认值，
     // 而不是沿用上一项目的当前控件值。
     if (moose_panel_) {
       moose_panel_->reset_project_state();
     }
-    if (moose_node && moose_node.IsMap() && moose_panel_) {
-      const QSet<QString> force_string = {"exec_path", "input_path", "workdir",
-                                          "mesh_path", "template_key",
-                                          "extra_args", "input_text",
-                                          "input_mode", "structured_input",
-                                          "custom_blocks", "generation_report",
-                                          "last_snapshot_dir"};
-      const QVariantMap moose_settings = parse_map(moose_node, force_string);
-      moose_panel_->apply_moose_settings(moose_settings);
+    if (!data.moose_settings.isEmpty() && moose_panel_) {
+      moose_panel_->apply_moose_settings(data.moose_settings);
       // input_text/structured_input 表明这是由模型树装配并由项目拥有的
       // 输入。旧版本可能保存了其他工程的 diffusion.i/workdir；加载时
       // 按当前项目名重算派生制品路径，外部 mesh_path 仍按 YAML 保留。
-      if (!moose_settings.value("input_text").toString().trimmed().isEmpty() ||
-          !moose_settings.value("structured_input")
+      if (!data.moose_settings.value("input_text").toString().trimmed().isEmpty() ||
+          !data.moose_settings.value("structured_input")
                .toString()
                .trimmed()
                .isEmpty()) {
@@ -12101,25 +11915,15 @@ bool MainWindow::load_project(const QString& path) {
       }
     }
     input_snapshots_.clear();
-    if (moose_node && moose_node.IsMap() && moose_node["input_snapshots"] &&
-        moose_node["input_snapshots"].IsSequence()) {
-      for (const auto& s : moose_node["input_snapshots"]) {
-        input_snapshots_.append(
-            QString::fromStdString(s.as<std::string>("")));
-      }
-    }
+    input_snapshots_.append(data.input_snapshots);
 
-    YAML::Node viewer_node = root["viewer"];
-    if (viewer_node && viewer_node.IsMap() && viewer_) {
-      const QSet<QString> force_string = {"current_file", "array_key", "preset",
-                                          "output_selected"};
-      const QVariantMap viewer_settings = parse_map(viewer_node, force_string);
-      viewer_->apply_viewer_settings(viewer_settings);
+    if (!data.viewer_settings.isEmpty() && viewer_) {
+      viewer_->apply_viewer_settings(data.viewer_settings);
     }
-    schema_version_ = loaded_schema_version;
-    application_profile_ = loaded_application_profile;
-    unit_contract_ = loaded_unit_contract;
-    mesh_snapshot_ = loaded_mesh_snapshot;
+    schema_version_ = data.schema_version;
+    application_profile_ = data.application_profile;
+    unit_contract_ = data.unit_contract;
+    mesh_snapshot_ = data.mesh_snapshot;
     if (gmsh_panel_) {
       gmsh_panel_->set_physical_group_manifest(
           mesh_snapshot_.to_variant_map());
@@ -12187,130 +11991,51 @@ bool MainWindow::save_project(const QString& path) {
     // 避免 Material/Section 已就绪而工程仍持久化旧输入文本。
     sync_model_to_input(path);
 
-    YAML::Node root;
-    root["schema_version"] = schema_version_;
-    root["version"] = 2;  // 保留旧字段以兼容只读 version 的工具
-    root["saved_at"] =
-        QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
-
-    // Phase 0：写入应用档案与单位合同
-    root["application_profile"] =
-        project_schema::variant_map_to_yaml(application_profile_);
-    root["unit_contract"] =
-        project_schema::variant_map_to_yaml(unit_contract_);
-
-    // Phase 0：写入网格快照
-    root["mesh_snapshot"] =
-        project_schema::mesh_snapshot_to_yaml(mesh_snapshot_);
-
-    YAML::Node model(YAML::NodeType::Map);
+    // TASK-V02-020：YAML 装配与写盘下沉到 ProjectStore；此处只做
+    // Tree/面板采集。status 回退（kStatusRole 为空取 params.status）是
+    // UI 侧语义，在采集时解析。
+    ProjectData data;
+    data.schema_version = schema_version_;
+    data.application_profile = application_profile_;
+    data.unit_contract = unit_contract_;
+    data.mesh_snapshot = mesh_snapshot_;
+    data.input_snapshots = input_snapshots_;
     for (int i = 0; i < model_tree_->topLevelItemCount(); ++i) {
       auto* root_item = model_tree_->topLevelItem(i);
       if (!root_item) {
         continue;
       }
-      YAML::Node list(YAML::NodeType::Sequence);
+      data.model_roots << root_item->text(0);
       for (int j = 0; j < root_item->childCount(); ++j) {
         auto* child = root_item->child(j);
         if (!child) {
           continue;
         }
-        YAML::Node entry;
-        entry["name"] = child->text(0).toStdString();
-        entry["kind"] = root_item->text(0).toStdString();
-        const QVariantMap map =
-            child->data(0, PropertyEditor::kParamsRole).toMap();
-        QString status =
-            child->data(0, PropertyEditor::kStatusRole).toString();
-        if (status.isEmpty()) {
-          status = map.value("status").toString();
+        ProjectModelEntry entry;
+        entry.name = child->text(0);
+        entry.kind = root_item->text(0);
+        entry.params = child->data(0, PropertyEditor::kParamsRole).toMap();
+        entry.status = child->data(0, PropertyEditor::kStatusRole).toString();
+        if (entry.status.isEmpty()) {
+          entry.status = entry.params.value("status").toString();
         }
-        entry["status"] = status.toStdString();
-        entry["params"] = project_schema::variant_map_to_yaml(map);
-        list.push_back(entry);
+        data.model_entries.append(entry);
       }
-      model[root_item->text(0).toStdString()] = list;
     }
-    root["model"] = model;
     if (gmsh_panel_) {
-      YAML::Node gmsh_node(YAML::NodeType::Map);
-      const QVariantMap settings = gmsh_panel_->gmsh_settings();
-      for (auto it = settings.begin(); it != settings.end(); ++it) {
-        const QVariant& val = it.value();
-        switch (val.typeId()) {
-          case QMetaType::Bool:
-            gmsh_node[it.key().toStdString()] = val.toBool();
-            break;
-          case QMetaType::Int:
-            gmsh_node[it.key().toStdString()] = val.toInt();
-            break;
-          case QMetaType::Double:
-            gmsh_node[it.key().toStdString()] = val.toDouble();
-            break;
-          default:
-            gmsh_node[it.key().toStdString()] = val.toString().toStdString();
-            break;
-        }
-      }
-      root["gmsh"] = gmsh_node;
+      data.gmsh_settings = gmsh_panel_->gmsh_settings();
     }
-
     if (moose_panel_) {
-      YAML::Node moose_node(YAML::NodeType::Map);
-      const QVariantMap settings = moose_panel_->moose_settings();
-      for (auto it = settings.begin(); it != settings.end(); ++it) {
-        const QVariant& val = it.value();
-        switch (val.typeId()) {
-          case QMetaType::Bool:
-            moose_node[it.key().toStdString()] = val.toBool();
-            break;
-          case QMetaType::Int:
-            moose_node[it.key().toStdString()] = val.toInt();
-            break;
-          case QMetaType::Double:
-            moose_node[it.key().toStdString()] = val.toDouble();
-            break;
-          default:
-            moose_node[it.key().toStdString()] = val.toString().toStdString();
-            break;
-        }
-      }
-      // Phase 0：写入历史输入快照列表
-      if (!input_snapshots_.isEmpty()) {
-        YAML::Node snaps(YAML::NodeType::Sequence);
-        for (const QString& s : input_snapshots_) {
-          snaps.push_back(s.toStdString());
-        }
-        moose_node["input_snapshots"] = snaps;
-      }
-      root["moose"] = moose_node;
+      data.moose_settings = moose_panel_->moose_settings();
     }
-
     if (viewer_) {
-      YAML::Node viewer_node(YAML::NodeType::Map);
-      const QVariantMap settings = viewer_->viewer_settings();
-      for (auto it = settings.begin(); it != settings.end(); ++it) {
-        const QVariant& val = it.value();
-        switch (val.typeId()) {
-          case QMetaType::Bool:
-            viewer_node[it.key().toStdString()] = val.toBool();
-            break;
-          case QMetaType::Int:
-            viewer_node[it.key().toStdString()] = val.toInt();
-            break;
-          case QMetaType::Double:
-            viewer_node[it.key().toStdString()] = val.toDouble();
-            break;
-          default:
-            viewer_node[it.key().toStdString()] = val.toString().toStdString();
-            break;
-        }
-      }
-      root["viewer"] = viewer_node;
+      data.viewer_settings = viewer_->viewer_settings();
     }
-    std::ofstream out(path.toStdString());
-    out << root;
-    out.close();
+    QString save_error;
+    if (!project_store_.save_file(path, data, &save_error)) {
+      QMessageBox::warning(this, "Project Save", save_error);
+      return false;
+    }
     return true;
   } catch (const std::exception& e) {
     QMessageBox::warning(this, "Project Save",
