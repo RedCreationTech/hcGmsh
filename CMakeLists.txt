@@ -142,6 +142,8 @@ add_executable(gmp_ise
   include/gmp/MooseInputGenerator.h
   src/PhysicalGroupService.cpp
   include/gmp/PhysicalGroupService.h
+  src/GmshMesher.cpp
+  include/gmp/GmshMesher.h
   src/SnapshotService.cpp
   include/gmp/SnapshotService.h
   src/ArtifactDialog.cpp
