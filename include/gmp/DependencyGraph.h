@@ -2,8 +2,8 @@
 
 // v0.2 核心层（hc_core 过渡形态，Q5 批复：逻辑边界先行）。依赖图
 // （doc/ref/03 §7.2）：登记上游→下游边，提供下游查询、拓扑排序与 stale
-// 传播闭包。只依赖 Qt Core；Stage 1 与旧程序化传播并存（旧逻辑仍唯一
-// 生效），TASK-V02-060 才切换为图驱动。
+// 传播闭包。只依赖 Qt Core；TASK-V02-060 起 MainWindow::invalidate_downstream_from
+// 经本图执行传播（旧程序化规则仅作为本边集的来源）。
 
 #include <QList>
 #include <QMap>

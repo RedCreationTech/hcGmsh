@@ -129,6 +129,10 @@ add_executable(gmp_ise
   include/gmp/PhysicalGroupManifest.h
   src/ProjectDocument.cpp
   include/gmp/ProjectDocument.h
+  src/DependencyGraph.cpp
+  include/gmp/DependencyGraph.h
+  src/TransactionManager.cpp
+  include/gmp/TransactionManager.h
   src/PropertyBag.cpp
   include/gmp/PropertyBag.h
   src/ProjectSchema.cpp

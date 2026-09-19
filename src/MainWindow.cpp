@@ -82,6 +82,7 @@
 #include "gmp/FloatingPropertyForm.h"
 #include "gmp/ModelTreeAdapter.h"
 #include "gmp/MooseInputGenerator.h"
+#include "gmp/DependencyGraph.h"
 #include "gmp/ProjectStore.h"
 #include "gmp/MoosePanel.h"
 #include "gmp/PropertyBag.h"
@@ -7502,19 +7503,19 @@ void MainWindow::invalidate_downstream_from(const QString& source_kind) {
     return;
   }
 
-  QStringList targets;
-  if (source_kind == "Parts" || source_kind == "Features" ||
-      source_kind == "Sketches") {
-    targets << "Assembly";
-  }
-  if (source_kind == "Mesh") {
-    targets << "Input Cases" << "Jobs";
-  } else if (source_kind == "Input Cases") {
-    targets << "Jobs";
-  } else {
-    targets << "Mesh" << "Input Cases" << "Jobs";
-  }
-  targets.removeDuplicates();
+  // TASK-V02-060：stale 传播切换为 DependencyGraph 驱动。边集单一真源是
+  // gmp::core::legacy_stale_rule_edges()（登记自旧程序化规则）；图闭包与
+  // 旧实现的目标集逐条一致（test_dependency_graph_contract 手工矩阵锁定）。
+  // 应用侧过滤保持不变：run/queue/submit 状态对象跳过、Jobs/Results 源
+  // 不传播、suppress_dirty_ 短路。
+  static const gmp::core::DependencyGraph stale_graph = [] {
+    gmp::core::DependencyGraph graph;
+    for (const auto& edge : gmp::core::legacy_stale_rule_edges()) {
+      graph.addDependency(edge.first, edge.second);
+    }
+    return graph;
+  }();
+  const QStringList targets = stale_graph.markStaleFrom(source_kind);
 
   const QSignalBlocker blocker(model_tree_);
   for (const QString& target_kind : targets) {
