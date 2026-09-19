@@ -152,6 +152,12 @@ add_executable(gmp_ise
   include/gmp/ViewportCamera.h
   src/ViewportSelection.cpp
   include/gmp/ViewportSelection.h
+  src/SketchViewport.cpp
+  include/gmp/SketchViewport.h
+  src/MeshViewport.cpp
+  include/gmp/MeshViewport.h
+  src/ResultViewport.cpp
+  include/gmp/ResultViewport.h
   src/ArtifactDialog.cpp
   include/gmp/MooseTemplates.h
   include/gmp/MooseSnapshot.h

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QWidget>
+#include <memory>
 #include <QString>
 #include <QDateTime>
 #include <QList>
@@ -71,11 +72,15 @@ enum SketchTool {
   SketchToolMove = 6        // 默认移动完整图形；Alt/Option 移动子图元
 };
 
+class SketchViewport;
+class MeshViewport;
+class ResultViewport;
+
 class VtkViewer : public QWidget {
   Q_OBJECT
  public:
   explicit VtkViewer(QWidget* parent = nullptr);
-  ~VtkViewer() override = default;
+  ~VtkViewer() override;
 
   // 视口控制区(标量/网格/视图/...), 供 MainWindow 迁移到右侧边栏
   QWidget* control_tabs() const { return control_tabs_; }
@@ -345,6 +350,13 @@ signals:
   std::vector<MeshEntity> mesh_entities_;
   // TASK-V02-050：选择/过滤/预览状态下沉到共享底座 ViewportSelection。
   gmp::ViewportSelection selection_;
+  // TASK-V02-050：三视口职责委托（facade 保留共享场景状态，见 §13）。
+  std::unique_ptr<gmp::SketchViewport> sketch_viewport_;
+  std::unique_ptr<gmp::MeshViewport> mesh_viewport_;
+  std::unique_ptr<gmp::ResultViewport> result_viewport_;
+  friend class SketchViewport;
+  friend class MeshViewport;
+  friend class ResultViewport;
   bool preview_visual_active_ = false;
   int preview_saved_scalar_visibility_ = 1;
   bool preview_saved_scalar_bar_visibility_ = false;
