@@ -15,6 +15,7 @@
 #include "gmp/PhysicalGroupManifest.h"
 #include "gmp/ProjectDocument.h"
 #include "gmp/ProjectSchema.h"
+#include "gmp/ProjectStore.h"
 #include "gmp/PropertyBag.h"
 #include "gmp/SimClient.h"
 #include "gmp/SketchDocument.h"
@@ -1260,6 +1261,219 @@ void test_unit_display_contract(TestContext& test) {
               "keys without a unit mechanism report none");
 }
 
+// TASK-V02-020：ProjectStore 持久化服务级合同（无 Widget，临时目录）。
+void test_project_store_contract(TestContext& test) {
+  gmp::ProjectStore store;
+  QTemporaryDir workspace;
+
+  // ---- save → load round-trip ----
+  gmp::ProjectData data;
+  data.schema_version = 2;
+  data.application_profile = {{"id", "DamSafetyApp-opt"}, {"version", "1.0.0"}};
+  data.unit_contract = {{"name", "SI"}, {"pressure", "Pa"}};
+  data.mesh_snapshot = valid_physical_groups(QString(64, 'd'));
+  data.model_roots = {"Parts", "Materials", "Input Cases", "Mesh"};
+  gmp::ProjectModelEntry part;
+  part.name = "part_concrete";
+  part.kind = "Parts";
+  part.status = "Ready";
+  part.params = {{"type", "Part"},
+                 {"sketch", "sketch_concrete"},
+                 {"gmsh_volume_tag", qlonglong(1)},
+                 {"gmsh_volume_tags", QVariantList{qlonglong(1)}},
+                 {"visible", true},
+                 {"distance", 0.25}};
+  gmp::ProjectModelEntry mat;
+  mat.name = "concrete_elasticity";
+  mat.kind = "Materials";
+  mat.params = {{"type", "ComputeIsotropicElasticityTensor"},
+                {"block", "instance_concrete"},
+                {"youngs_modulus", 29791459780.0},
+                {"poissons_ratio", 0.2}};
+  data.model_entries = {part, mat};
+  data.gmsh_settings = {{"model_source", "assembly: active"},
+                        {"auto_reload_geometry", true},
+                        {"mesh_dim", 3},
+                        {"mesh_size", 0.5}};
+  data.moose_settings = {{"input_path", "123"},  // force-string：保持字符串
+                         {"workdir", "/tmp/case"},
+                         {"input_text", "[Mesh]\n[]\n"},
+                         {"mpi_ranks", 4},
+                         {"use_mpi", true}};
+  data.input_snapshots = {"snapshots/v1", "snapshots/v2"};
+  data.viewer_settings = {{"current_file", "out/view.msh"},
+                          {"mesh_opacity", 0.5},
+                          {"auto_range", true}};
+  const QString project_file = workspace.filePath("roundtrip.gmp.yaml");
+  QString error;
+  test.expect(store.save_file(project_file, data, &error) && error.isEmpty(),
+              "project store saves a v2 project file");
+  gmp::ProjectData loaded;
+  test.expect(store.load_file(project_file, &loaded, &error),
+              "project store loads the saved file");
+  bool entries_equal = loaded.model_entries.size() == 2;
+  for (int i = 0; entries_equal && i < 2; ++i) {
+    const auto& expected = data.model_entries.at(i);
+    const auto& actual = loaded.model_entries.at(i);
+    entries_equal = actual.name == expected.name &&
+                    actual.kind == expected.kind &&
+                    actual.status == expected.status &&
+                    actual.params == expected.params;
+  }
+  test.expect(entries_equal,
+              "model entries round-trip with typed params intact");
+  test.expect(loaded.model_roots == data.model_roots,
+              "all model roots (including empty ones) are preserved");
+  test.expect(loaded.gmsh_settings == data.gmsh_settings &&
+                  loaded.moose_settings == data.moose_settings &&
+                  loaded.viewer_settings == data.viewer_settings,
+              "panel settings round-trip with type coercion intact");
+  test.expect(loaded.moose_settings.value("input_path").toString() == "123" &&
+                  loaded.moose_settings.value("input_path").typeId() ==
+                      QMetaType::QString,
+              "force-string fields stay strings even when numeric-looking");
+  test.expect(loaded.input_snapshots == data.input_snapshots &&
+                  loaded.mesh_snapshot.mesh_sha256 ==
+                      data.mesh_snapshot.mesh_sha256 &&
+                  loaded.mesh_snapshot.groups.size() == 1,
+              "input snapshots and mesh manifest round-trip");
+  test.expect(read_file(project_file).contains("Input Cases"),
+              "saved file keeps the Input Cases root key (schema shape)");
+
+  // 二次 round-trip 稳定（第一圈之后的类型形态不再漂移）。
+  const QString second_file = workspace.filePath("roundtrip2.gmp.yaml");
+  gmp::ProjectData reloaded;
+  test.expect(store.save_file(second_file, loaded, &error) &&
+                  store.load_file(second_file, &reloaded, &error) &&
+                  reloaded.model_entries.first().params ==
+                      loaded.model_entries.first().params &&
+                  reloaded.gmsh_settings == loaded.gmsh_settings,
+              "second round-trip is a fixed point");
+
+  // 名称去重：与 unique_child_name 同款 base/base_2 规则。
+  gmp::ProjectData dup;
+  dup.model_roots = {"Parts"};
+  gmp::ProjectModelEntry a;
+  a.name = "part";
+  a.kind = "Parts";
+  a.params = {{"type", "Part"}};
+  gmp::ProjectModelEntry b = a;
+  dup.model_entries = {a, b};
+  // 手工构造重名 YAML：save 不会去重（调用方保证唯一），load 去重。
+  const QString dup_file = workspace.filePath("dup.gmp.yaml");
+  QFile dup_out(dup_file);
+  dup_out.open(QIODevice::WriteOnly | QIODevice::Text);
+  dup_out.write("schema_version: 2\nmodel:\n  Parts:\n"
+                "    - {name: part, kind: Parts, params: {type: Part}}\n"
+                "    - {name: part, kind: Parts, params: {type: Part}}\n");
+  dup_out.close();
+  gmp::ProjectData dup_loaded;
+  test.expect(store.load_file(dup_file, &dup_loaded, &error) &&
+                  dup_loaded.model_entries.size() == 2 &&
+                  dup_loaded.model_entries.at(0).name == "part" &&
+                  dup_loaded.model_entries.at(1).name == "part_2",
+              "duplicate entry names are deduplicated with _2 suffix");
+
+  // ---- 加载错误路径 ----
+  gmp::ProjectData unused;
+  test.expect(!store.load_file(workspace.filePath("missing.gmp.yaml"),
+                               &unused, &error) &&
+                  error.contains("Failed to load"),
+              "missing file fails with a readable error");
+  const QString bad_version = workspace.filePath("bad_version.gmp.yaml");
+  write_file(bad_version, "version: 3\nmodel: {}\n");
+  test.expect(!store.load_file(bad_version, &unused, &error) &&
+                  error == "Unsupported project version.",
+              "legacy version > 2 is rejected");
+  const QString bad_schema = workspace.filePath("bad_schema.gmp.yaml");
+  write_file(bad_schema, "schema_version: 99\nmodel: {}\n");
+  test.expect(!store.load_file(bad_schema, &unused, &error) &&
+                  error == "Unsupported schema version: 99",
+              "unknown schema_version is rejected");
+  const QString no_model = workspace.filePath("no_model.gmp.yaml");
+  write_file(no_model, "schema_version: 2\n");
+  test.expect(!store.load_file(no_model, &unused, &error) &&
+                  error == "Invalid project file (missing model).",
+              "missing model section is rejected");
+
+  // ---- 路径迁移（foreign case，真实复制） ----
+  const QString proj_a = workspace.filePath("proj_a.gmp.yaml");
+  const QString proj_b = workspace.filePath("proj_b.gmp.yaml");
+  const QString mesh_a = gmp::project_case_work_dir(proj_a) + "/mesh_g1.msh";
+  const QString mesh_b = gmp::project_case_work_dir(proj_b) + "/mesh_g1.msh";
+  write_file(mesh_a, "gmsh-data\n");
+  gmp::ProjectData foreign;
+  foreign.model_roots = {"Mesh"};
+  gmp::ProjectModelEntry mesh_entry;
+  mesh_entry.name = "mesh_g1";
+  mesh_entry.kind = "Mesh";
+  mesh_entry.params = {{"path", mesh_a}, {"source", "gmsh"}};
+  foreign.model_entries = {mesh_entry};
+  foreign.mesh_snapshot = valid_physical_groups(QString(64, 'e'));
+  foreign.mesh_snapshot.mesh_path = mesh_a;
+  foreign.gmsh_settings = {{"output_path", mesh_a}};
+  foreign.moose_settings = {{"mesh_path", mesh_a},
+                            {"input_text", "  file = " + mesh_a + "\n"}};
+  const auto migrations = store.migrate_mesh_paths(proj_b, &foreign);
+  test.expect(migrations.size() == 1 &&
+                  migrations.first().second == mesh_b &&
+                  foreign.model_entries.first().params.value("path")
+                          .toString() == mesh_b &&
+                  foreign.mesh_snapshot.mesh_path == mesh_b &&
+                  foreign.gmsh_settings.value("output_path").toString() ==
+                      mesh_b &&
+                  foreign.moose_settings.value("mesh_path").toString() ==
+                      mesh_b &&
+                  foreign.moose_settings.value("input_text")
+                          .toString()
+                          .contains(mesh_b),
+              "foreign case mesh path migrates with all linked fields");
+  test.expect(read_file(mesh_b) == "gmsh-data\n" &&
+                  read_file(mesh_a) == "gmsh-data\n",
+              "migration copies the mesh file and leaves the source intact");
+
+  // 已在自有工作目录 → 不动；case 之外的外部路径 → 不动。
+  const auto none_own = store.migrate_mesh_paths(proj_b, &foreign);
+  test.expect(none_own.isEmpty() &&
+                  foreign.model_entries.first().params.value("path")
+                          .toString() == mesh_b,
+              "paths already inside the own case dir are untouched");
+  const QString external = workspace.filePath("elsewhere.msh");
+  write_file(external, "ext\n");
+  gmp::ProjectData ext_data;
+  ext_data.model_roots = {"Mesh"};
+  gmp::ProjectModelEntry ext_entry = mesh_entry;
+  ext_entry.params.insert("path", external);
+  ext_data.model_entries = {ext_entry};
+  store.migrate_mesh_paths(proj_b, &ext_data);
+  test.expect(ext_data.model_entries.first().params.value("path").toString() ==
+                  external,
+              "user-chosen external mesh paths are never migrated");
+
+  // legacy out/ 路径：源缺失时仍重定向、不复制、有迁移记录。
+  const QString legacy =
+      QDir::current().absoluteFilePath("out/v02_020_nonexistent.msh");
+  gmp::ProjectData legacy_data;
+  legacy_data.model_roots = {"Mesh"};
+  gmp::ProjectModelEntry legacy_entry = mesh_entry;
+  legacy_entry.name = "legacy_mesh";
+  legacy_entry.params.insert("path", legacy);
+  legacy_data.model_entries = {legacy_entry};
+  legacy_data.moose_settings = {{"mesh_path", legacy}};
+  const auto legacy_migrations =
+      store.migrate_mesh_paths(proj_a, &legacy_data);
+  const QString legacy_target = gmp::project_case_work_dir(proj_a) +
+                                "/v02_020_nonexistent.msh";
+  test.expect(legacy_migrations.size() == 1 &&
+                  legacy_data.model_entries.first()
+                          .params.value("path")
+                          .toString() == legacy_target &&
+                  legacy_data.moose_settings.value("mesh_path").toString() ==
+                      legacy_target &&
+                  !QFileInfo::exists(legacy_target),
+              "missing legacy out/ source redirects without copying");
+}
+
 void test_submission_manifest(TestContext& test) {
 
   const QByteArray unicode_disposition =
@@ -1377,6 +1591,7 @@ int main(int argc, char* argv[]) {
   test_dependency_graph_contract(test);
   test_transaction_manager_contract(test);
   test_unit_display_contract(test);
+  test_project_store_contract(test);
   test_submission_manifest(test);
   if (test.failures == 0) {
     qInfo("Phase 0 contract tests PASSED");
