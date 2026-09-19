@@ -138,6 +138,8 @@ add_executable(gmp_ise
   include/gmp/UnitDisplay.h
   src/ProjectStore.cpp
   include/gmp/ProjectStore.h
+  src/MooseInputGenerator.cpp
+  include/gmp/MooseInputGenerator.h
   src/ArtifactDialog.cpp
   include/gmp/MooseTemplates.h
   include/gmp/MooseSnapshot.h
@@ -214,6 +216,7 @@ add_executable(gmp_ise_phase0_test tests/test_phase0.cpp
   src/SimClient.cpp include/gmp/SimClient.h
   src/UnitDisplay.cpp include/gmp/UnitDisplay.h
   src/ProjectStore.cpp include/gmp/ProjectStore.h
+  src/MooseInputGenerator.cpp include/gmp/MooseInputGenerator.h
   src/OperationLog.cpp include/gmp/OperationLog.h
   src/SketchDocument.cpp include/gmp/SketchDocument.h
   src/Env.cpp include/gmp/Env.h

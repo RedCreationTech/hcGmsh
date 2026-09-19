@@ -11,6 +11,7 @@
 #include "gmp/ApplicationProfile.h"
 #include "gmp/DependencyGraph.h"
 #include "gmp/MooseMappingRegistry.h"
+#include "gmp/MooseInputGenerator.h"
 #include "gmp/MooseSnapshot.h"
 #include "gmp/PhysicalGroupManifest.h"
 #include "gmp/ProjectDocument.h"
@@ -422,13 +423,12 @@ void test_snapshot_v2(TestContext& test) {
 
 // TASK-V02-003：G1 关键链路（装配 → 网格清单 → .i 生成 → 快照导出）中
 // 已可无 QWidget 调用的环节，在此固化为服务级合同测试。
-// Stage 3 迁移候选（当前依赖 MainWindow/GmshPanel，仅由 GUI 巡览覆盖，
-// 抽服务后应迁入本级）：
-//   - MainWindow::build_*_block / sync_model_to_input 的 .i 全文本不变量
-//     （Materials block、BC boundary、Contact primary/secondary、
-//     [Executioner]/[Preconditioning] 单一性、Outputs 套餐、A/B 逐字一致）；
-//   - MainWindow::build_generation_report 的全对象可追溯行；
-//   - GmshPanel 装配构建 → mesh_manifest 清单产出（owner+bbox 恢复）。
+// Stage 3/4 迁移状态：
+//   - .i 全文本不变量与 A/B 确定性：已由 MooseInputGenerator 下沉
+//     （TASK-V02-030），见 test_moose_input_generator_contract；
+//   - 生成报告可追溯行：同上已覆盖；
+//   - 装配构建 → mesh_manifest 清单产出仍依赖 GmshPanel/gmsh（Stage 4
+//     TASK-V02-040 候选），当前由 GUI 巡览 assembly_instance_contract 等覆盖。
 void test_physical_group_manifest_contract(TestContext& test) {
   // G1 基线形态的清单（2 体组 + 6 面组）必须零错误通过。
   auto make_entry = [](const QString& name, int dim, int tag, int elements) {
@@ -1474,6 +1474,214 @@ void test_project_store_contract(TestContext& test) {
               "missing legacy out/ source redirects without copying");
 }
 
+// TASK-V02-030：MooseInputGenerator 服务级合同。G1 形态条目集（取自
+// phase5-g1-assembly-contact.gmp.yaml model 段）→ 块文本/报告/确定性。
+void test_moose_input_generator_contract(TestContext& test) {
+  auto entry = [](const QString& kind, const QString& name,
+                  const QVariantMap& params) {
+    gmp::ProjectModelEntry e;
+    e.kind = kind;
+    e.name = name;
+    e.params = params;
+    return e;
+  };
+  gmp::MooseInputGenerator::Input input;
+  input.entries = {
+      entry("Materials", "concrete_elasticity",
+            {{"type", "ComputeIsotropicElasticityTensor"},
+             {"block", "instance_concrete"},
+             {"poissons_ratio", 0.2},
+             {"youngs_modulus", 29791459780.0}}),
+      entry("Materials", "concrete_stress",
+            {{"type", "ComputeLinearElasticStress"},
+             {"block", "instance_concrete"}}),
+      entry("Materials", "steel_elasticity",
+            {{"type", "ComputeIsotropicElasticityTensor"},
+             {"block", "instance_plate"},
+             {"poissons_ratio", 0.3},
+             {"youngs_modulus", 206000000000.0}}),
+      entry("Materials", "steel_stress",
+            {{"type", "ComputeLinearElasticStress"},
+             {"block", "instance_plate"}}),
+      entry("Sections", "section_concrete",
+            {{"type", "SolidSection"},
+             {"material", "concrete_elasticity"},
+             {"block", "instance_concrete"}}),
+      entry("Assembly", "instance_concrete",
+            {{"type", "PartInstance"}, {"part", "part_concrete"}}),
+      entry("Physics", "physics_g1",
+            {{"action", "QuasiStatic"},
+             {"block", "instance_plate instance_concrete"},
+             {"volumetric_locking_correction", true},
+             {"add_variables", true},
+             {"incremental", true},
+             {"strain", "SMALL"},
+             {"generate_output", "stress_xx vonmises_stress"},
+             {"save_in_resid", "true"}}),
+      entry("Steps", "step_g1",
+            {{"type", "Transient"},
+             {"start_time", 0.0},
+             {"end_time", 1.0},
+             {"solve_type", "NEWTON"},
+             {"timestepper_type", "IterationAdaptiveDT"},
+             {"dt", 0.01},
+             {"preconditioning_type", "SMP"},
+             {"preconditioning_full", "true"}}),
+      entry("BC", "disp_x",
+            {{"type", "DirichletBC"},
+             {"boundary", "fixed_bottom"},
+             {"value", 0},
+             {"variable", "disp_x"}}),
+      entry("BC", "load_disp_z",
+            {{"type", "FunctionDirichletBC"},
+             {"boundary", "load_top"},
+             {"function", "loading_curve"},
+             {"variable", "disp_z"}}),
+      entry("Functions", "loading_curve",
+            {{"type", "PiecewiseLinear"}, {"x", "0 1"}, {"y", "0 -2.5e-5"}}),
+      entry("Interactions", "contact_plate_concrete",
+            {{"type", "Contact"},
+             {"model", "coulomb"},
+             {"formulation", "kinematic"},
+             {"friction_coefficient", 0.15},
+             {"tangential_tolerance", 0.0005},
+             {"penalty", 1000000000000.0},
+             {"normalize_penalty", true},
+             {"primary", "contact_plate"},
+             {"secondary", "contact_concrete"}}),
+      entry("Outputs", "outputs_g1",
+            {{"type", "Exodus"},
+             {"field_outputs", "stress_xx"},
+             {"hist_boundary", "load_top"},
+             {"hist_disp_variable", "disp_z"},
+             {"hist_displacement_avg", true},
+             {"hist_reaction_force", true},
+             {"output_csv", true},
+             {"output_exodus", true},
+             {"times_enabled", true},
+             {"times_start", 0.0},
+             {"times_end", 1.0},
+             {"times_interval", 0.01},
+             {"times_name", "field_output_times"}}),
+  };
+  input.displacements = "disp_x disp_y disp_z";
+  input.application_profile_id = "DamSafetyApp-opt";
+  input.mapping_registry_loaded = true;
+  input.mapping_registry_version = "1.0.0";
+  input.input_mode = "structured";
+  input.mesh_path = "/work/.work/case/proj/mesh_assembly_g1.msh";
+  input.mesh_snapshot = valid_physical_groups(QString(64, 'f'));
+
+  const auto out = gmp::MooseInputGenerator::generate(input);
+  test.expect(out.materials.contains("[Materials]") &&
+                  out.materials.contains("[concrete_elasticity]") &&
+                  out.materials.contains("block = instance_concrete") &&
+                  out.materials.contains("youngs_modulus = 29791459780") &&
+                  out.materials.contains("block = instance_plate"),
+              "materials block carries typed values and assignments");
+  test.expect(out.bcs.contains("[BCs]") &&
+                  out.bcs.contains("boundary = fixed_bottom") &&
+                  out.bcs.contains("[load_disp_z]") &&
+                  out.bcs.contains("function = loading_curve"),
+              "BCs block carries Dirichlet and FunctionDirichlet entries");
+  test.expect(out.interactions.contains("[Contact]") &&
+                  out.interactions.contains("[contact_plate_concrete]") &&
+                  out.interactions.contains("primary = contact_plate") &&
+                  out.interactions.contains("secondary = contact_concrete") &&
+                  out.interactions.contains("friction_coefficient = 0.15") &&
+                  !out.interactions.contains("master"),
+              "contact block uses primary/secondary syntax");
+  test.expect(out.executioner.contains("[Executioner]") &&
+                  out.executioner.contains("type = Transient") &&
+                  out.executioner.contains("[TimeStepper]") &&
+                  out.executioner.contains("type = IterationAdaptiveDT") &&
+                  out.executioner.contains("[Preconditioning/smp]") &&
+                  out.executioner.contains("full = true"),
+              "executioner carries TimeStepper sub-block and Preconditioning");
+  test.expect(out.global_params ==
+                  "[GlobalParams]\n  displacements = 'disp_x disp_y disp_z'\n[]\n",
+              "global params carry the injected displacements");
+  test.expect(out.physics_headers ==
+                  QStringList{"Physics/SolidMechanics/QuasiStatic/physics_g1"} &&
+                  out.physics_blocks.first().contains(
+                      "block = 'instance_plate instance_concrete'") &&
+                  out.physics_blocks.first().contains(
+                      "save_in = 'resid_x resid_y resid_z'"),
+              "physics action block quotes multi-value block and save_in");
+  test.expect(out.outputs.contains("[field_exodus]") &&
+                  out.outputs.contains("[history_csv]") &&
+                  out.times_header == "Times/field_output_times" &&
+                  out.times.contains("time_interval = 0.01"),
+              "outputs package emits exodus/csv and the Times object");
+  test.expect(out.aux_variables.contains("[resid_x]") &&
+                  out.aux_kernels.contains("type = MaterialRealAux") &&
+                  out.aux_kernels.contains("block = 'instance_plate'") &&
+                  out.postprocessors.contains("[load_top_reaction_x]") &&
+                  out.postprocessors.contains("[load_top_disp_avg]"),
+              "aux variables/kernels and history postprocessors follow the "
+              "outputs package");
+  test.expect(out.console_warnings.isEmpty() && out.status_warning.isEmpty(),
+              "clean G1-shaped input produces no warnings");
+
+  // 报告可追溯行（ TASK-V02-003 候选转正 ）。
+  test.expect(out.generation_report.contains(
+                  "Application profile: DamSafetyApp-opt") &&
+                  out.generation_report.contains("Mapping registry: 1.0.0") &&
+                  out.generation_report.contains(
+                      "[Mesh/file] <- Mesh path /work/.work/case/proj/"
+                      "mesh_assembly_g1.msh") &&
+                  out.generation_report.contains(
+                      "[Contact/contact_plate_concrete] <- Model Tree "
+                      "Interactions/contact_plate_concrete "
+                      "(primary=contact_plate, secondary=contact_concrete, "
+                      "mapping=Contact/Contact)") &&
+                  out.generation_report.contains(
+                      "[Executioner] <- Model Tree Steps/step_g1") &&
+                  out.generation_report.contains("Physical Groups:"),
+              "generation report carries full traceability lines");
+
+  // 确定性：两次生成逐字一致。
+  const auto out_b = gmp::MooseInputGenerator::generate(input);
+  auto flatten = [](const gmp::MooseInputGenerator::Output& o) {
+    return o.functions + o.variables + o.materials + o.bcs + o.loads +
+           o.outputs + o.executioner + o.global_params +
+           o.physics_blocks.join("") + o.interactions + o.aux_variables +
+           o.aux_kernels + o.postprocessors + o.times + o.generation_report;
+  };
+  test.expect(flatten(out) == flatten(out_b),
+              "generation is deterministic across repeated calls");
+
+  // 警告通道：多 Step 时控制台+状态栏双通道警告。
+  auto multi = input;
+  multi.entries.append(entry("Steps", "step_second",
+                             {{"type", "Transient"}}));
+  const auto warned = gmp::MooseInputGenerator::generate(multi);
+  test.expect(!warned.status_warning.isEmpty() &&
+                  warned.console_warnings.contains(warned.status_warning),
+              "multiple Steps raise the dual-channel warning");
+
+  // 文本工具单元合同：引用规则与 upsert 幂等。
+  test.expect(gmp::MooseInputGenerator::quote_moose_value_if_needed("a b") ==
+                  "'a b'" &&
+                  gmp::MooseInputGenerator::quote_moose_value_if_needed(
+                      "'a b'") == "'a b'" &&
+                  gmp::MooseInputGenerator::quote_moose_value_if_needed(
+                      "abc") == "abc",
+              "MOOSE value quoting follows the whitespace rule");
+  const QString base_input = "[Mesh]\n[]\n";
+  const QString upserted = gmp::MooseInputGenerator::upsert_generated_block(
+      base_input, "GlobalParams", "[GlobalParams]\n  displacements = 'disp_x'\n[]\n");
+  test.expect(upserted.contains("[GlobalParams]") &&
+                  gmp::MooseInputGenerator::upsert_generated_block(
+                      upserted, "GlobalParams",
+                      "[GlobalParams]\n  displacements = 'disp_x'\n[]\n") ==
+                      upserted,
+              "upsert appends once and is idempotent for identical blocks");
+  test.expect(gmp::MooseInputGenerator::generated_headers_with_prefix(
+                  upserted, "Global") == QStringList{"GlobalParams"},
+              "generated header scan finds the upserted block");
+}
+
 void test_submission_manifest(TestContext& test) {
 
   const QByteArray unicode_disposition =
@@ -1592,6 +1800,7 @@ int main(int argc, char* argv[]) {
   test_transaction_manager_contract(test);
   test_unit_display_contract(test);
   test_project_store_contract(test);
+  test_moose_input_generator_contract(test);
   test_submission_manifest(test);
   if (test.failures == 0) {
     qInfo("Phase 0 contract tests PASSED");
