@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "gmp/SketchDocument.h"
+#include "gmp/ViewportSelection.h"
 
 class QLabel;
 class QCheckBox;
@@ -342,13 +343,8 @@ signals:
   std::vector<MeshGroup> mesh_groups_;
   std::vector<int> mesh_elem_types_;
   std::vector<MeshEntity> mesh_entities_;
-  int selected_group_dim_ = -1;
-  int selected_group_id_ = -1;
-  int selected_cell_id_ = -1;
-  int selected_entity_dim_ = -1;
-  int selected_entity_tag_ = -1;
-  int preview_entity_dim_ = -1;
-  int preview_entity_tag_ = -1;
+  // TASK-V02-050：选择/过滤/预览状态下沉到共享底座 ViewportSelection。
+  gmp::ViewportSelection selection_;
   bool preview_visual_active_ = false;
   int preview_saved_scalar_visibility_ = 1;
   bool preview_saved_scalar_bar_visibility_ = false;

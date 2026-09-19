@@ -1,4 +1,6 @@
 #include "gmp/VtkViewer.h"
+#include "gmp/ViewportCamera.h"
+#include "gmp/ViewportSelection.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -1048,11 +1050,11 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
           this, [this](int) { update_selection_pipeline(); });
   pick_clear_ = new QPushButton("Clear");
   connect(pick_clear_, &QPushButton::clicked, this, [this]() {
-    selected_group_dim_ = -1;
-    selected_group_id_ = -1;
-    selected_entity_dim_ = -1;
-    selected_entity_tag_ = -1;
-    selected_cell_id_ = -1;
+    selection_.group_dim_ = -1;
+    selection_.group_id_ = -1;
+    selection_.entity_dim_ = -1;
+    selection_.entity_tag_ = -1;
+    selection_.cell_id_ = -1;
     update_selection_pipeline();
     if (pick_info_) {
       pick_info_->setText("Pick: cleared");
@@ -1156,14 +1158,14 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
     if (slice_enable_) {
       slice_enable_->setChecked(false);
     }
-    selected_group_dim_ = -1;
-    selected_group_id_ = -1;
-    selected_entity_dim_ = -1;
-    selected_entity_tag_ = -1;
-    preview_entity_dim_ = -1;
-    preview_entity_tag_ = -1;
+    selection_.group_dim_ = -1;
+    selection_.group_id_ = -1;
+    selection_.entity_dim_ = -1;
+    selection_.entity_tag_ = -1;
+    selection_.preview_dim_ = -1;
+    selection_.preview_tag_ = -1;
     preview_visual_active_ = false;
-    selected_cell_id_ = -1;
+    selection_.cell_id_ = -1;
     update_mesh_pipeline();
   });
   hrow(view_layout, {view_combo_, view_apply_});
@@ -1473,13 +1475,13 @@ void VtkViewer::clear_stage_data() {
   mesh_elem_types_.clear();
   mesh_entities_.clear();
   time_steps_.clear();
-  selected_group_dim_ = -1;
-  selected_group_id_ = -1;
-  selected_cell_id_ = -1;
-  selected_entity_dim_ = -1;
-  selected_entity_tag_ = -1;
-  preview_entity_dim_ = -1;
-  preview_entity_tag_ = -1;
+  selection_.group_dim_ = -1;
+  selection_.group_id_ = -1;
+  selection_.cell_id_ = -1;
+  selection_.entity_dim_ = -1;
+  selection_.entity_tag_ = -1;
+  selection_.preview_dim_ = -1;
+  selection_.preview_tag_ = -1;
   mesh_select_occ_geometry_ = nullptr;
   preview_visual_active_ = false;
 
@@ -1692,12 +1694,12 @@ void VtkViewer::set_mesh_file_impl(const QString& path,
   // A newly loaded mesh must not inherit entity/type filters from the
   // previously displayed Part.  The indices refer to different Gmsh models
   // and can otherwise hide an otherwise valid assembly preview.
-  selected_group_dim_ = -1;
-  selected_group_id_ = -1;
-  selected_entity_dim_ = -1;
-  selected_entity_tag_ = -1;
-  preview_entity_dim_ = -1;
-  preview_entity_tag_ = -1;
+  selection_.group_dim_ = -1;
+  selection_.group_id_ = -1;
+  selection_.entity_dim_ = -1;
+  selection_.entity_tag_ = -1;
+  selection_.preview_dim_ = -1;
+  selection_.preview_tag_ = -1;
   preview_visual_active_ = false;
   if (mesh_entity_) {
     mesh_entity_->blockSignals(true);
@@ -1733,9 +1735,7 @@ void VtkViewer::set_mesh_group_filter(int dim, int tag) {
     return;
   }
   const bool clear_filter = dim < 0 || tag < 0;
-  selected_group_dim_ = dim;
-  selected_group_id_ = tag;
-  selected_cell_id_ = -1;
+  selection_.set_group_filter(dim, tag);
   int target_index = 0;
   if (!clear_filter) {
     for (size_t i = 0; i < mesh_groups_.size(); ++i) {
@@ -1758,11 +1758,11 @@ void VtkViewer::set_mesh_group_filter(int dim, int tag) {
     // 会因此停留在 2D，并把 contact/fixed/load 等边界组按 phys_id
     // 覆盖显示为红绿拼色。清除筛选时同时回到网格最高维，并清掉独立的
     // entity/cell 选择，恢复进入筛选前的完整实体视图。
-    selected_group_dim_ = -1;
-    selected_group_id_ = -1;
-    selected_entity_dim_ = -1;
-    selected_entity_tag_ = -1;
-    selected_cell_id_ = -1;
+    selection_.group_dim_ = -1;
+    selection_.group_id_ = -1;
+    selection_.entity_dim_ = -1;
+    selection_.entity_tag_ = -1;
+    selection_.cell_id_ = -1;
     if (mesh_entity_) {
       const int all_entities = mesh_entity_->findData(-1);
       if (all_entities >= 0) {
@@ -1809,9 +1809,7 @@ void VtkViewer::set_mesh_entity_filter(int dim, int tag) {
   if (!mesh_entity_ || mesh_entity_->count() == 0) {
     return;
   }
-  selected_entity_dim_ = dim;
-  selected_entity_tag_ = tag;
-  selected_cell_id_ = -1;
+  selection_.set_entity_filter(dim, tag);
   int target_index = 0;
   if (dim >= 0 && tag >= 0) {
     for (size_t i = 0; i < mesh_entities_.size(); ++i) {
@@ -1850,8 +1848,7 @@ void VtkViewer::preview_mesh_entity(int dim, int tag, double view_x,
     }
     preview_visual_active_ = true;
   }
-  preview_entity_dim_ = activate ? dim : -1;
-  preview_entity_tag_ = activate ? tag : -1;
+  selection_.set_preview(activate ? dim : -1, activate ? tag : -1);
   if (!activate) {
     mesh_select_occ_geometry_ = nullptr;
   }
@@ -1897,33 +1894,13 @@ void VtkViewer::preview_mesh_entity(int dim, int tag, double view_x,
     if (selected) {
       selected->GetBounds(bounds);
     }
-    const bool valid_bounds =
-        std::isfinite(bounds[0]) && std::isfinite(bounds[1]) &&
-        std::isfinite(bounds[2]) && std::isfinite(bounds[3]) &&
-        std::isfinite(bounds[4]) && std::isfinite(bounds[5]) &&
-        bounds[1] >= bounds[0] && bounds[3] >= bounds[2] &&
-        bounds[5] >= bounds[4];
-    const double norm =
-        std::sqrt(view_x * view_x + view_y * view_y + view_z * view_z);
-    if (valid_bounds && norm > 1e-12) {
-      const double center[3] = {0.5 * (bounds[0] + bounds[1]),
-                                0.5 * (bounds[2] + bounds[3]),
-                                0.5 * (bounds[4] + bounds[5])};
-      const double dx = mesh_bounds_[1] - mesh_bounds_[0];
-      const double dy = mesh_bounds_[3] - mesh_bounds_[2];
-      const double dz = mesh_bounds_[5] - mesh_bounds_[4];
-      const double distance =
-          std::max(1.0, 1.35 * std::sqrt(dx * dx + dy * dy + dz * dz));
+    const gmp::PreviewCameraResult focus = gmp::preview_focus_camera(
+        bounds, mesh_bounds_, view_x, view_y, view_z);
+    if (focus.valid) {
       vtkCamera* camera = renderer_->GetActiveCamera();
-      camera->SetFocalPoint(center);
-      camera->SetPosition(center[0] + distance * view_x / norm,
-                          center[1] + distance * view_y / norm,
-                          center[2] + distance * view_z / norm);
-      if (std::abs(view_z / norm) > 0.95) {
-        camera->SetViewUp(0.0, 1.0, 0.0);
-      } else {
-        camera->SetViewUp(0.0, 0.0, 1.0);
-      }
+      camera->SetFocalPoint(focus.focal);
+      camera->SetPosition(focus.position);
+      camera->SetViewUp(focus.view_up);
       renderer_->ResetCameraClippingRange();
     }
   }
@@ -1943,7 +1920,7 @@ void VtkViewer::preview_mesh_entity(int dim, int tag, double view_x,
 
 bool VtkViewer::is_mesh_entity_previewed(int dim, int tag) const {
 #ifdef GMP_ENABLE_VTK_VIEWER
-  return preview_entity_dim_ == dim && preview_entity_tag_ == tag;
+  return selection_.is_previewed(dim, tag);
 #else
   Q_UNUSED(dim);
   Q_UNUSED(tag);
@@ -3890,18 +3867,18 @@ void VtkViewer::update_mesh_pipeline() {
     }
   }
   if (group_index >= 0 && group_id >= 0) {
-    selected_group_dim_ = group_dim;
-    selected_group_id_ = group_id;
+    selection_.group_dim_ = group_dim;
+    selection_.group_id_ = group_id;
   } else if (mesh_group_ && mesh_group_->currentData().toInt() < 0) {
-    selected_group_dim_ = -1;
-    selected_group_id_ = -1;
+    selection_.group_dim_ = -1;
+    selection_.group_id_ = -1;
   }
   if (entity_index >= 0 && entity_tag >= 0 && entity_dim >= 0) {
-    selected_entity_dim_ = entity_dim;
-    selected_entity_tag_ = entity_tag;
+    selection_.entity_dim_ = entity_dim;
+    selection_.entity_tag_ = entity_tag;
   } else if (mesh_entity_ && mesh_entity_->currentData().toInt() < 0) {
-    selected_entity_dim_ = -1;
-    selected_entity_tag_ = -1;
+    selection_.entity_dim_ = -1;
+    selection_.entity_tag_ = -1;
   }
 
   vtkAlgorithmOutput* current_port = nullptr;
@@ -4234,27 +4211,27 @@ void VtkViewer::handle_pick(int x, int y) {
     }
     const int mode = pick_mode_ ? pick_mode_->currentData().toInt() : 0;
     if (mode == 2) {
-      selected_cell_id_ =
+      selection_.cell_id_ =
           cell_index >= 0 ? cell_index : static_cast<int>(cell_id);
-      selected_group_dim_ = phys_dim;
-      selected_group_id_ = phys_id;
-      selected_entity_dim_ = ent_dim;
-      selected_entity_tag_ = ent_tag;
+      selection_.group_dim_ = phys_dim;
+      selection_.group_id_ = phys_id;
+      selection_.entity_dim_ = ent_dim;
+      selection_.entity_tag_ = ent_tag;
     } else if (mode == 1) {
-      selected_entity_dim_ = ent_dim;
-      selected_entity_tag_ = ent_tag;
-      selected_group_dim_ = phys_dim;
-      selected_group_id_ = phys_id;
-      selected_cell_id_ = -1;
+      selection_.entity_dim_ = ent_dim;
+      selection_.entity_tag_ = ent_tag;
+      selection_.group_dim_ = phys_dim;
+      selection_.group_id_ = phys_id;
+      selection_.cell_id_ = -1;
       if (ent_dim >= 0 && ent_tag >= 0) {
         emit mesh_entity_picked(ent_dim, ent_tag);
       }
     } else {
-      selected_group_dim_ = phys_dim;
-      selected_group_id_ = phys_id;
-      selected_entity_dim_ = ent_dim;
-      selected_entity_tag_ = ent_tag;
-      selected_cell_id_ = -1;
+      selection_.group_dim_ = phys_dim;
+      selection_.group_id_ = phys_id;
+      selection_.entity_dim_ = ent_dim;
+      selection_.entity_tag_ = ent_tag;
+      selection_.cell_id_ = -1;
     }
     update_selection_pipeline();
     return;
@@ -4381,7 +4358,7 @@ void VtkViewer::update_selection_pipeline() {
     return;
   }
   const bool entity_preview =
-      preview_entity_dim_ >= 0 && preview_entity_tag_ >= 0;
+      selection_.preview_dim_ >= 0 && selection_.preview_tag_ >= 0;
   if (!entity_preview && (!pick_enable_ || !pick_enable_->isChecked())) {
     if (mesh_select_actor_) {
       mesh_select_actor_->SetVisibility(false);
@@ -4398,10 +4375,10 @@ void VtkViewer::update_selection_pipeline() {
   const int mode =
       entity_preview ? 1 : (pick_mode_ ? pick_mode_->currentData().toInt() : 0);
   const int entity_dim =
-      entity_preview ? preview_entity_dim_ : selected_entity_dim_;
+      entity_preview ? selection_.preview_dim_ : selection_.entity_dim_;
   const int entity_tag =
-      entity_preview ? preview_entity_tag_ : selected_entity_tag_;
-  if (mode == 2 && selected_cell_id_ < 0) {
+      entity_preview ? selection_.preview_tag_ : selection_.entity_tag_;
+  if (mode == 2 && selection_.cell_id_ < 0) {
     if (mesh_select_actor_) {
       mesh_select_actor_->SetVisibility(false);
     }
@@ -4413,7 +4390,7 @@ void VtkViewer::update_selection_pipeline() {
     }
     return;
   }
-  if (mode == 0 && (selected_group_id_ < 0 || selected_group_dim_ < 0)) {
+  if (mode == 0 && (selection_.group_id_ < 0 || selection_.group_dim_ < 0)) {
     if (mesh_select_actor_) {
       mesh_select_actor_->SetVisibility(false);
     }
@@ -4478,8 +4455,8 @@ void VtkViewer::update_selection_pipeline() {
     mesh_select_cell_threshold_->SetInputData(mesh_grid_);
     mesh_select_cell_threshold_->SetInputArrayToProcess(
         0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, "cell_id");
-    mesh_select_cell_threshold_->SetLowerThreshold(selected_cell_id_);
-    mesh_select_cell_threshold_->SetUpperThreshold(selected_cell_id_);
+    mesh_select_cell_threshold_->SetLowerThreshold(selection_.cell_id_);
+    mesh_select_cell_threshold_->SetUpperThreshold(selection_.cell_id_);
     current = mesh_select_cell_threshold_->GetOutputPort();
   } else if (mode == 1) {
     mesh_select_entity_dim_threshold_->SetInputData(mesh_grid_);
@@ -4498,14 +4475,14 @@ void VtkViewer::update_selection_pipeline() {
     mesh_select_dim_threshold_->SetInputData(mesh_grid_);
     mesh_select_dim_threshold_->SetInputArrayToProcess(
         0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, "phys_dim");
-    mesh_select_dim_threshold_->SetLowerThreshold(selected_group_dim_);
-    mesh_select_dim_threshold_->SetUpperThreshold(selected_group_dim_);
+    mesh_select_dim_threshold_->SetLowerThreshold(selection_.group_dim_);
+    mesh_select_dim_threshold_->SetUpperThreshold(selection_.group_dim_);
     mesh_select_group_threshold_->SetInputConnection(
         mesh_select_dim_threshold_->GetOutputPort());
     mesh_select_group_threshold_->SetInputArrayToProcess(
         0, 0, 0, vtkDataObject::FIELD_ASSOCIATION_CELLS, "phys_id");
-    mesh_select_group_threshold_->SetLowerThreshold(selected_group_id_);
-    mesh_select_group_threshold_->SetUpperThreshold(selected_group_id_);
+    mesh_select_group_threshold_->SetLowerThreshold(selection_.group_id_);
+    mesh_select_group_threshold_->SetUpperThreshold(selection_.group_id_);
     current = mesh_select_group_threshold_->GetOutputPort();
   }
 
@@ -4646,37 +4623,23 @@ void VtkViewer::apply_view_preset(int preset) {
   }
   double bounds[6] = {0, 0, 0, 0, 0, 0};
   data->GetBounds(bounds);
-  const double cx = (bounds[0] + bounds[1]) * 0.5;
-  const double cy = (bounds[2] + bounds[3]) * 0.5;
-  const double cz = (bounds[4] + bounds[5]) * 0.5;
-  const double dx = bounds[1] - bounds[0];
-  const double dy = bounds[3] - bounds[2];
-  const double dz = bounds[5] - bounds[4];
-  const double max_extent = std::max({dx, dy, dz, 1.0});
-  const double dist = max_extent * 2.5;
   auto* cam = renderer_->GetActiveCamera();
   if (!cam) {
     return;
   }
-  if (preset == 0) {
+  const gmp::CameraPresetResult preset_cam =
+      gmp::view_preset_camera(bounds, preset);
+  if (preset_cam.fit) {
     renderer_->ResetCamera();
     render_window_->Render();
     return;
   }
-  if (preset == 1) {  // Front (+X)
-    cam->SetPosition(cx + dist, cy, cz);
-    cam->SetViewUp(0, 0, 1);
-  } else if (preset == 2) {  // Right (+Y)
-    cam->SetPosition(cx, cy + dist, cz);
-    cam->SetViewUp(0, 0, 1);
-  } else if (preset == 3) {  // Top (+Z)
-    cam->SetPosition(cx, cy, cz + dist);
-    cam->SetViewUp(0, 1, 0);
-  } else {  // Iso
-    cam->SetPosition(cx + dist, cy + dist, cz + dist);
-    cam->SetViewUp(0, 0, 1);
-  }
-  cam->SetFocalPoint(cx, cy, cz);
+  cam->SetPosition(preset_cam.position[0], preset_cam.position[1],
+                   preset_cam.position[2]);
+  cam->SetViewUp(preset_cam.view_up[0], preset_cam.view_up[1],
+                 preset_cam.view_up[2]);
+  cam->SetFocalPoint(preset_cam.focal[0], preset_cam.focal[1],
+                     preset_cam.focal[2]);
   renderer_->ResetCameraClippingRange();
   render_window_->Render();
 #else

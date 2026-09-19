@@ -24,6 +24,8 @@
 #include "gmp/SimClient.h"
 #include "gmp/SketchDocument.h"
 #include "gmp/SnapshotService.h"
+#include "gmp/ViewportCamera.h"
+#include "gmp/ViewportSelection.h"
 #include "gmp/TransactionManager.h"
 #include "gmp/UnitDisplay.h"
 
@@ -1916,6 +1918,87 @@ void test_assembly_mesher_service_contract(TestContext& test) {
               "mesher prepare without gmsh throws a readable MeshJobError");
 }
 
+// TASK-V02-050：视口共享底座纯逻辑合同（相机数学 + 选择状态机）。
+void test_viewport_foundation_contract(TestContext& test) {
+  // 视角预设：与 VtkViewer 原内联计算逐点一致。
+  const double bounds[6] = {0.0, 10.0, 0.0, 20.0, 0.0, 5.0};
+  {
+    const auto r = gmp::view_preset_camera(bounds, 0);
+    test.expect(r.fit, "preset 0 is the fit/reset-camera case");
+  }
+  {
+    const auto r = gmp::view_preset_camera(bounds, 1);  // Front (+X)
+    // center=(5,10,2.5)，max_extent=20，dist=50
+    test.expect(!r.fit && r.position[0] == 55.0 && r.position[1] == 10.0 &&
+                    r.position[2] == 2.5 && r.focal[0] == 5.0 &&
+                    r.focal[1] == 10.0 && r.focal[2] == 2.5 &&
+                    r.view_up[2] == 1.0,
+                "front preset matches the legacy camera math");
+  }
+  {
+    const auto r = gmp::view_preset_camera(bounds, 2);  // Right (+Y)
+    test.expect(r.position[0] == 5.0 && r.position[1] == 60.0 &&
+                    r.position[2] == 2.5 && r.view_up[2] == 1.0,
+                "right preset matches the legacy camera math");
+  }
+  {
+    const auto r = gmp::view_preset_camera(bounds, 3);  // Top (+Z)
+    test.expect(r.position[2] == 52.5 && r.view_up[1] == 1.0 &&
+                    r.view_up[2] == 0.0,
+                "top preset uses the +Y view-up override");
+  }
+  {
+    const auto r = gmp::view_preset_camera(bounds, 4);  // Iso
+    test.expect(r.position[0] == 55.0 && r.position[1] == 60.0 &&
+                    r.position[2] == 52.5 && r.view_up[2] == 1.0,
+                "iso preset matches the legacy camera math");
+  }
+  // 预览对焦：法线方向 + view-up 规则 + 无效输入。
+  {
+    const double mesh_bounds[6] = {0.0, 100.0, 0.0, 100.0, 0.0, 100.0};
+    const double face[6] = {0.0, 10.0, 0.0, 10.0, 20.0, 20.0};
+    const auto r = gmp::preview_focus_camera(face, mesh_bounds, 0.0, 0.0, 1.0);
+    // center=(5,5,20)，distance=1.35*sqrt(30000)≈233.8，方向 (0,0,1)
+    test.expect(r.valid && r.focal[0] == 5.0 && r.focal[1] == 5.0 &&
+                    r.focal[2] == 20.0 &&
+                    std::abs(r.position[2] - (20.0 + r.position[2])) >= 0.0 &&
+                    r.view_up[1] == 1.0 && r.view_up[2] == 0.0,
+                "preview focus along +Z uses the +Y view-up rule");
+    test.expect(std::abs(r.position[0] - 5.0) < 1e-9 &&
+                    std::abs(r.position[1] - 5.0) < 1e-9 &&
+                    r.position[2] > 20.0,
+                "preview focus positions the camera along the view direction");
+    const auto bad =
+        gmp::preview_focus_camera(face, mesh_bounds, 0.0, 0.0, 0.0);
+    test.expect(!bad.valid, "zero view direction yields no focus camera");
+  }
+
+  // 选择状态机。
+  gmp::ViewportSelection sel;
+  sel.set_group_filter(2, 7);
+  test.expect(sel.group_dim_ == 2 && sel.group_id_ == 7 &&
+                  sel.cell_id_ == -1,
+              "group filter sets the group and clears the cell");
+  sel.set_entity_filter(2, 12);
+  sel.set_preview(2, 12);
+  sel.set_group_filter(-1, -1);
+  test.expect(sel.group_dim_ == -1 && sel.entity_dim_ == -1 &&
+                  sel.cell_id_ == -1 && sel.is_previewed(2, 12),
+              "clearing the group filter resets entity/cell but keeps preview");
+  sel.set_entity_filter(3, 4);
+  test.expect(sel.entity_dim_ == 3 && sel.entity_tag_ == 4 &&
+                  sel.group_dim_ == -1,
+              "entity filter is independent of the cleared group");
+  sel.set_preview(-1, -1);
+  test.expect(!sel.has_preview() && !sel.is_previewed(2, 12),
+              "negative preview clears the overlay state");
+  sel.set_group_filter(2, 1);
+  sel.set_preview(2, 1);
+  sel.clear_all();
+  test.expect(sel.group_dim_ == -1 && sel.preview_dim_ == -1,
+              "clear_all resets every selection channel");
+}
+
 void test_submission_manifest(TestContext& test) {
 
   const QByteArray unicode_disposition =
@@ -2038,6 +2121,7 @@ int main(int argc, char* argv[]) {
   test_snapshot_service_contract(test);
   test_physical_group_service_contract(test);
   test_assembly_mesher_service_contract(test);
+  test_viewport_foundation_contract(test);
   test_submission_manifest(test);
   if (test.failures == 0) {
     qInfo("Phase 0 contract tests PASSED");

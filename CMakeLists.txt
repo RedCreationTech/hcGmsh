@@ -148,6 +148,10 @@ add_executable(gmp_ise
   include/gmp/AssemblyGeometryService.h
   src/SnapshotService.cpp
   include/gmp/SnapshotService.h
+  src/ViewportCamera.cpp
+  include/gmp/ViewportCamera.h
+  src/ViewportSelection.cpp
+  include/gmp/ViewportSelection.h
   src/ArtifactDialog.cpp
   include/gmp/MooseTemplates.h
   include/gmp/MooseSnapshot.h
@@ -229,6 +233,8 @@ add_executable(gmp_ise_phase0_test tests/test_phase0.cpp
   src/AssemblyGeometryService.cpp include/gmp/AssemblyGeometryService.h
   src/GmshMesher.cpp include/gmp/GmshMesher.h
   src/SnapshotService.cpp include/gmp/SnapshotService.h
+  src/ViewportCamera.cpp include/gmp/ViewportCamera.h
+  src/ViewportSelection.cpp include/gmp/ViewportSelection.h
   src/OperationLog.cpp include/gmp/OperationLog.h
   src/SketchDocument.cpp include/gmp/SketchDocument.h
   src/Env.cpp include/gmp/Env.h
