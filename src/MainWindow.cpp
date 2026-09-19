@@ -5092,6 +5092,12 @@ void MainWindow::build_menu() {
       }
       refresh_job_table();
       property_editor_->set_item(nullptr);
+      // 2026-09-19-027：新建项目必须清空舞台（网格/结果、变量数组列表、
+      // 组筛选与拾取态），否则旧项目网格在中央舞台残留。
+      if (viewer_) {
+        viewer_->clear_stage_data();
+      }
+      active_ui_context_.stage_selections.clear();
       refresh_module_pages();
       // W-00a：注册表可用时新建项目默认选中生产档案（不标记修改）。
       if (app_profile_registry_.is_loaded()) {
@@ -11917,8 +11923,18 @@ bool MainWindow::load_project(const QString& path) {
     input_snapshots_.clear();
     input_snapshots_.append(data.input_snapshots);
 
-    if (!data.viewer_settings.isEmpty() && viewer_) {
-      viewer_->apply_viewer_settings(data.viewer_settings);
+    if (viewer_) {
+      // 2026-09-19-027：打开的项目没有保存的舞台文件时清空舞台，避免
+      // 旧项目网格/变量数组残留；有 current_file 时 apply 会加载新文件
+      // 覆盖，无中间态闪存。
+      if (data.viewer_settings.value("current_file").toString()
+              .trimmed()
+              .isEmpty()) {
+        viewer_->clear_stage_data();
+      }
+      if (!data.viewer_settings.isEmpty()) {
+        viewer_->apply_viewer_settings(data.viewer_settings);
+      }
     }
     schema_version_ = data.schema_version;
     application_profile_ = data.application_profile;
@@ -18373,13 +18389,21 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                 },
                 this});
   steps.append({"project_context_isolation_contract",
-                [this]() {
+                [this, resolve_tour_fixture]() {
                   // G0 回归：新建项目必须丢弃上一项目的
                   // input/workdir/mesh、快照和专家扩展；运行器偏好
                   // 仍属于用户级设置。
-                  if (!moose_panel_ || !action_new_) {
+                  // 2026-09-19-027：新建/打开无舞台文件的项目还必须清空
+                  // VTK 舞台（网格残留与变量数组列表）。
+                  if (!moose_panel_ || !action_new_ || !viewer_) {
                     throw std::runtime_error(
                         "Project context isolation fixture is missing");
+                  }
+                  const QString stage_fixture = resolve_tour_fixture(
+                      "cdp-v01/uniaxial_compression_mesh.e");
+                  if (stage_fixture.isEmpty()) {
+                    throw std::runtime_error(
+                        "Stage residue fixture mesh is missing");
                   }
                   auto* materials = find_root_item("Materials");
                   if (!materials ||
@@ -18407,6 +18431,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
 
                   // 巡览环境中 New 为静默新建，直接走真实
                   // create_fresh_project 接线，不绕过 UI 入口。
+                  // 先让舞台持有旧项目内容，验证新建后无残留。
+                  viewer_->set_exodus_file(stage_fixture);
+                  if (!viewer_->has_stage_data()) {
+                    throw std::runtime_error(
+                        "Stage fixture did not load before New Project");
+                  }
                   action_new_->trigger();
                   QCoreApplication::sendPostedEvents(
                       nullptr, QEvent::DeferredDelete);
@@ -18435,6 +18465,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       child_count("Materials") != 0 || global_leak) {
                     throw std::runtime_error(
                         "New project retained project-scoped MOOSE state");
+                  }
+                  // 2026-09-19-027：舞台不得残留旧项目网格/变量数组。
+                  if (viewer_->has_stage_data() ||
+                      !viewer_->current_file().isEmpty()) {
+                    throw std::runtime_error(
+                        "New project retained the previous project's stage");
                   }
 
                   // 模板仅在用户明确点击“应用模板”后写入。
@@ -18482,6 +18518,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                           .arg(project_schema::kCurrentVersion)
                           .toUtf8());
                   legacy_file.close();
+                  // 2026-09-19-027：打开无 viewer 段的项目同样要清舞台。
+                  viewer_->set_exodus_file(stage_fixture);
+                  if (!viewer_->has_stage_data()) {
+                    throw std::runtime_error(
+                        "Stage fixture did not load before legacy open");
+                  }
                   const bool opened = load_project(legacy_path);
                   QFile::remove(legacy_path);
                   QStringList recent =
@@ -18499,6 +18541,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                           .contains("LeakedOnOpen")) {
                     throw std::runtime_error(
                         "Project load retained previous project MOOSE state");
+                  }
+                  if (viewer_->has_stage_data() ||
+                      !viewer_->current_file().isEmpty()) {
+                    throw std::runtime_error(
+                        "Opening a project without a staged file retained the "
+                        "previous stage");
                   }
 
                   // 有生成输入的旧项目必须把 input/workdir 迁移到当前
