@@ -1466,7 +1466,7 @@ void GmshPanel::set_assembly_instances(const QVariantList& instances) {
 }
 
 void GmshPanel::reset_project_physical_groups() {
-  custom_physical_groups_.clear();
+  physical_group_service_.clear();
   physical_group_element_counts_.clear();
 }
 
@@ -1703,10 +1703,7 @@ QVariantMap GmshPanel::gmsh_settings() const {
   map.insert("model_source",
              model_selector_ ? model_selector_->currentText() : "");
   map.insert(
-      "custom_physical_groups_json",
-      QString::fromUtf8(
-          QJsonDocument::fromVariant(custom_physical_groups_)
-              .toJson(QJsonDocument::Compact)));
+      "custom_physical_groups_json", physical_group_service_.to_json());
   const QString geo_path = geo_path_ ? geo_path_->text() : "";
   if (!geo_path.isEmpty() && QFileInfo::exists(geo_path)) {
     map.insert("geometry_path", geo_path);
@@ -1760,18 +1757,11 @@ void GmshPanel::set_physical_group_manifest(const QVariantMap& manifest) {
 }
 
 void GmshPanel::apply_gmsh_settings(const QVariantMap& settings) {
-  custom_physical_groups_.clear();
-  const QByteArray custom_groups_json =
-      settings.value("custom_physical_groups_json", "[]").toString().toUtf8();
-  QJsonParseError custom_groups_error;
-  const QJsonDocument custom_groups_doc =
-      QJsonDocument::fromJson(custom_groups_json, &custom_groups_error);
-  if (custom_groups_error.error == QJsonParseError::NoError &&
-      custom_groups_doc.isArray()) {
-    custom_physical_groups_ = custom_groups_doc.toVariant().toList();
-  } else if (!custom_groups_json.trimmed().isEmpty() &&
-             custom_groups_json.trimmed() != "[]") {
-    append_log("Saved custom Physical Groups are invalid and were ignored.");
+  QString custom_groups_error;
+  if (!physical_group_service_.load_json(
+          settings.value("custom_physical_groups_json", "[]").toString(),
+          &custom_groups_error)) {
+    append_log(custom_groups_error);
   }
 
   auto set_combo_data = [](QComboBox* combo, int value) {
@@ -3625,23 +3615,7 @@ void GmshPanel::apply_entity_pick(int dim, int tag) {
 }
 
 QVariantList GmshPanel::entity_bounding_box(int dim, int tag) const {
-#ifdef GMP_ENABLE_GMSH_GUI
-  try {
-    double xmin = 0.0;
-    double ymin = 0.0;
-    double zmin = 0.0;
-    double xmax = 0.0;
-    double ymax = 0.0;
-    double zmax = 0.0;
-    gmsh::model::getBoundingBox(dim, tag, xmin, ymin, zmin, xmax, ymax, zmax);
-    return {xmin, ymin, zmin, xmax, ymax, zmax};
-  } catch (...) {
-  }
-#else
-  Q_UNUSED(dim);
-  Q_UNUSED(tag);
-#endif
-  return {};
+  return PhysicalGroupService::entity_bounding_box(dim, tag);
 }
 
 QVariantList GmshPanel::entity_preview_direction(
@@ -3891,324 +3865,51 @@ QVariantList GmshPanel::entity_preview_direction(
 }
 
 QString GmshPanel::assembly_owner_for_entity(int dim, int tag) const {
-#ifdef GMP_ENABLE_GMSH_GUI
-  if (dim < 0 || dim >= 3) {
-    return {};
-  }
-  std::vector<std::pair<int, int>> owner_groups;
-  gmsh::model::getPhysicalGroups(owner_groups, dim + 1);
-  for (const auto& owner_group : owner_groups) {
-    std::string owner_name;
-    gmsh::model::getPhysicalName(owner_group.first, owner_group.second,
-                                 owner_name);
-    if (owner_name.empty()) {
-      continue;
-    }
-    std::vector<int> owner_entities;
-    gmsh::model::getEntitiesForPhysicalGroup(
-        owner_group.first, owner_group.second, owner_entities);
-    for (const int owner_tag : owner_entities) {
-      gmsh::vectorpair boundary;
-      gmsh::model::getBoundary({{dim + 1, owner_tag}}, boundary, false, false,
-                               false);
-      for (const auto& entity : boundary) {
-        if (entity.first == dim && std::abs(entity.second) == tag) {
-          return QString::fromStdString(owner_name);
-        }
-      }
-    }
-  }
-#else
-  Q_UNUSED(dim);
-  Q_UNUSED(tag);
-#endif
-  return {};
+  return PhysicalGroupService::assembly_owner_for_entity(dim, tag);
 }
 
 std::vector<int> GmshPanel::assembly_owner_entities(const QString& owner,
                                                     int dim) const {
-  std::vector<int> result;
-#ifdef GMP_ENABLE_GMSH_GUI
-  if (owner.isEmpty() || dim < 0 || dim >= 3) {
-    return result;
-  }
-  std::vector<std::pair<int, int>> owner_groups;
-  gmsh::model::getPhysicalGroups(owner_groups, dim + 1);
-  std::set<int> unique;
-  for (const auto& owner_group : owner_groups) {
-    std::string owner_name;
-    gmsh::model::getPhysicalName(owner_group.first, owner_group.second,
-                                 owner_name);
-    if (QString::fromStdString(owner_name) != owner) {
-      continue;
-    }
-    std::vector<int> owner_top_entities;
-    gmsh::model::getEntitiesForPhysicalGroup(
-        owner_group.first, owner_group.second, owner_top_entities);
-    for (const int owner_tag : owner_top_entities) {
-      gmsh::vectorpair boundary;
-      gmsh::model::getBoundary({{dim + 1, owner_tag}}, boundary, false, false,
-                               false);
-      for (const auto& entity : boundary) {
-        if (entity.first == dim) {
-          unique.insert(std::abs(entity.second));
-        }
-      }
-    }
-  }
-  result.assign(unique.begin(), unique.end());
-#else
-  Q_UNUSED(owner);
-  Q_UNUSED(dim);
-#endif
-  return result;
+  return PhysicalGroupService::assembly_owner_entities(owner, dim);
 }
 
 void GmshPanel::forget_custom_physical_group(const QString& name) {
-  if (name.trimmed().isEmpty()) {
-    return;
-  }
-  QVariantList kept;
-  for (const QVariant& value : custom_physical_groups_) {
-    if (value.toMap().value("name").toString() != name) {
-      kept.append(value);
-    }
-  }
-  custom_physical_groups_ = kept;
+  physical_group_service_.forget(name);
 }
 
 void GmshPanel::remember_custom_physical_group(
     const QString& name, int dim, const std::vector<int>& tags) {
-#ifdef GMP_ENABLE_GMSH_GUI
-  if (!model_selector_ ||
-      !model_selector_->currentText().startsWith("assembly: ") ||
-      name.trimmed().isEmpty() || tags.empty()) {
-    return;
+  const bool is_assembly_active =
+      model_selector_ &&
+      model_selector_->currentText().startsWith("assembly: ");
+  QStringList lines;
+  physical_group_service_.remember(name, dim, tags, is_assembly_active,
+                                   &lines);
+  for (const QString& line : lines) {
+    append_log(line);
   }
-  QVariantList entities;
-  for (const int tag : tags) {
-    const QVariantList bbox = entity_bounding_box(dim, tag);
-    const QString owner = assembly_owner_for_entity(dim, tag);
-    if (bbox.size() != 6 || (dim == 2 && owner.isEmpty())) {
-      append_log(QString("Custom Physical Group '%1' was not persisted: "
-                         "an entity has no Assembly owner or geometry signature.")
-                     .arg(name));
-      return;
-    }
-    entities.append(
-        QVariantMap{{"tag", tag}, {"owner", owner}, {"bbox", bbox}});
-  }
-  forget_custom_physical_group(name);
-  custom_physical_groups_.append(
-      QVariantMap{{"version", 1},
-                  {"name", name.trimmed()},
-                  {"dim", dim},
-                  {"entities", entities}});
-  append_log(QString("Custom Physical Group saved: %1 (%2 entity/entities).")
-                 .arg(name)
-                 .arg(entities.size()));
-#else
-  Q_UNUSED(name);
-  Q_UNUSED(dim);
-  Q_UNUSED(tags);
-#endif
 }
 
 void GmshPanel::restore_custom_physical_groups() {
-#ifdef GMP_ENABLE_GMSH_GUI
-  for (const QVariant& value : custom_physical_groups_) {
-    const QVariantMap spec = value.toMap();
-    const QString name = spec.value("name").toString().trimmed();
-    const int dim = spec.value("dim", -1).toInt();
-    const QVariantList entity_specs = spec.value("entities").toList();
-    if (name.isEmpty() || dim < 0 || dim > 3 || entity_specs.isEmpty()) {
-      continue;
-    }
-
-    bool name_in_use = false;
-    std::vector<std::pair<int, int>> existing_groups;
-    gmsh::model::getPhysicalGroups(existing_groups, dim);
-    for (const auto& group : existing_groups) {
-      std::string existing_name;
-      gmsh::model::getPhysicalName(group.first, group.second, existing_name);
-      if (QString::fromStdString(existing_name) == name) {
-        name_in_use = true;
-        break;
-      }
-    }
-    if (name_in_use) {
-      append_log(QString("Custom Physical Group '%1' was not restored: "
-                         "the name is already in use.")
-                     .arg(name));
-      continue;
-    }
-
-    std::vector<int> resolved;
-    std::set<int> used;
-    bool complete = true;
-    for (const QVariant& entity_value : entity_specs) {
-      const QVariantMap entity_spec = entity_value.toMap();
-      const QVariantList expected = entity_spec.value("bbox").toList();
-      const QString owner = entity_spec.value("owner").toString();
-      const int original_tag = entity_spec.value("tag", -1).toInt();
-      if (expected.size() != 6) {
-        complete = false;
-        break;
-      }
-
-      std::vector<int> candidates = assembly_owner_entities(owner, dim);
-      if (owner.isEmpty()) {
-        std::vector<std::pair<int, int>> all;
-        gmsh::model::getEntities(all, dim);
-        for (const auto& entity : all) {
-          candidates.push_back(entity.second);
-        }
-      }
-      double scale = 1.0;
-      for (const QVariant& coordinate : expected) {
-        scale = std::max(scale, std::abs(coordinate.toDouble()));
-      }
-      const double tolerance = 1e-6 * scale;
-      auto distance = [this, dim, &expected](int candidate) {
-        const QVariantList actual = entity_bounding_box(dim, candidate);
-        if (actual.size() != 6) {
-          return std::numeric_limits<double>::infinity();
-        }
-        double maximum = 0.0;
-        for (int i = 0; i < 6; ++i) {
-          maximum = std::max(
-              maximum,
-              std::abs(actual.at(i).toDouble() - expected.at(i).toDouble()));
-        }
-        return maximum;
-      };
-
-      std::vector<std::pair<double, int>> matches;
-      for (const int candidate : candidates) {
-        if (used.count(candidate)) {
-          continue;
-        }
-        const double candidate_distance = distance(candidate);
-        if (candidate_distance <= tolerance) {
-          // tag 只用于距离完全相同时提供稳定排序；存在多个等价候选时
-          // 下方仍会拒绝，不以 tag 代替几何身份。
-          matches.push_back({candidate_distance, candidate});
-        }
-      }
-      std::sort(matches.begin(), matches.end(),
-                [original_tag](const auto& lhs, const auto& rhs) {
-                  if (lhs.first != rhs.first) {
-                    return lhs.first < rhs.first;
-                  }
-                  return lhs.second == original_tag &&
-                         rhs.second != original_tag;
-                });
-      int selected = -1;
-      if (matches.size() == 1 ||
-          (matches.size() > 1 &&
-           matches.at(1).first - matches.at(0).first > tolerance * 0.01)) {
-        selected = matches.front().second;
-      }
-      if (selected < 0) {
-        complete = false;
-        break;
-      }
-      used.insert(selected);
-      resolved.push_back(selected);
-    }
-
-    if (!complete || resolved.size() !=
-                         static_cast<std::size_t>(entity_specs.size())) {
-      append_log(QString("Custom Physical Group '%1' was not restored: "
-                         "the owning instance geometry has changed.")
-                     .arg(name));
-      continue;
-    }
-    const int group_tag = gmsh::model::addPhysicalGroup(dim, resolved);
-    gmsh::model::setPhysicalName(dim, group_tag, name.toStdString());
-    append_log(QString("Custom Physical Group restored: %1 (%2 entity/entities).")
-                   .arg(name)
-                   .arg(resolved.size()));
+  QStringList lines;
+  physical_group_service_.restore(&lines);
+  for (const QString& line : lines) {
+    append_log(line);
   }
-#endif
 }
 
 bool GmshPanel::validate_physical_group_input(int dim, int exclude_tag,
                                               QString* error) const {
-#ifdef GMP_ENABLE_GMSH_GUI
-  const bool zh =
-      gmp::l10n::current_language() == gmp::l10n::Language::Chinese;
-  auto fail = [error, zh](const QString& en, const QString& zh_msg) {
-    if (error) {
-      *error = zh ? zh_msg : en;
-    }
-    return false;
-  };
-  if (dim < 0 || dim > 3) {
-    return fail(QString("invalid dimension %1 (expected 0-3).").arg(dim),
-                QString::fromUtf8("维度 %1 非法（应为 0~3）。").arg(dim));
-  }
   const QString name =
       phys_group_name_ ? phys_group_name_->text().trimmed() : QString();
-  if (name.isEmpty()) {
-    return fail("name is empty; please enter a group name.",
-                QString::fromUtf8("名称为空，请输入物理组名称。"));
-  }
   const QString entities_text =
       phys_group_entities_ ? phys_group_entities_->text() : QString();
-  if (entities_text.trimmed().isEmpty()) {
-    return fail("no entities selected; pick at least one entity.",
-                QString::fromUtf8("未选择实体，请至少选择一个实体。"));
-  }
-  const auto tokens = parse_dim_tag_tokens(entities_text);
-  if (tokens.empty()) {
-    return fail("Entities contains no valid entity IDs.",
-                QString::fromUtf8("实体列表中没有合法的实体编号。"));
-  }
-  for (const auto& token : tokens) {
-    if (token.has_dim && token.dim != dim) {
-      return fail(QString("entity %1:%2 does not match group dimension %3.")
-                      .arg(token.dim)
-                      .arg(token.tag)
-                      .arg(dim),
-                  QString::fromUtf8("实体 %1:%2 的维度与物理组维度 %3 不一致。")
-                      .arg(token.dim)
-                      .arg(token.tag)
-                      .arg(dim));
-    }
-  }
-  if (resolve_entity_tags(dim, entities_text).empty()) {
-    return fail(
-        QString("selection has no existing entities of dimension %1.").arg(dim),
-        QString::fromUtf8("所选内容中没有维度 %1 的现存实体。").arg(dim));
-  }
-  std::vector<std::pair<int, int>> groups;
-  gmsh::model::getPhysicalGroups(groups, dim);
-  for (const auto& g : groups) {
-    if (g.second == exclude_tag) {
-      continue;
-    }
-    std::string existing;
-    gmsh::model::getPhysicalName(dim, g.second, existing);
-    if (QString::fromStdString(existing).trimmed() == name) {
-      return fail(QString("name \"%1\" is already used by physical group "
-                          "%2:%3.")
-                      .arg(name)
-                      .arg(dim)
-                      .arg(g.second),
-                  QString::fromUtf8("名称“%1”已被物理组 %2:%3 使用。")
-                      .arg(name)
-                      .arg(dim)
-                      .arg(g.second));
-    }
-  }
-  return true;
-#else
-  Q_UNUSED(dim);
-  Q_UNUSED(exclude_tag);
-  Q_UNUSED(error);
-  return false;
-#endif
+  const bool has_existing =
+      !resolve_entity_tags(dim, entities_text).empty();
+  const bool chinese =
+      gmp::l10n::current_language() == gmp::l10n::Language::Chinese;
+  return physical_group_service_.validate_group_input(
+      dim, name, entities_text, has_existing, exclude_tag, chinese, error);
 }
 
 void GmshPanel::on_physical_group_add() {
@@ -5328,31 +5029,7 @@ QString GmshPanel::pick_entities_dialog(int dim_filter,
 
 std::vector<GmshPanel::DimTagToken> GmshPanel::parse_dim_tag_tokens(
     const QString& text) const {
-  QString cleaned = text;
-  cleaned.replace(",", " ");
-  const QStringList parts =
-      cleaned.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-  std::vector<DimTagToken> tokens;
-  tokens.reserve(parts.size());
-  for (const auto& part : parts) {
-    const int colon = part.indexOf(':');
-    if (colon > 0) {
-      bool ok_dim = false;
-      bool ok_tag = false;
-      const int dim = part.left(colon).toInt(&ok_dim);
-      const int tag = part.mid(colon + 1).toInt(&ok_tag);
-      if (ok_dim && ok_tag) {
-        tokens.push_back({dim, tag, true});
-      }
-    } else {
-      bool ok = false;
-      const int tag = part.toInt(&ok);
-      if (ok) {
-        tokens.push_back({-1, tag, false});
-      }
-    }
-  }
-  return tokens;
+  return PhysicalGroupService::parse_dim_tag_tokens(text);
 }
 
 std::vector<std::pair<int, int>> GmshPanel::resolve_dim_tags(

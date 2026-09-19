@@ -9,6 +9,8 @@
 #include <QList>
 #include <vector>
 
+#include "gmp/PhysicalGroupService.h"
+
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
@@ -144,11 +146,9 @@ class GmshPanel : public QWidget {
   QStringList invalid_entity_tokens(const QString& text, int dim_filter,
                                    bool occ_only) const;
   void append_entity_template(QLineEdit* target, const QString& token);
-  struct DimTagToken {
-    int dim = -1;
-    int tag = 0;
-    bool has_dim = false;
-  };
+  // TASK-V02-040：DimTagToken/解析实现下沉到 PhysicalGroupService，
+  // 此处保留别名以维持既有签名。
+  using DimTagToken = PhysicalGroupService::DimTagToken;
   std::vector<DimTagToken> parse_dim_tag_tokens(const QString& text) const;
   std::vector<std::pair<int, int>> resolve_dim_tags(
       int dim_filter, const std::vector<DimTagToken>& tokens) const;
@@ -161,7 +161,8 @@ class GmshPanel : public QWidget {
   // 临时切换 Gmsh current model，正式生成前后必须按名称恢复。
   QString external_model_name_;
   QVariantList assembly_instances_;
-  QVariantList custom_physical_groups_;
+  // TASK-V02-040：自定义组定义/恢复/校验下沉到 PhysicalGroupService。
+  PhysicalGroupService physical_group_service_;
   QHash<QString, int> physical_group_element_counts_;
 
   QComboBox* model_selector_ = nullptr;

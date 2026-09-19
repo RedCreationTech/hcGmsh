@@ -14,6 +14,7 @@
 #include "gmp/MooseInputGenerator.h"
 #include "gmp/MooseSnapshot.h"
 #include "gmp/PhysicalGroupManifest.h"
+#include "gmp/PhysicalGroupService.h"
 #include "gmp/ProjectDocument.h"
 #include "gmp/ProjectSchema.h"
 #include "gmp/ProjectStore.h"
@@ -1823,6 +1824,71 @@ void test_snapshot_service_contract(TestContext& test) {
               "invalid manifest fails without leaving a snapshot directory");
 }
 
+// TASK-V02-040：PhysicalGroupService 无 gmsh 部分合同（JSON 持久化/定义
+// 管理/文本解析）。gmsh 会话路径（owner+bbox 重绑定、组校验唯一性）由
+// 巡览 assembly_instance_contract 与真实 G1 重开路径覆盖。
+void test_physical_group_service_contract(TestContext& test) {
+  // G1 项目的 custom_physical_groups_json 样本（fixed_bottom 等四组形态）。
+  const QVariantList g1_defs = {
+      QVariantMap{{"version", 1},
+                  {"name", "fixed_bottom"},
+                  {"dim", 2},
+                  {"entities",
+                   QVariantList{QVariantMap{
+                       {"tag", 11},
+                       {"owner", "instance_concrete"},
+                       {"bbox", QVariantList{-37.24, -22.71, 0.0, 51.25,
+                                             24.78, 0.0}}}}}},
+      QVariantMap{{"version", 1},
+                  {"name", "load_top"},
+                  {"dim", 2},
+                  {"entities",
+                   QVariantList{QVariantMap{
+                       {"tag", 6},
+                       {"owner", "instance_plate"},
+                       {"bbox", QVariantList{-82.79, -77.09, 25.0, 95.90,
+                                             75.67, 25.0}}}}}},
+  };
+  gmp::PhysicalGroupService service;
+  service.set_definitions(g1_defs);
+  const QString json = service.to_json();
+  gmp::PhysicalGroupService restored;
+  QString error;
+  test.expect(restored.load_json(json, &error) && error.isEmpty() &&
+                  restored.definitions() == g1_defs,
+              "custom physical group definitions survive the JSON round-trip");
+  test.expect(restored.load_json("[]", &error) &&
+                  restored.definitions().isEmpty(),
+              "empty JSON array loads as zero definitions");
+  test.expect(!restored.load_json("{broken", &error) &&
+                  error == "Saved custom Physical Groups are invalid and "
+                           "were ignored." &&
+                  restored.definitions().isEmpty(),
+              "invalid JSON resets definitions with the legacy message");
+  restored.set_definitions(g1_defs);
+  restored.forget("fixed_bottom");
+  test.expect(restored.definitions().size() == 1 &&
+                  restored.definitions().first().toMap().value("name") ==
+                      "load_top",
+              "forget removes exactly the named definition");
+  restored.forget("missing");
+  test.expect(restored.definitions().size() == 1,
+              "forget of an unknown name is a no-op");
+  restored.clear();
+  test.expect(restored.definitions().isEmpty() && restored.to_json() == "[]",
+              "clear empties the definition store");
+
+  // 文本解析：dim:tag 与裸 tag 混合、逗号/空白分隔、非法片段跳过。
+  const auto tokens =
+      gmp::PhysicalGroupService::parse_dim_tag_tokens("3:5, 2:7 11 xx 0:1");
+  test.expect(tokens.size() == 4 && tokens[0].has_dim &&
+                  tokens[0].dim == 3 && tokens[0].tag == 5 &&
+                  tokens[1].dim == 2 && tokens[1].tag == 7 &&
+                  !tokens[2].has_dim && tokens[2].tag == 11 &&
+                  tokens[3].dim == 0 && tokens[3].tag == 1,
+              "dim:tag token parsing matches the panel semantics");
+}
+
 void test_submission_manifest(TestContext& test) {
 
   const QByteArray unicode_disposition =
@@ -1943,6 +2009,7 @@ int main(int argc, char* argv[]) {
   test_project_store_contract(test);
   test_moose_input_generator_contract(test);
   test_snapshot_service_contract(test);
+  test_physical_group_service_contract(test);
   test_submission_manifest(test);
   if (test.failures == 0) {
     qInfo("Phase 0 contract tests PASSED");
