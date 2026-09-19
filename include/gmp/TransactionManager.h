@@ -53,6 +53,11 @@ class TransactionManager {
 
   const QList<TransactionRecord>& auditLog() const { return audit_log_; }
 
+  // 旁路审计（TASK-V02-061）：动作已由调用方完成（如属性表单既有缓冲
+  // 提交），仅登记一条 committed 审计记录。Q4 红线：不提供回放入口。
+  void record_committed(const QString& label, const QString& description,
+                        const QVariantMap& before, const QVariantMap& after);
+
  private:
   struct ActiveTransaction {
     QString label;
@@ -87,6 +92,27 @@ class SetPropertyValueCommand : public Command {
   QVariant before_value_;
   bool had_before_ = false;
   QString description_;
+};
+
+// 闭包命令（TASK-V02-061）：对象 CRUD 等既有逻辑以 apply/revert 闭包形式
+// 接入事务层——execute 调 apply，revert 调 revert，审计摘要随命令携带。
+class ClosureCommand : public Command {
+ public:
+  ClosureCommand(QString description, QVariantMap before, QVariantMap after,
+                 std::function<void()> apply, std::function<void()> revert);
+
+  void execute() override;
+  void revert() override;
+  QString description() const override { return description_; }
+  QVariantMap beforeSummary() const override { return before_; }
+  QVariantMap afterSummary() const override { return after_; }
+
+ private:
+  QString description_;
+  QVariantMap before_;
+  QVariantMap after_;
+  std::function<void()> apply_;
+  std::function<void()> revert_;
 };
 
 }  // namespace gmp::core

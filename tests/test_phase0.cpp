@@ -1999,6 +1999,57 @@ void test_viewport_foundation_contract(TestContext& test) {
               "clear_all resets every selection channel");
 }
 
+// TASK-V02-061：CRUD 事务命令与旁路审计合同（无 Widget 的存储模型）。
+void test_closure_command_audit_contract(TestContext& test) {
+  using namespace gmp::core;
+
+  // 模拟对象存储（代替模型树）：验证 ClosureCommand 的 execute/revert 与
+  // 审计摘要（label、committed、before/after）。
+  QVariantMap store;
+  TransactionManager tm;
+  test.expect(tm.begin("add Materials/mat_a"), "create transaction begins");
+  test.expect(tm.execute(std::make_unique<ClosureCommand>(
+                  "create Materials object", QVariantMap(),
+                  QVariantMap{{"kind", "Materials"}, {"name", "mat_a"}},
+                  [&store]() { store.insert("mat_a", "created"); },
+                  [&store]() { store.remove("mat_a"); })),
+              "create command executes");
+  test.expect(store.contains("mat_a"), "apply ran during execute");
+  test.expect(tm.commit(), "create transaction commits");
+  test.expect(tm.auditLog().size() == 1 && tm.auditLog().first().committed &&
+                  tm.auditLog().first().label == "add Materials/mat_a" &&
+                  tm.auditLog().first().commands ==
+                      QStringList{"create Materials object"} &&
+                  tm.auditLog().first().before.first().isEmpty() &&
+                  tm.auditLog().first().after.first().value("name") == "mat_a",
+              "create audit record carries label/committed/before/after");
+
+  test.expect(tm.begin("remove Materials/mat_a"), "remove transaction begins");
+  test.expect(tm.execute(std::make_unique<ClosureCommand>(
+                  "remove Materials object",
+                  QVariantMap{{"kind", "Materials"}, {"name", "mat_a"}},
+                  QVariantMap(), [&store]() { store.remove("mat_a"); },
+                  [&store]() { store.insert("mat_a", "restored"); })),
+              "remove command executes");
+  test.expect(tm.rollback() && store.value("mat_a") == "restored",
+              "rollback restores the store via revert");
+  test.expect(tm.auditLog().size() == 2 &&
+                  !tm.auditLog().last().committed &&
+                  tm.auditLog().last().before.first().value("name") ==
+                      "mat_a",
+              "rolled-back removal keeps a full audit record");
+
+  // 旁路审计：动作已由调用方完成，只登记 committed 记录。
+  tm.record_committed("edit Materials/mat_a", "property form commit",
+                      QVariantMap{{"name", "mat_a"}},
+                      QVariantMap{{"name", "mat_a_renamed"}});
+  test.expect(tm.auditLog().size() == 3 && tm.auditLog().last().committed &&
+                  tm.auditLog().last().label == "edit Materials/mat_a" &&
+                  tm.auditLog().last().after.first().value("name") ==
+                      "mat_a_renamed",
+              "record_committed lands a bypass audit record");
+}
+
 void test_submission_manifest(TestContext& test) {
 
   const QByteArray unicode_disposition =
@@ -2115,6 +2166,7 @@ int main(int argc, char* argv[]) {
   test_property_bag_contract(test);
   test_dependency_graph_contract(test);
   test_transaction_manager_contract(test);
+  test_closure_command_audit_contract(test);
   test_unit_display_contract(test);
   test_project_store_contract(test);
   test_moose_input_generator_contract(test);

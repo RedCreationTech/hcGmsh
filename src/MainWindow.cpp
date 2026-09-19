@@ -6145,6 +6145,16 @@ void MainWindow::open_property_form(QTreeWidgetItem* item,
       dialog_parent(transient_parent ? transient_parent : this));
   floating_property_form_ = form;
   form->set_display_unit_factors(display_unit_factors());
+  // TASK-V02-061：表单提交旁路审计（缓冲语义不变；Q4 无用户可见撤销）。
+  form->set_commit_audit_callback(
+      [this](const QString& label, const QVariantMap& before,
+             const QVariantMap& after) {
+        transaction_manager_.record_committed(label, "property form commit",
+                                              before, after);
+        gmp::log_operation("transaction",
+                           QString("committed: %1 — property form commit")
+                               .arg(label));
+      });
   l10n::apply(form);
   connect(form, &FloatingPropertyForm::committed, this,
           [this](QTreeWidgetItem* committed_item) {
@@ -8359,6 +8369,25 @@ bool MainWindow::prompt_unique_child_name(QTreeWidgetItem* root,
   return dialog.exec() == QDialog::Accepted;
 }
 
+void MainWindow::record_model_transaction(
+    const QString& label, const QString& description, const QVariantMap& before,
+    const QVariantMap& after, std::function<void()> apply,
+    std::function<void()> revert) {
+  if (!transaction_manager_.begin(label)) {
+    // 无嵌套事务设计下不应发生；兜底直接执行，不丢动作。
+    if (apply) {
+      apply();
+    }
+    return;
+  }
+  transaction_manager_.execute(std::make_unique<gmp::core::ClosureCommand>(
+      description, before, after, std::move(apply), std::move(revert)));
+  transaction_manager_.commit();
+  gmp::log_operation(
+      "transaction",
+      QString("committed: %1 — %2").arg(label, description));
+}
+
 QTreeWidgetItem* MainWindow::add_child_item(QTreeWidgetItem* root,
                                             const QString& name,
                                             const QString& kind,
@@ -8368,13 +8397,31 @@ QTreeWidgetItem* MainWindow::add_child_item(QTreeWidgetItem* root,
   }
   const QString safe_name = unique_child_name(root, name);
   const QVariantMap normalized = normalize_params_for_kind(kind, params);
-  auto* item = new QTreeWidgetItem(root);
-  item->setText(0, safe_name);
-  item->setData(0, PropertyEditor::kKindRole, kind);
-  item->setData(0, PropertyEditor::kParamsRole, normalized);
-  item->setIcon(0, root->icon(0));
-  root->setExpanded(true);
-  model_tree_->setCurrentItem(item);
+  // TASK-V02-061：对象创建经事务层（Command + 审计），行为不变。
+  QTreeWidgetItem* item = nullptr;
+  record_model_transaction(
+      QString("add %1/%2").arg(kind, safe_name),
+      QString("create %1 object").arg(kind), {},
+      QVariantMap{{"kind", kind}, {"name", safe_name}, {"params", normalized}},
+      [this, root, kind, safe_name, normalized, &item]() {
+        auto* created = new QTreeWidgetItem(root);
+        created->setText(0, safe_name);
+        created->setData(0, PropertyEditor::kKindRole, kind);
+        created->setData(0, PropertyEditor::kParamsRole, normalized);
+        created->setIcon(0, root->icon(0));
+        root->setExpanded(true);
+        model_tree_->setCurrentItem(created);
+        item = created;
+      },
+      [&item]() {
+        if (item && item->parent()) {
+          delete item->parent()->takeChild(item->parent()->indexOfChild(item));
+          item = nullptr;
+        }
+      });
+  if (!item) {
+    return nullptr;
+  }
   invalidate_downstream_from(kind);
   set_project_dirty(true);
   refresh_module_pages();
@@ -10173,8 +10220,23 @@ void MainWindow::remove_item(QTreeWidgetItem* item) {
         same_file(current_file, removed_params.value("path").toString());
   }
 
-  parent->removeChild(item);
-  delete item;
+  // TASK-V02-061：对象删除经事务层（Command + 审计），行为不变。
+  // revert 仅恢复本节点（级联删除的 Feature 等不重建；rollback 当前未使用）。
+  record_model_transaction(
+      QString("remove %1/%2").arg(kind, name),
+      QString("remove %1 object").arg(kind),
+      QVariantMap{{"kind", kind}, {"name", name}, {"params", removed_params}},
+      {},
+      [parent, item]() {
+        parent->removeChild(item);
+        delete item;
+      },
+      [this, parent, kind, name, removed_params]() {
+        auto* restored = new QTreeWidgetItem(parent);
+        restored->setText(0, name);
+        restored->setData(0, PropertyEditor::kKindRole, kind);
+        restored->setData(0, PropertyEditor::kParamsRole, removed_params);
+      });
   if (clear_stage_data && viewer_) {
     viewer_->clear_stage_data();
     active_ui_context_.stage_selections.clear();
@@ -10196,15 +10258,34 @@ void MainWindow::duplicate_item(QTreeWidgetItem* item) {
     return;
   }
   const QString base = unique_child_name(parent, item->text(0) + "_copy");
-  auto* child = new QTreeWidgetItem(parent);
-  child->setText(0, base);
-  child->setData(0, PropertyEditor::kKindRole,
-                 item->data(0, PropertyEditor::kKindRole));
-  child->setData(0, PropertyEditor::kParamsRole,
-                 item->data(0, PropertyEditor::kParamsRole));
-  child->setIcon(0, parent->icon(0));
-  parent->setExpanded(true);
-  model_tree_->setCurrentItem(child);
+  const QString kind_for_tx =
+      item->data(0, PropertyEditor::kKindRole).toString();
+  const QVariantMap params_for_tx =
+      item->data(0, PropertyEditor::kParamsRole).toMap();
+  // TASK-V02-061：对象复制经事务层（Command + 审计），行为不变。
+  QTreeWidgetItem* child = nullptr;
+  record_model_transaction(
+      QString("duplicate %1/%2").arg(kind_for_tx, base),
+      QString("duplicate %1 object").arg(kind_for_tx), {},
+      QVariantMap{{"kind", kind_for_tx}, {"name", base},
+                  {"params", params_for_tx}},
+      [this, parent, kind_for_tx, params_for_tx, base, &child]() {
+        auto* created = new QTreeWidgetItem(parent);
+        created->setText(0, base);
+        created->setData(0, PropertyEditor::kKindRole, kind_for_tx);
+        created->setData(0, PropertyEditor::kParamsRole, params_for_tx);
+        created->setIcon(0, parent->icon(0));
+        parent->setExpanded(true);
+        model_tree_->setCurrentItem(created);
+        child = created;
+      },
+      [&child]() {
+        if (child && child->parent()) {
+          delete child->parent()->takeChild(
+              child->parent()->indexOfChild(child));
+          child = nullptr;
+        }
+      });
   invalidate_downstream_from(
       item->data(0, PropertyEditor::kKindRole).toString());
   set_project_dirty(true);
@@ -10226,8 +10307,20 @@ void MainWindow::rename_item(QTreeWidgetItem* item) {
       name == item->text(0)) {
     return;
   }
-  item->setText(0, name);
-  model_tree_->setCurrentItem(item);
+  const QString old_name = item->text(0);
+  // TASK-V02-061：对象重命名经事务层（Command + 审计），行为不变。
+  record_model_transaction(
+      QString("rename %1/%2").arg(root->text(0), name),
+      QString("rename %1 object").arg(root->text(0)),
+      QVariantMap{{"name", old_name}}, QVariantMap{{"name", name}},
+      [this, item, name]() {
+        item->setText(0, name);
+        model_tree_->setCurrentItem(item);
+      },
+      [this, item, old_name]() {
+        item->setText(0, old_name);
+        model_tree_->setCurrentItem(item);
+      });
   // W-01b：重命名可能悬空下游引用（如 Section.material），立即重算状态。
   refresh_workflow_status();
 }

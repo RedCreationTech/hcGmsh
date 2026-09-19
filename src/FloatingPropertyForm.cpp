@@ -247,6 +247,12 @@ void FloatingPropertyForm::fit_to_current_tab() {
   }
 }
 
+void FloatingPropertyForm::set_commit_audit_callback(
+    std::function<void(const QString& label, const QVariantMap& before,
+                       const QVariantMap& after)> callback) {
+  commit_audit_callback_ = std::move(callback);
+}
+
 void FloatingPropertyForm::commit_if_valid() {
   QStringList issues;
   if (!editor_ || !editor_->validate_current(&issues)) {
@@ -256,12 +262,27 @@ void FloatingPropertyForm::commit_if_valid() {
     reject();
     return;
   }
+  // TASK-V02-061：提交审计快照（旁路记录，不改变缓冲提交语义）。
+  const QString before_name = target_item_->text(0);
+  const QVariantMap before_params =
+      target_item_->data(0, PropertyEditor::kParamsRole).toMap();
   QTreeWidget* tree = target_item_->treeWidget();
   {
     const QSignalBlocker blocker(tree);
     target_item_->setText(0, buffer_item_->text(0));
     target_item_->setData(0, PropertyEditor::kParamsRole,
                           buffer_item_->data(0, PropertyEditor::kParamsRole));
+  }
+  if (commit_audit_callback_) {
+    const QString kind =
+        target_item_->data(0, PropertyEditor::kKindRole).toString();
+    commit_audit_callback_(
+        QString("edit %1/%2").arg(kind, before_name),
+        QVariantMap{{"name", before_name}, {"params", before_params}},
+        QVariantMap{{"name", buffer_item_->text(0)},
+                    {"params", buffer_item_->data(0,
+                                                  PropertyEditor::kParamsRole)
+                        .toMap()}});
   }
   emit committed(target_item_);
   accept();

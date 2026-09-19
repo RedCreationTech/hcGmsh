@@ -89,3 +89,40 @@ QVariantMap SetPropertyValueCommand::afterSummary() const {
 }
 
 }  // namespace gmp::core
+namespace gmp::core {
+
+void TransactionManager::record_committed(const QString& label,
+                                          const QString& description,
+                                          const QVariantMap& before,
+                                          const QVariantMap& after) {
+  TransactionRecord record;
+  record.label = label;
+  record.committed = true;
+  record.commands << description;
+  record.before << before;
+  record.after << after;
+  audit_log_.append(record);
+}
+
+ClosureCommand::ClosureCommand(QString description, QVariantMap before,
+                               QVariantMap after, std::function<void()> apply,
+                               std::function<void()> revert)
+    : description_(std::move(description)),
+      before_(std::move(before)),
+      after_(std::move(after)),
+      apply_(std::move(apply)),
+      revert_(std::move(revert)) {}
+
+void ClosureCommand::execute() {
+  if (apply_) {
+    apply_();
+  }
+}
+
+void ClosureCommand::revert() {
+  if (revert_) {
+    revert_();
+  }
+}
+
+}  // namespace gmp::core

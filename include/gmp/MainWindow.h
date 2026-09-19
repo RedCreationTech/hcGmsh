@@ -14,6 +14,7 @@
 #include "gmp/PhysicalGroupManifest.h"
 #include "gmp/MooseInputGenerator.h"
 #include "gmp/ProjectStore.h"
+#include "gmp/TransactionManager.h"
 
 class QPlainTextEdit;
 class QAction;
@@ -286,6 +287,15 @@ class MainWindow : public QMainWindow {
   PropertyEditor* property_editor_ = nullptr;
   // TASK-V02-020：.gmp.yaml 持久化实现（schema v2 读写与网格路径迁移）。
   ProjectStore project_store_;
+  // TASK-V02-061：对象 CRUD/表单提交的事务审计层（Q4：无用户可见撤销）。
+  gmp::core::TransactionManager transaction_manager_;
+  // 以 Command 形式执行 apply 并记录审计（label/描述/before/after），
+  // 操作日志写一条 committed 行；revert 仅供内部 rollback 使用。
+  void record_model_transaction(const QString& label, const QString& description,
+                                const QVariantMap& before,
+                                const QVariantMap& after,
+                                std::function<void()> apply,
+                                std::function<void()> revert);
   // TASK-V02-014：Tree→Document 投影适配器（懒同步）。Tree 仍是唯一操作
   // 入口；本适配器在每次树变更时标脏，任何 document() 读取先重建。
   ModelTreeAdapter* model_tree_adapter_ = nullptr;

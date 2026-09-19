@@ -31,6 +31,11 @@ class FloatingPropertyForm : public QDialog {
   void place_over_stage(QWidget* stage);
   // W-03a：显示→求解单位换算因子转发给内部 PropertyEditor（决策 7）。
   void set_display_unit_factors(const QMap<QString, double>& factors);
+  // TASK-V02-061：提交审计回调（旁路记录，不改变缓冲提交语义）。
+  // 参数：label、before（名称+参数）、after（名称+参数）。
+  void set_commit_audit_callback(
+      std::function<void(const QString& label, const QVariantMap& before,
+                         const QVariantMap& after)> callback);
 
  signals:
   void committed(QTreeWidgetItem* item);
@@ -45,6 +50,8 @@ class FloatingPropertyForm : public QDialog {
   QSize preferred_size_for_current_tab() const;
 
   QTreeWidgetItem* target_item_ = nullptr;
+  std::function<void(const QString&, const QVariantMap&, const QVariantMap&)>
+      commit_audit_callback_;
   QTreeWidget* buffer_tree_ = nullptr;
   QTreeWidgetItem* buffer_item_ = nullptr;
   PropertyEditor* editor_ = nullptr;
