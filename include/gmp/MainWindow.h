@@ -12,6 +12,7 @@
 #include "gmp/ApplicationProfile.h"
 #include "gmp/MooseMappingRegistry.h"
 #include "gmp/PhysicalGroupManifest.h"
+#include "gmp/MooseInputGenerator.h"
 #include "gmp/ProjectStore.h"
 
 class QPlainTextEdit;
@@ -183,31 +184,8 @@ class MainWindow : public QMainWindow {
   int append_job_row(const QString& name, const QVariantMap& params);
   void update_job_row(int row, const QString& name, const QVariantMap& params);
   void update_job_detail(int row);
-  QString build_block_from_root(QTreeWidgetItem* root,
-                                const QString& block_name,
-                                const QString& default_type,
-                                const QStringList& skip_keys) const;
-  // W-03a：Materials 生成。type=AbaqusCDP 子项生成 v01 式三对象
-  // （elasticity/stress/cdp_stress_update），其余子项按原通用路径生成。
-  QString build_materials_block(QTreeWidgetItem* root) const;
-  // W-03c：Functions 生成。type=PiecewiseLinear 子项输出带引号的 x/y
-  // 数据对（v01 复载曲线写法）；ParsedFunction 等其余子项与原通用路径
-  // 逐字节一致（raw key = value）。
-  QString build_functions_block(QTreeWidgetItem* root) const;
-  // W-03c：BCs 生成。按 type 过滤互斥参数：FunctionDirichletBC 跳过
-  // 残留的 value，DirichletBC 跳过残留的 function（type 切换后 params
-  // 中可能滞留旧键）；含空格的值按 MOOSE 规则加单引号。
-  QString build_bcs_block(QTreeWidgetItem* root) const;
-  // G1：Pressure 属于 [BCs] 而不是 [Kernels]；Contact 使用当前
-  // primary/secondary 语法并始终引用命名 Physical Group。
-  QString build_loads_block(QTreeWidgetItem* root) const;
-  QString build_interactions_block(QTreeWidgetItem* root) const;
-  // W-01b：Section 指派语义。在 Sections 根中查找 material==material_name
-  // 的子项，取其 block 列表（空格分隔）的第一个体组名；多组指派时 console
-  // 提示。无指派返回空串。Physics action（W-03b）复用同一解析。
-  QString resolve_assigned_block(const QString& material_name) const;
   // W-01c：Selections 生产路径。从物理组创建 Selection 子项
-  // （type=PhysicalGroup, group_name/group_dim/group_tag），名称默认组名。
+  //（type=PhysicalGroup, group_name/group_dim/group_tag），名称默认组名。
   QTreeWidgetItem* create_selection_from_group(const QString& group_name,
                                                int group_dim);
   // W-01c：对话框入口（选维度 2/3 + 组名），供 Selections 根右键菜单调用。
@@ -225,47 +203,21 @@ class MainWindow : public QMainWindow {
   // 菜单/快捷按钮入口：文件对话框选 .e/.exo 后调用 import_exodus_mesh；
   // 巡览可用 GMP_TOUR_EXODUS_IMPORT 环境变量覆盖路径（绕过对话框）。
   void on_import_exodus_mesh();
-  QString build_variables_block(QTreeWidgetItem* root) const;
-  // W-03e：Step→Executioner 映射。取第一个 Step 的 params 生成 v01 式
-  // [Executioner]（含 [TimeStepper] 子块，dt 在子块内）；有
-  // preconditioning_* 参数时追加 [Preconditioning/smp] 块；多个 Step 时
-  // console/状态栏明确警告“不支持串联执行，仅取第一个 Step”。无
-  // timestepper_type/preconditioning_type 键时保持旧通用平铺行为（demo
-  // 流程不受影响）。
-  QString build_executioner_block(QTreeWidgetItem* root) const;
-  // W-03b：Physics action 生成。physics_action_options 给出 action 下拉
-  // 候选（CDPQuasiStatic 仅当档案 extra.physics_action 声明）；
-  // resolve_displacements 取档案声明的位移变量名（缺省 disp_x/y/z）；
-  // build_global_params_block 生成 [GlobalParams]（仅在有 Physics 子项时
-  // 由 sync 调用）；build_physics_action_block 按 v01 格式生成
-  // [Physics/SolidMechanics/<action>/<name>]。
+  // W-03b：Physics action 候选与档案解析。physics_action_options 给出
+  // action 下拉候选（CDPQuasiStatic 仅当档案 extra.physics_action 声明）；
+  // resolve_displacements 取档案声明的位移变量名（缺省 disp_x/y/z）。
   QStringList physics_action_options() const;
   bool active_profile_supports_block(const QString& block_name) const;
   QStringList load_type_options() const;
   QStringList interaction_type_options() const;
   QString resolve_displacements() const;
-  QString build_global_params_block() const;
-  QString build_physics_action_block(QTreeWidgetItem* child,
-                                     QString* header) const;
-  // W-03b/W-03d 共享：任一 Physics 子项 save_in_resid=true；AuxKernels 的
-  // block（Physics 子项 block 优先，回退第一个 CDP 材料的 Section 指派）。
-  bool physics_save_in_resid() const;
-  QString physics_block_group() const;
-  // W-03d：Outputs 套餐合并配置（布尔或、列表去重、标量取第一个非空；
-  // package_active = 任一field/历史/Times 勾选）。
-  QVariantMap outputs_package_config() const;
-  // W-03d：Outputs 根生成。未勾任何套餐时保持旧通用行为（单 Exodus 块）；
-  // 勾选后产出 v01 式 [Outputs]（field_exodus/history_csv 子块 + Times
-  // sync）。Aux/Postprocessors/Times 由下面三个 builder 成组产出：
-  // 场输出变量 → AuxVariables（CONSTANT MONOMIAL）+ AuxKernels
-  // （MaterialRealAux，cdp_* 命名约定）；历史套餐 → NodalSum/
-  // AverageNodalVariableValue/ElementExtremeValue；resid_* 在 Physics
-  // save_in_resid 或勾选反力时生成（普通变量）。
-  QString build_outputs_block(QTreeWidgetItem* root) const;
-  QString build_aux_variables_block() const;
-  QString build_aux_kernels_block() const;
-  QString build_postprocessors_block() const;
-  QString build_times_block(QString* header) const;
+  // TASK-V02-020/030：block 生成已下沉到 gmp::MooseInputGenerator
+  //（hc_simulation 过渡层，无 Widget 依赖）。下面两个是兼容 wrapper：
+  // 从当前模型树采集条目后委托给生成器，供巡览合同与存量调用点使用。
+  // collect_model_entries 是 Tree→纯数据条目的唯一采集口（树序保持）。
+  QList<ProjectModelEntry> collect_model_entries() const;
+  MooseInputGenerator::Input generator_input() const;
+  QString build_materials_block(QTreeWidgetItem* root) const;
   // W-04：生成报告记录 block 到模型树对象/Physical Group/mapping 的来源。
   QString build_generation_report() const;
   bool sync_model_to_input(const QString& project_path_override = QString());

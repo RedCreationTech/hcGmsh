@@ -81,6 +81,7 @@
 #include "gmp/GmshPanel.h"
 #include "gmp/FloatingPropertyForm.h"
 #include "gmp/ModelTreeAdapter.h"
+#include "gmp/MooseInputGenerator.h"
 #include "gmp/ProjectStore.h"
 #include "gmp/MoosePanel.h"
 #include "gmp/PropertyBag.h"
@@ -510,16 +511,7 @@ const char* kPhysicsGenerateOutputDefault =
     "max_principal_stress mid_principal_stress min_principal_stress "
     "vonmises_stress";
 
-// W-03d：Outputs 套餐命名空间键（旧通用路径与通用子块输出时跳过）。
-const QStringList kOutputsPackageKeys = {
-    "field_outputs",          "hist_reaction_force",
-    "hist_displacement_avg",  "hist_extremum",
-    "hist_boundary",          "hist_disp_variable",
-    "hist_extremum_variables", "hist_extremum_types",
-    "times_enabled",          "times_name",
-    "times_start",            "times_end",
-    "times_interval",         "output_exodus",
-    "output_csv",             "file_base"};
+
 
 }  // namespace
 
@@ -9170,7 +9162,16 @@ QVariantMap MainWindow::default_params_for_kind(const QString& kind) const {
       const QVariantMap mat_params =
           child->data(0, PropertyEditor::kParamsRole).toMap();
       if (mat_params.value("type").toString() == "AbaqusCDP") {
-        block = resolve_assigned_block(child->text(0));
+        // W-01b 通道已下沉到 MooseInputGenerator（TASK-V02-030）；
+        // 默认参数路径沿用同一解析，多组指派警告继续写控制台。
+        QStringList assign_warnings;
+        block = MooseInputGenerator::resolve_assigned_block(
+            collect_model_entries(), child->text(0), &assign_warnings);
+        for (const QString& warning : assign_warnings) {
+          if (console_) {
+            console_->appendPlainText(warning);
+          }
+        }
       }
     }
     return {{"action", "QuasiStatic"},
@@ -9301,508 +9302,6 @@ QVariantMap MainWindow::normalize_params_for_kind(
   return default_params_for_kind(kind);
 }
 
-QString MainWindow::build_block_from_root(QTreeWidgetItem* root,
-                                          const QString& block_name,
-                                          const QString& default_type,
-                                          const QStringList& skip_keys) const {
-  if (!root || root->childCount() == 0) {
-    return QString();
-  }
-  QString out;
-  out += QString("[%1]\n").arg(block_name);
-  for (int i = 0; i < root->childCount(); ++i) {
-    auto* child = root->child(i);
-    if (!child) {
-      continue;
-    }
-    const QString name = child->text(0);
-    out += QString("  [%1]\n").arg(name);
-    const QVariantMap params =
-        child->data(0, PropertyEditor::kParamsRole).toMap();
-    QString type = params.value("type").toString();
-    if (type.isEmpty()) {
-      type = default_type;
-    }
-    if (!type.isEmpty()) {
-      out += QString("    type = %1\n").arg(type);
-    }
-    for (auto it = params.begin(); it != params.end(); ++it) {
-      if (it.key() == "type") {
-        continue;
-      }
-      if (skip_keys.contains(it.key())) {
-        continue;
-      }
-      out += QString("    %1 = %2\n")
-                 .arg(it.key())
-                 .arg(it.value().toString());
-    }
-    out += "  []\n";
-  }
-  out += "[]\n";
-  return out;
-}
-
-namespace {
-
-// W-03c/W-03e：MOOSE 值引用规则——含空格的值需单引号包裹（已带引号的
-// 原样返回）。仅作用于新生成路径，旧通用路径保持 raw 输出。
-QString quote_moose_value_if_needed(const QString& value) {
-  const QString trimmed = value.trimmed();
-  if (trimmed.isEmpty() || trimmed.startsWith('\'') ||
-      trimmed.startsWith('"')) {
-    return value;
-  }
-  if (trimmed.contains(QRegularExpression("\\s"))) {
-    return "'" + trimmed + "'";
-  }
-  return value;
-}
-
-// W-03b/W-03d 幂等防护（参照 W-03e [Preconditioning/ 锚定模式）：生成块
-// 文本已逐字存在时原样跳过（参数未变的重复 sync 不重复注入）；否则按
-// 块头行级定位，替换到顶层 [] 收尾行；不存在则追加文末。参数变更后的
-// 跨块去重属 W-04 装配器范围。
-QString upsert_generated_block(const QString& input, const QString& header,
-                               const QString& block_text) {
-  const QString trimmed = block_text.trimmed();
-  if (header.trimmed().isEmpty()) {
-    return input;
-  }
-  if (!trimmed.isEmpty() && input.contains(trimmed)) {
-    return input;
-  }
-  const QStringList lines = input.split('\n');
-  const QString open_line = "[" + header + "]";
-  int start = -1;
-  for (int i = 0; i < lines.size(); ++i) {
-    if (lines[i].trimmed() == open_line) {
-      start = i;
-      break;
-    }
-  }
-  if (start < 0) {
-    if (trimmed.isEmpty()) {
-      return input;
-    }
-    QString out = input.trimmed();
-    if (!out.isEmpty()) {
-      out += "\n\n";
-    }
-    out += trimmed;
-    out += "\n";
-    return out;
-  }
-  int end = static_cast<int>(lines.size());  // 不含：替换区间 [start, end)
-  for (int i = start + 1; i < lines.size(); ++i) {
-    // 顶层收尾行：列 0 的 []（嵌套子块的收尾行带缩进，不会命中）。
-    if (lines.at(i) == "[]") {
-      end = i + 1;
-      break;
-    }
-  }
-  QStringList out_lines = lines.mid(0, start);
-  if (!trimmed.isEmpty()) {
-    out_lines += trimmed.split('\n');
-  }
-  out_lines += lines.mid(end);
-  QString out = out_lines.join('\n');
-  out.replace(QRegularExpression("\\n{3,}"), "\n\n");
-  return out.trimmed().isEmpty() ? QString() : out.trimmed() + "\n";
-}
-
-QStringList generated_headers_with_prefix(const QString& input,
-                                          const QString& prefix) {
-  QStringList headers;
-  const QRegularExpression header_re(R"((?m)^\[([^\]\r\n]+)\][ \t]*\r?$)");
-  auto matches = header_re.globalMatch(input);
-  while (matches.hasNext()) {
-    const QString header = matches.next().captured(1);
-    if (header.startsWith(prefix) && !headers.contains(header)) {
-      headers << header;
-    }
-  }
-  return headers;
-}
-
-}  // namespace
-
-QString MainWindow::build_functions_block(QTreeWidgetItem* root) const {
-  if (!root || root->childCount() == 0) {
-    return QString();
-  }
-  QString out;
-  out += "[Functions]\n";
-  for (int i = 0; i < root->childCount(); ++i) {
-    auto* child = root->child(i);
-    if (!child) {
-      continue;
-    }
-    const QString name = child->text(0);
-    out += QString("  [%1]\n").arg(name);
-    const QVariantMap params =
-        child->data(0, PropertyEditor::kParamsRole).toMap();
-    QString type = params.value("type").toString();
-    if (type.isEmpty()) {
-      type = "ParsedFunction";
-    }
-    out += QString("    type = %1\n").arg(type);
-    const bool piecewise = (type == "PiecewiseLinear");
-    for (auto it = params.begin(); it != params.end(); ++it) {
-      if (it.key() == "type") {
-        continue;
-      }
-      // 函数类型切换后项目数据中可能保留另一类型的字段。表单虽会隐藏
-      // 不适用字段，生成器仍需按当前 type 过滤，避免 PiecewiseLinear
-      // 输出无效 expression，或 ParsedFunction 输出无效 x/y。
-      if ((piecewise && it.key() == "expression") ||
-          (!piecewise && (it.key() == "x" || it.key() == "y"))) {
-        continue;
-      }
-      QString value = it.value().toString();
-      if (piecewise && (it.key() == "x" || it.key() == "y")) {
-        // v01 复载曲线写法：x/y 数据对始终单引号包裹。
-        const QString trimmed = value.trimmed();
-        if (!trimmed.startsWith('\'') && !trimmed.startsWith('"')) {
-          value = "'" + trimmed + "'";
-        }
-      }
-      out += QString("    %1 = %2\n").arg(it.key()).arg(value);
-    }
-    out += "  []\n";
-  }
-  out += "[]\n";
-  return out;
-}
-
-QString MainWindow::build_bcs_block(QTreeWidgetItem* root) const {
-  auto* loads_root = find_root_item("Loads");
-  bool has_pressure = false;
-  for (int i = 0; loads_root && i < loads_root->childCount(); ++i) {
-    const auto* child = loads_root->child(i);
-    has_pressure = has_pressure ||
-                   (child && child->data(0, PropertyEditor::kParamsRole)
-                                 .toMap()
-                                 .value("type")
-                                 .toString() == "Pressure");
-  }
-  if ((!root || root->childCount() == 0) && !has_pressure) {
-    return QString();
-  }
-  QString out;
-  out += "[BCs]\n";
-  auto append_bc = [&out](const QTreeWidgetItem* child, bool pressure) {
-    if (!child) {
-      return;
-    }
-    const QString name = child->text(0);
-    out += QString("  [%1]\n").arg(name);
-    const QVariantMap params =
-        child->data(0, PropertyEditor::kParamsRole).toMap();
-    QString type = params.value("type").toString();
-    if (type.isEmpty()) {
-      type = pressure ? "Pressure" : "DirichletBC";
-    }
-    out += QString("    type = %1\n").arg(type);
-    for (auto it = params.begin(); it != params.end(); ++it) {
-      if (it.key() == "type") {
-        continue;
-      }
-      // W-03c：type 切换后 params 中可能滞留互斥旧键，按类型过滤。
-      if (type == "FunctionDirichletBC" && it.key() == "value") {
-        continue;
-      }
-      if (type == "DirichletBC" && it.key() == "function") {
-        continue;
-      }
-      if (type == "Pressure" &&
-          !QStringList{"variable", "boundary", "factor", "function",
-                       "component", "use_displaced_mesh"}
-               .contains(it.key())) {
-        continue;
-      }
-      if (type == "Pressure" && it.value().toString().trimmed().isEmpty()) {
-        continue;
-      }
-      out += QString("    %1 = %2\n")
-                 .arg(it.key())
-                 .arg(quote_moose_value_if_needed(it.value().toString()));
-    }
-    out += "  []\n";
-  };
-  for (int i = 0; root && i < root->childCount(); ++i) {
-    append_bc(root->child(i), false);
-  }
-  for (int i = 0; loads_root && i < loads_root->childCount(); ++i) {
-    const auto* child = loads_root->child(i);
-    if (child && child->data(0, PropertyEditor::kParamsRole)
-                         .toMap()
-                         .value("type")
-                         .toString() == "Pressure") {
-      append_bc(child, true);
-    }
-  }
-  out += "[]\n";
-  return out;
-}
-
-QString MainWindow::build_loads_block(QTreeWidgetItem* root) const {
-  if (!root) {
-    return QString();
-  }
-  QString out;
-  for (int i = 0; i < root->childCount(); ++i) {
-    const auto* child = root->child(i);
-    if (!child || child->data(0, PropertyEditor::kParamsRole)
-                          .toMap()
-                          .value("type")
-                          .toString() == "Pressure") {
-      continue;
-    }
-    if (out.isEmpty()) {
-      out = "[Kernels]\n";
-    }
-    const QVariantMap params =
-        child->data(0, PropertyEditor::kParamsRole).toMap();
-    out += QString("  [%1]\n").arg(child->text(0));
-    out += QString("    type = %1\n")
-               .arg(params.value("type", "BodyForce").toString());
-    for (auto it = params.begin(); it != params.end(); ++it) {
-      if (it.key() == "type" || it.key() == "section" ||
-          it.value().toString().trimmed().isEmpty()) {
-        continue;
-      }
-      out += QString("    %1 = %2\n")
-                 .arg(it.key(),
-                      quote_moose_value_if_needed(it.value().toString()));
-    }
-    out += "  []\n";
-  }
-  if (!out.isEmpty()) {
-    out += "[]\n";
-  }
-  return out;
-}
-
-QString MainWindow::build_interactions_block(QTreeWidgetItem* root) const {
-  if (!root || root->childCount() == 0) {
-    return QString();
-  }
-  QString out;
-  const QStringList ordered_keys = {
-      "primary",          "secondary",        "model",
-      "formulation",      "friction_coefficient",
-      "normal_smoothing_distance", "tangential_tolerance",
-      "penalty",          "normalize_penalty"};
-  for (int i = 0; i < root->childCount(); ++i) {
-    const auto* child = root->child(i);
-    if (!child) {
-      continue;
-    }
-    const QVariantMap params =
-        child->data(0, PropertyEditor::kParamsRole).toMap();
-    if (params.value("type").toString() != "Contact") {
-      continue;
-    }
-    if (out.isEmpty()) {
-      out = "[Contact]\n";
-    }
-    out += QString("  [%1]\n").arg(child->text(0));
-    for (const auto& key : ordered_keys) {
-      const QString value = params.value(key).toString().trimmed();
-      if (value.isEmpty() ||
-          (key == "friction_coefficient" &&
-           params.value("model").toString() != "coulomb")) {
-        continue;
-      }
-      out += QString("    %1 = %2\n")
-                 .arg(key, quote_moose_value_if_needed(value));
-    }
-    out += "  []\n";
-  }
-  if (!out.isEmpty()) {
-    out += "[]\n";
-  }
-  return out;
-}
-
-QString MainWindow::resolve_assigned_block(const QString& material_name) const {
-  const QString target = material_name.trimmed();
-  auto* sections_root = find_root_item("Sections");
-  if (!sections_root || target.isEmpty()) {
-    return QString();
-  }
-  QStringList assigned;
-  for (int i = 0; i < sections_root->childCount(); ++i) {
-    auto* child = sections_root->child(i);
-    if (!child) {
-      continue;
-    }
-    const QVariantMap params =
-        child->data(0, PropertyEditor::kParamsRole).toMap();
-    if (params.value("material").toString().trimmed() != target) {
-      continue;
-    }
-    const QStringList groups =
-        params.value("block")
-            .toString()
-            .split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-    for (const auto& group : groups) {
-      if (!assigned.contains(group)) {
-        assigned << group;
-      }
-    }
-  }
-  if (assigned.size() > 1 && console_) {
-    console_->appendPlainText(
-        QString("Warning: material '%1' is assigned to multiple physical "
-                "volumes (%2); using '%3'.")
-            .arg(target, assigned.join(", "), assigned.first()));
-  }
-  return assigned.isEmpty() ? QString() : assigned.first();
-}
-
-QString MainWindow::build_materials_block(QTreeWidgetItem* root) const {
-  if (!root || root->childCount() == 0) {
-    return QString();
-  }
-  bool has_cdp = false;
-  for (int i = 0; i < root->childCount(); ++i) {
-    auto* child = root->child(i);
-    if (child && child->data(0, PropertyEditor::kParamsRole)
-                      .toMap()
-                      .value("type")
-                      .toString() == "AbaqusCDP") {
-      has_cdp = true;
-      break;
-    }
-  }
-  if (!has_cdp) {
-    // 无 CDP 子项时完全沿用原通用生成路径（demo 流程不受影响）。
-    return build_block_from_root(root, "Materials", "GenericConstantMaterial",
-                                 {});
-  }
-
-  // W-03a：type=AbaqusCDP 子项生成 v01 式三对象；其余子项保持通用生成。
-  const QStringList cdp_scalars = {"maximum_substeps",
-                                   "maximum_strain_increment",
-                                   "enable_performance_diagnostics",
-                                   "youngs_modulus",
-                                   "poissons_ratio",
-                                   "dilation_angle",
-                                   "eccentricity",
-                                   "biaxial_to_uniaxial_compression_ratio",
-                                   "tensile_meridian_ratio",
-                                   "viscosity",
-                                   "tension_recovery",
-                                   "compression_recovery"};
-  const QStringList cdp_files = {"compression_hardening_file",
-                                 "compression_damage_file",
-                                 "tension_stiffening_file",
-                                 "tension_damage_file"};
-  const QStringList skip_keys = {
-      "type", "block", "section", "status", "state", "unit_factor_stress",
-      // 从其他材料类型切换到 CDP 的旧项目可能仍保存这些字段；它们都不
-      // 属于 AbaqusCDPStressUpdate，生成时必须过滤。
-      "prop_names", "prop_values", "expression", "property_name",
-      "coupled_variables", "fill_method", "C_ijkl",
-      "thermal_expansion_coeff", "temperature", "stress_free_temperature",
-      "eigenstrain_name", "displacements"};
-  QString out;
-  out += "[Materials]\n";
-  for (int i = 0; i < root->childCount(); ++i) {
-    auto* child = root->child(i);
-    if (!child) {
-      continue;
-    }
-    const QString name = child->text(0);
-    const QVariantMap params =
-        child->data(0, PropertyEditor::kParamsRole).toMap();
-    const QString type = params.value("type").toString();
-    if (type != "AbaqusCDP") {
-      out += QString("  [%1]\n").arg(name);
-      out += QString("    type = %1\n")
-                 .arg(type.isEmpty() ? QString("GenericConstantMaterial")
-                                     : type);
-      for (auto it = params.begin(); it != params.end(); ++it) {
-        if (it.key() == "type") {
-          continue;
-        }
-        out += QString("    %1 = %2\n")
-                   .arg(it.key())
-                   .arg(it.value().toString());
-      }
-      out += "  []\n";
-      continue;
-    }
-
-    // block 取子项的 block/section 指派参数；均无则查 Sections 根的
-    // 材料↔体组指派（W-01b Section 指派语义）；再无则留空字符串并警告。
-    QString block = params.value("block").toString().trimmed();
-    if (block.isEmpty()) {
-      block = params.value("section").toString().trimmed();
-    }
-    if (block.isEmpty()) {
-      block = resolve_assigned_block(name);
-    }
-    if (block.isEmpty() && console_) {
-      console_->appendPlainText(
-          QString("Warning: CDP material '%1' has no block/section "
-                  "assignment; emitting an empty block parameter (assign a "
-                  "section/physical volume before running).")
-              .arg(name));
-    }
-    const QString stress_update = name + "_cdp_stress_update";
-    out += QString("  [%1_elasticity]\n").arg(name);
-    out += "    type = ComputeIsotropicElasticityTensor\n";
-    out += QString("    block = '%1'\n").arg(block);
-    out += QString("    youngs_modulus = %1\n")
-               .arg(params.value("youngs_modulus").toString());
-    out += QString("    poissons_ratio = %1\n")
-               .arg(params.value("poissons_ratio").toString());
-    out += "  []\n";
-    out += QString("  [%1_stress]\n").arg(name);
-    out += "    type = ComputeMultipleInelasticStress\n";
-    out += QString("    block = '%1'\n").arg(block);
-    out += QString("    inelastic_models = %1\n").arg(stress_update);
-    out += "    perform_finite_strain_rotations = false\n";
-    out += "  []\n";
-    out += QString("  [%1]\n").arg(stress_update);
-    out += "    type = AbaqusCDPStressUpdate\n";
-    out += QString("    block = '%1'\n").arg(block);
-    for (const auto& key : cdp_scalars) {
-      const QString value = params.value(key).toString();
-      if (!value.isEmpty()) {
-        out += QString("    %1 = %2\n").arg(key).arg(value);
-      }
-    }
-    for (const auto& key : cdp_files) {
-      const QString value = params.value(key).toString().trimmed();
-      if (!value.isEmpty()) {
-        // CSV 以 basename 相对引用；绝对来源经 file_sources 通道打包。
-        out += QString("    %1 = %2\n")
-                   .arg(key)
-                   .arg(QFileInfo(value).fileName());
-      }
-    }
-    // 透传其余非空自定义键（高级参数），跳过表单/元数据键。
-    const QStringList consumed = cdp_scalars + cdp_files + skip_keys;
-    for (auto it = params.begin(); it != params.end(); ++it) {
-      if (consumed.contains(it.key())) {
-        continue;
-      }
-      const QString value = it.value().toString();
-      if (value.isEmpty()) {
-        continue;
-      }
-      out += QString("    %1 = %2\n").arg(it.key()).arg(value);
-    }
-    out += "  []\n";
-  }
-  out += "[]\n";
-  return out;
-}
-
 QMap<QString, QString> MainWindow::collect_material_file_sources() const {
   QMap<QString, QString> sources;
   auto* root = find_root_item("Materials");
@@ -9845,145 +9344,62 @@ QMap<QString, double> MainWindow::display_unit_factors() const {
   return factors;
 }
 
-QString MainWindow::build_variables_block(QTreeWidgetItem* root) const {
-  if (!root || root->childCount() == 0) {
-    return QString();
-  }
-  QString out;
-  out += "[Variables]\n";
-  for (int i = 0; i < root->childCount(); ++i) {
-    auto* child = root->child(i);
-    if (!child) {
+QList<ProjectModelEntry> MainWindow::collect_model_entries() const {
+  QList<ProjectModelEntry> entries;
+  for (int i = 0; model_tree_ && i < model_tree_->topLevelItemCount(); ++i) {
+    const auto* root = model_tree_->topLevelItem(i);
+    if (!root) {
       continue;
     }
-    const QString name = child->text(0);
-    out += QString("  [%1]\n").arg(name);
-    const QVariantMap params =
-        child->data(0, PropertyEditor::kParamsRole).toMap();
-    const QString order = params.value("order", "FIRST").toString();
-    const QString family = params.value("family", "LAGRANGE").toString();
-    out += QString("    order = %1\n").arg(order);
-    out += QString("    family = %1\n").arg(family);
-    for (auto it = params.begin(); it != params.end(); ++it) {
-      if (it.key() == "order" || it.key() == "family" ||
-          it.key() == "type") {
+    for (int row = 0; row < root->childCount(); ++row) {
+      const auto* child = root->child(row);
+      if (!child) {
         continue;
       }
-      out += QString("    %1 = %2\n")
-                 .arg(it.key())
-                 .arg(it.value().toString());
+      ProjectModelEntry entry;
+      entry.name = child->text(0);
+      entry.kind = root->text(0);
+      entry.status = child->data(0, PropertyEditor::kStatusRole).toString();
+      entry.params = child->data(0, PropertyEditor::kParamsRole).toMap();
+      entries.append(entry);
     }
-    out += "  []\n";
   }
-  out += "[]\n";
-  return out;
+  return entries;
 }
 
-QString MainWindow::build_executioner_block(QTreeWidgetItem* root) const {
-  if (!root || root->childCount() == 0) {
-    return QString();
-  }
-  auto* step = root->child(0);
-  if (!step) {
-    return QString();
-  }
-  const QVariantMap params =
-      step->data(0, PropertyEditor::kParamsRole).toMap();
-  QString type = params.value("type").toString();
-  if (type.isEmpty()) {
-    type = "Transient";
-  }
+MooseInputGenerator::Input MainWindow::generator_input() const {
+  MooseInputGenerator::Input input;
+  input.entries = collect_model_entries();
+  input.displacements = resolve_displacements();
+  input.application_profile_id = application_profile_.value("id").toString();
+  input.mapping_registry_loaded = mapping_registry_.is_loaded();
+  input.mapping_registry_version = mapping_registry_.version();
+  input.input_mode =
+      moose_panel_ ? moose_panel_->input_mode() : QString("structured");
+  input.mesh_path = moose_panel_
+                        ? moose_panel_->moose_settings()
+                              .value("mesh_path")
+                              .toString()
+                        : QString();
+  input.mesh_snapshot = mesh_snapshot_;
+  input.chinese_ui = l10n::current_language() == l10n::Language::Chinese;
+  return input;
+}
 
-  // W-03e：v01 口径键分组。timestepper_*/preconditioning_* 为表单命名
-  // 空间键，分别落入 [TimeStepper] 子块与 [Preconditioning/smp] 块。
-  const QStringList timestepper_keys = {"timestepper_type", "optimal_iterations",
-                                        "iteration_window", "growth_factor",
-                                        "cutback_factor"};
-  const QStringList preconditioning_keys = {"preconditioning_type",
-                                            "preconditioning_full"};
-  // Executioner 级有序输出（v01 验收基线顺序）。
-  const QStringList ordered_keys = {"start_time",      "end_time",
-                                    "solve_type",      "line_search",
-                                    "automatic_scaling",
-                                    "nl_rel_tol",      "nl_abs_tol",
-                                    "nl_max_its",      "num_steps",
-                                    "dtmin",           "dtmax",
-                                    "petsc_options_iname",
-                                    "petsc_options_value"};
-  const bool has_timestepper =
-      !params.value("timestepper_type").toString().trimmed().isEmpty();
+QString MainWindow::build_materials_block(QTreeWidgetItem* root) const {
+  Q_UNUSED(root);  // 兼容签名；生成器始终基于当前模型树全集。
+  return MooseInputGenerator::generate(generator_input()).materials;
+}
 
-  QStringList consumed = QStringList{"type", "status", "state"} +
-                         timestepper_keys + preconditioning_keys + ordered_keys;
-  if (has_timestepper) {
-    // dt 在 v01 中位于 [TimeStepper] 子块；无 timestepper_type 时（demo
-    // 旧数据）dt 保持 Executioner 级平铺。
-    consumed << "dt";
-  }
-
-  QString out;
-  out += "[Executioner]\n";
-  out += QString("  type = %1\n").arg(type);
-  for (const auto& key : ordered_keys) {
-    const QString value = params.value(key).toString().trimmed();
-    if (!value.isEmpty()) {
-      out += QString("  %1 = %2\n").arg(key, quote_moose_value_if_needed(value));
-    }
-  }
-  // 透传其余键（demo 旧键 dt/scheme/l_max_its/l_tol 等），保持旧通用行为。
-  for (auto it = params.begin(); it != params.end(); ++it) {
-    if (consumed.contains(it.key())) {
-      continue;
-    }
-    out += QString("  %1 = %2\n")
-               .arg(it.key())
-               .arg(quote_moose_value_if_needed(it.value().toString()));
-  }
-  if (has_timestepper) {
-    out += "  [TimeStepper]\n";
-    out += QString("    type = %1\n")
-               .arg(params.value("timestepper_type").toString().trimmed());
-    const QStringList ts_keys = {"dt", "optimal_iterations", "iteration_window",
-                                 "growth_factor", "cutback_factor"};
-    for (const auto& key : ts_keys) {
-      const QString value = params.value(key).toString().trimmed();
-      if (!value.isEmpty()) {
-        out += QString("    %1 = %2\n").arg(key).arg(value);
-      }
-    }
-    out += "  []\n";
-  }
-  out += "[]\n";
-  const QString preconditioning_type =
-      params.value("preconditioning_type").toString().trimmed();
-  if (!preconditioning_type.isEmpty()) {
-    // v01 口径：[Preconditioning/smp] 独立块（type=SMP full=true）。
-    out += "\n[Preconditioning/smp]\n";
-    out += QString("  type = %1\n").arg(preconditioning_type);
-    const QString full =
-        params.value("preconditioning_full").toString().trimmed();
-    if (!full.isEmpty()) {
-      out += QString("  full = %1\n").arg(full);
-    }
-    out += "[]\n";
-  }
-  if (root->childCount() > 1) {
-    // v01 口径：多 Step 不支持串联执行，明示而非静默取第一个。
-    const bool chinese =
-        l10n::current_language() == l10n::Language::Chinese;
-    const QString warning =
-        chinese ? QString::fromUtf8(
-                      "警告：检测到多个 Step；不支持串联执行，仅取第一个 "
-                      "Step 生成 [Executioner]。")
-                : QString("Warning: multiple Steps found; chained execution "
-                          "is not supported, only the first Step is used for "
-                          "[Executioner].");
+QString MainWindow::build_generation_report() const {
+  // 旧实现中无 block 指派的 Physics 警告会写控制台；保持该副作用。
+  const auto out = MooseInputGenerator::generate(generator_input());
+  for (const QString& warning : out.console_warnings) {
     if (console_) {
       console_->appendPlainText(warning);
     }
-    statusBar()->showMessage(warning, 5000);
   }
-  return out;
+  return out.generation_report;
 }
 
 QStringList MainWindow::physics_action_options() const {
@@ -10067,607 +9483,6 @@ QString MainWindow::resolve_displacements() const {
   return "disp_x disp_y disp_z";
 }
 
-QString MainWindow::build_global_params_block() const {
-  return QString("[GlobalParams]\n  displacements = '%1'\n[]\n")
-      .arg(resolve_displacements());
-}
-
-QString MainWindow::build_physics_action_block(QTreeWidgetItem* child,
-                                               QString* header) const {
-  if (!child) {
-    return QString();
-  }
-  const QVariantMap params =
-      child->data(0, PropertyEditor::kParamsRole).toMap();
-  QString action = params.value("action").toString().trimmed();
-  if (action.isEmpty()) {
-    action = "QuasiStatic";
-  }
-  const QString name = child->text(0);
-  const QString block_header =
-      QString("Physics/SolidMechanics/%1/%2").arg(action, name);
-  if (header) {
-    *header = block_header;
-  }
-  const QString block = params.value("block").toString().trimmed();
-  if (block.isEmpty() && console_) {
-    console_->appendPlainText(
-        QString("Warning: Physics action '%1' has no block assignment; "
-                "emitting an empty block parameter (assign a section/"
-                "physical volume before running).")
-            .arg(name));
-  }
-  const bool save_in_resid =
-      params.value("save_in_resid").toString().trimmed() == "true";
-  QString out;
-  out += QString("[%1]\n").arg(block_header);
-  // v01 验收基线顺序：volumetric_locking_correction / add_variables /
-  // incremental / block / strain / generate_output / save_in。
-  for (const auto& key : {"volumetric_locking_correction", "add_variables",
-                          "incremental"}) {
-    const QString value = params.value(key).toString().trimmed();
-    if (!value.isEmpty()) {
-      out += QString("  %1 = %2\n").arg(QString::fromLatin1(key), value);
-    }
-  }
-  out += QString("  block = %1\n").arg(quote_moose_value_if_needed(block));
-  const QString strain = params.value("strain").toString().trimmed();
-  if (!strain.isEmpty()) {
-    out += QString("  strain = %1\n").arg(strain);
-  }
-  const QString generate_output =
-      params.value("generate_output").toString().trimmed();
-  if (!generate_output.isEmpty()) {
-    // v01 多行折行风格简化为单行（语义等价）。
-    out += QString("  generate_output = '%1'\n").arg(generate_output);
-  }
-  if (save_in_resid) {
-    out += "  save_in = 'resid_x resid_y resid_z'\n";
-  }
-  // 透传其余非空自定义键（高级参数），跳过表单/元数据键。
-  const QStringList consumed = {"action",
-                                "block",
-                                "volumetric_locking_correction",
-                                "add_variables",
-                                "incremental",
-                                "strain",
-                                "generate_output",
-                                "save_in_resid",
-                                "status",
-                                "state"};
-  for (auto it = params.begin(); it != params.end(); ++it) {
-    if (consumed.contains(it.key())) {
-      continue;
-    }
-    const QString value = it.value().toString().trimmed();
-    if (value.isEmpty()) {
-      continue;
-    }
-    out += QString("  %1 = %2\n").arg(it.key(), value);
-  }
-  out += "[]\n";
-  return out;
-}
-
-bool MainWindow::physics_save_in_resid() const {
-  auto* root = find_root_item("Physics");
-  for (int i = 0; root && i < root->childCount(); ++i) {
-    auto* child = root->child(i);
-    if (child && child->data(0, PropertyEditor::kParamsRole)
-                         .toMap()
-                         .value("save_in_resid")
-                         .toString()
-                         .trimmed() == "true") {
-      return true;
-    }
-  }
-  return false;
-}
-
-QString MainWindow::physics_block_group() const {
-  // AuxKernels 的 block：优先取第一个 Physics 子项的 block 参数；
-  // 无 Physics 子项时回退到第一个 CDP 材料的 Section 指派体组。
-  auto* physics_root = find_root_item("Physics");
-  for (int i = 0; physics_root && i < physics_root->childCount(); ++i) {
-    auto* child = physics_root->child(i);
-    if (!child) {
-      continue;
-    }
-    const QString block = child->data(0, PropertyEditor::kParamsRole)
-                              .toMap()
-                              .value("block")
-                              .toString()
-                              .trimmed();
-    if (!block.isEmpty()) {
-      return block.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts)
-          .value(0);
-    }
-  }
-  auto* materials_root = find_root_item("Materials");
-  for (int i = 0; materials_root && i < materials_root->childCount(); ++i) {
-    auto* child = materials_root->child(i);
-    if (!child) {
-      continue;
-    }
-    const QVariantMap params =
-        child->data(0, PropertyEditor::kParamsRole).toMap();
-    if (params.value("type").toString() == "AbaqusCDP") {
-      const QString block = resolve_assigned_block(child->text(0));
-      if (!block.isEmpty()) {
-        return block;
-      }
-    }
-  }
-  return QString();
-}
-
-QVariantMap MainWindow::outputs_package_config() const {
-  // W-03d：合并 Outputs 根各套餐子项的勾选项（带 field_outputs 键的视为
-  // 套餐子项；demo 旧式子项无该键不参与）。布尔取或、列表去重合并、
-  // 标量取第一个非空。
-  QVariantMap cfg;
-  QStringList field_vars;
-  QStringList extremum_vars;
-  QStringList extremum_types;
-  bool hist_reaction = false;
-  bool hist_disp_avg = false;
-  bool hist_extremum = false;
-  QString hist_boundary;
-  QString disp_variable;
-  bool times_enabled = false;
-  QString times_name;
-  QString times_start;
-  QString times_end;
-  QString times_interval;
-  bool exodus_on = false;
-  bool csv_on = false;
-  bool any_exodus_key = false;
-  bool any_csv_key = false;
-  QString file_base;
-  auto split_list = [](const QString& raw) {
-    return raw.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
-  };
-  auto* root = find_root_item("Outputs");
-  for (int i = 0; root && i < root->childCount(); ++i) {
-    auto* child = root->child(i);
-    if (!child) {
-      continue;
-    }
-    const QVariantMap params =
-        child->data(0, PropertyEditor::kParamsRole).toMap();
-    if (!params.contains("field_outputs")) {
-      continue;
-    }
-    for (const auto& var : split_list(params.value("field_outputs")
-                                          .toString())) {
-      if (!field_vars.contains(var)) {
-        field_vars << var;
-      }
-    }
-    const auto enabled = [&params](const QString& key) {
-      return params.value(key).toString().trimmed() == "true";
-    };
-    hist_reaction = hist_reaction || enabled("hist_reaction_force");
-    hist_disp_avg = hist_disp_avg || enabled("hist_displacement_avg");
-    hist_extremum = hist_extremum || enabled("hist_extremum");
-    if (hist_boundary.isEmpty()) {
-      hist_boundary = params.value("hist_boundary").toString().trimmed();
-    }
-    if (disp_variable.isEmpty()) {
-      disp_variable = params.value("hist_disp_variable").toString().trimmed();
-    }
-    for (const auto& var : split_list(
-             params.value("hist_extremum_variables").toString())) {
-      if (!extremum_vars.contains(var)) {
-        extremum_vars << var;
-      }
-    }
-    if (extremum_types.isEmpty()) {
-      extremum_types = split_list(
-          params.value("hist_extremum_types").toString());
-    }
-    times_enabled = times_enabled || enabled("times_enabled");
-    if (times_name.isEmpty()) {
-      times_name = params.value("times_name").toString().trimmed();
-    }
-    if (times_start.isEmpty()) {
-      times_start = params.value("times_start").toString().trimmed();
-    }
-    if (times_end.isEmpty()) {
-      times_end = params.value("times_end").toString().trimmed();
-    }
-    if (times_interval.isEmpty()) {
-      times_interval = params.value("times_interval").toString().trimmed();
-    }
-    if (params.contains("output_exodus")) {
-      any_exodus_key = true;
-      exodus_on = exodus_on || enabled("output_exodus");
-    }
-    if (params.contains("output_csv")) {
-      any_csv_key = true;
-      csv_on = csv_on || enabled("output_csv");
-    }
-    if (file_base.isEmpty()) {
-      file_base = params.value("file_base").toString().trimmed();
-    }
-  }
-  // 旧式子项（无套餐键）被勾选套餐时缺省补 Exodus（v01 落盘语义）。
-  if (!any_exodus_key) {
-    exodus_on = true;
-  }
-  const bool package_active = !field_vars.isEmpty() || hist_reaction ||
-                              hist_disp_avg || hist_extremum || times_enabled;
-  cfg.insert("field_outputs", field_vars);
-  cfg.insert("hist_reaction_force", hist_reaction);
-  cfg.insert("hist_displacement_avg", hist_disp_avg);
-  cfg.insert("hist_extremum", hist_extremum);
-  cfg.insert("hist_boundary", hist_boundary);
-  cfg.insert("hist_disp_variable",
-             disp_variable.isEmpty() ? QString("disp_z") : disp_variable);
-  cfg.insert("hist_extremum_variables", extremum_vars);
-  cfg.insert("hist_extremum_types",
-             extremum_types.isEmpty() ? QStringList{"min", "max"}
-                                      : extremum_types);
-  cfg.insert("times_enabled", times_enabled);
-  cfg.insert("times_name", times_name.isEmpty()
-                               ? QString("field_output_times")
-                               : times_name);
-  cfg.insert("times_start", times_start.isEmpty() ? QString("0") : times_start);
-  cfg.insert("times_end", times_end.isEmpty() ? QString("1") : times_end);
-  cfg.insert("times_interval",
-             times_interval.isEmpty() ? QString("0.01") : times_interval);
-  cfg.insert("output_exodus", exodus_on);
-  cfg.insert("output_csv", csv_on);
-  cfg.insert("file_base", file_base);
-  cfg.insert("package_active", package_active);
-  return cfg;
-}
-
-QString MainWindow::build_outputs_block(QTreeWidgetItem* root) const {
-  if (!root || root->childCount() == 0) {
-    return QString();
-  }
-  const QVariantMap cfg = outputs_package_config();
-  if (!cfg.value("package_active").toBool()) {
-    // 未勾任何套餐：保持旧行为（demo 流程不受影响）。
-    return build_block_from_root(root, "Outputs", "Exodus",
-                                 kOutputsPackageKeys);
-  }
-  QString out;
-  out += "[Outputs]\n";
-  // 旧式子项（无套餐键）按通用子块输出，保留既有语义。
-  for (int i = 0; i < root->childCount(); ++i) {
-    auto* child = root->child(i);
-    if (!child) {
-      continue;
-    }
-    const QVariantMap params =
-        child->data(0, PropertyEditor::kParamsRole).toMap();
-    if (params.contains("field_outputs")) {
-      continue;
-    }
-    out += QString("  [%1]\n").arg(child->text(0));
-    QString type = params.value("type").toString();
-    if (type.isEmpty()) {
-      type = "Exodus";
-    }
-    out += QString("    type = %1\n").arg(type);
-    for (auto it = params.begin(); it != params.end(); ++it) {
-      if (it.key() == "type" || kOutputsPackageKeys.contains(it.key())) {
-        continue;
-      }
-      out += QString("    %1 = %2\n").arg(it.key(), it.value().toString());
-    }
-    out += "  []\n";
-  }
-  const bool times = cfg.value("times_enabled").toBool();
-  const QString times_name = cfg.value("times_name").toString();
-  const QString file_base = cfg.value("file_base").toString();
-  bool exodus_on = cfg.value("output_exodus").toBool();
-  const bool csv_on = cfg.value("output_csv").toBool();
-  if (!exodus_on && !csv_on) {
-    exodus_on = true;  // 兜底：勾选套餐后至少保留一路落盘。
-  }
-  auto emit_output_subblock = [&](const QString& name, const QString& type) {
-    out += QString("  [%1]\n").arg(name);
-    out += QString("    type = %1\n").arg(type);
-    out += "    execute_on = 'initial timestep_end'\n";
-    if (times) {
-      out += QString("    sync_times_object = %1\n").arg(times_name);
-      out += "    sync_only = true\n";
-    }
-    if (!file_base.isEmpty()) {
-      out += QString("    file_base = %1\n").arg(file_base);
-    }
-    out += "  []\n";
-  };
-  if (exodus_on) {
-    emit_output_subblock("field_exodus", "Exodus");
-  }
-  if (csv_on) {
-    emit_output_subblock("history_csv", "CSV");
-  }
-  out += "[]\n";
-  return out;
-}
-
-QString MainWindow::build_aux_variables_block() const {
-  const QVariantMap cfg = outputs_package_config();
-  const QStringList field_vars = cfg.value("field_outputs").toStringList();
-  // resid_*：Physics save_in_resid=true 或勾选反力历史输出时生成
-  // （普通变量，非 MONOMIAL）。
-  const bool resid =
-      physics_save_in_resid() || cfg.value("hist_reaction_force").toBool();
-  if (!resid && field_vars.isEmpty()) {
-    return QString();
-  }
-  QString out;
-  out += "[AuxVariables]\n";
-  if (resid) {
-    for (const auto& axis : {"x", "y", "z"}) {
-      out += QString("  [resid_%1]\n").arg(QLatin1String(axis));
-      out += "  []\n";
-    }
-  }
-  for (const auto& var : field_vars) {
-    out += QString("  [%1]\n").arg(var);
-    out += "    order = CONSTANT\n";
-    out += "    family = MONOMIAL\n";
-    out += "  []\n";
-  }
-  out += "[]\n";
-  return out;
-}
-
-QString MainWindow::build_aux_kernels_block() const {
-  const QVariantMap cfg = outputs_package_config();
-  const QStringList field_vars = cfg.value("field_outputs").toStringList();
-  if (field_vars.isEmpty()) {
-    return QString();
-  }
-  const QString block = physics_block_group();
-  if (block.isEmpty() && console_) {
-    console_->appendPlainText(
-        "Warning: field output AuxKernels have no block (no Physics block "
-        "or CDP section assignment); emitting an empty block parameter.");
-  }
-  QString out;
-  out += "[AuxKernels]\n";
-  for (const auto& var : field_vars) {
-    // cdp_* 命名约定：DamageC/DamageT 同名，其余 cdp_<名>。
-    const QString property = (var == "DamageC" || var == "DamageT")
-                                 ? var
-                                 : QString("cdp_%1").arg(var);
-    out += QString("  [%1]\n").arg(var);
-    out += "    type = MaterialRealAux\n";
-    out += QString("    variable = %1\n").arg(var);
-    out += QString("    property = %1\n").arg(property);
-    out += QString("    block = '%1'\n").arg(block);
-    out += "    execute_on = 'initial timestep_end'\n";
-    out += "  []\n";
-  }
-  out += "[]\n";
-  return out;
-}
-
-QString MainWindow::build_postprocessors_block() const {
-  const QVariantMap cfg = outputs_package_config();
-  const bool hist_reaction = cfg.value("hist_reaction_force").toBool();
-  const bool hist_disp_avg = cfg.value("hist_displacement_avg").toBool();
-  const bool hist_extremum = cfg.value("hist_extremum").toBool();
-  if (!hist_reaction && !hist_disp_avg && !hist_extremum) {
-    return QString();
-  }
-  const QString boundary = cfg.value("hist_boundary").toString();
-  if ((hist_reaction || hist_disp_avg) && boundary.isEmpty() && console_) {
-    console_->appendPlainText(
-        "Warning: history output package (reaction force / displacement "
-        "average) needs a boundary; skipped the boundary-based "
-        "postprocessors.");
-  }
-  QString out;
-  out += "[Postprocessors]\n";
-  if (hist_reaction && !boundary.isEmpty()) {
-    for (const auto& axis : {"x", "y", "z"}) {
-      out += QString("  [%1_reaction_%2]\n").arg(boundary, QLatin1String(axis));
-      out += "    type = NodalSum\n";
-      out += QString("    variable = resid_%1\n").arg(QLatin1String(axis));
-      out += QString("    boundary = %1\n").arg(boundary);
-      out += "  []\n";
-    }
-  }
-  if (hist_disp_avg && !boundary.isEmpty()) {
-    out += QString("  [%1_disp_avg]\n").arg(boundary);
-    out += "    type = AverageNodalVariableValue\n";
-    out += QString("    variable = %1\n")
-               .arg(cfg.value("hist_disp_variable").toString());
-    out += QString("    boundary = %1\n").arg(boundary);
-    out += "  []\n";
-  }
-  if (hist_extremum) {
-    const QStringList vars =
-        cfg.value("hist_extremum_variables").toStringList();
-    const QStringList types = cfg.value("hist_extremum_types").toStringList();
-    for (const auto& var : vars) {
-      for (const auto& value_type : types) {
-        out += QString("  [%1_%2]\n").arg(value_type, var.toLower());
-        out += "    type = ElementExtremeValue\n";
-        out += QString("    variable = %1\n").arg(var);
-        out += QString("    value_type = %1\n").arg(value_type);
-        out += "  []\n";
-      }
-    }
-  }
-  out += "[]\n";
-  return out;
-}
-
-QString MainWindow::build_times_block(QString* header) const {
-  const QVariantMap cfg = outputs_package_config();
-  if (!cfg.value("times_enabled").toBool()) {
-    return QString();
-  }
-  const QString name = cfg.value("times_name").toString();
-  if (header) {
-    *header = QString("Times/%1").arg(name);
-  }
-  QString out;
-  out += QString("[Times/%1]\n").arg(name);
-  out += "  type = TimeIntervalTimes\n";
-  out += QString("  start_time = %1\n").arg(cfg.value("times_start").toString());
-  out += QString("  end_time = %1\n").arg(cfg.value("times_end").toString());
-  out += QString("  time_interval = %1\n")
-             .arg(cfg.value("times_interval").toString());
-  out += "[]\n";
-  return out;
-}
-
-QString MainWindow::build_generation_report() const {
-  QStringList lines;
-  lines << "GMP-ISE Model Tree Generation Report";
-  lines << QString("Application profile: %1")
-               .arg(application_profile_.value("id").toString().isEmpty()
-                        ? QString("(not selected)")
-                        : application_profile_.value("id").toString());
-  lines << QString("Mapping registry: %1")
-               .arg(mapping_registry_.is_loaded() ? mapping_registry_.version()
-                                                  : QString("(not loaded)"));
-  lines << QString("Input mode: %1")
-               .arg(moose_panel_ ? moose_panel_->input_mode()
-                                 : QString("structured"));
-  lines << QString();
-
-  auto append_children = [this, &lines](const QString& root_name,
-                                         const QString& block_root) {
-    const auto* root = find_root_item(root_name);
-    if (!root) {
-      return;
-    }
-    for (int row = 0; row < root->childCount(); ++row) {
-      const auto* child = root->child(row);
-      if (!child) {
-        continue;
-      }
-      lines << QString("[%1/%2] <- Model Tree %3/%2")
-                   .arg(block_root, child->text(0), root_name);
-    }
-  };
-
-  if (moose_panel_) {
-    const QString mesh_path =
-        moose_panel_->moose_settings().value("mesh_path").toString();
-    if (!mesh_path.isEmpty()) {
-      lines << QString("[Mesh/file] <- Mesh path %1").arg(mesh_path);
-    }
-  }
-  if (const auto* materials = find_root_item("Materials")) {
-    for (int row = 0; row < materials->childCount(); ++row) {
-      const auto* child = materials->child(row);
-      if (!child) {
-        continue;
-      }
-      const QVariantMap params =
-          child->data(0, PropertyEditor::kParamsRole).toMap();
-      if (params.value("type").toString() == "AbaqusCDP") {
-        lines << QString("[Materials/%1_elasticity] <- Model Tree Materials/%1")
-                     .arg(child->text(0));
-        lines << QString("[Materials/%1_stress] <- Model Tree Materials/%1")
-                     .arg(child->text(0));
-        lines << QString("[Materials/%1_cdp_stress_update] <- Model Tree Materials/%1")
-                     .arg(child->text(0));
-      } else {
-        lines << QString("[Materials/%1] <- Model Tree Materials/%1")
-                     .arg(child->text(0));
-      }
-    }
-  }
-  if (const auto* sections = find_root_item("Sections")) {
-    for (int row = 0; row < sections->childCount(); ++row) {
-      const auto* child = sections->child(row);
-      const QVariantMap params =
-          child->data(0, PropertyEditor::kParamsRole).toMap();
-      lines << QString("Section %1: material=%2 -> Physical Volume(s)=%3")
-                   .arg(child->text(0), params.value("material").toString(),
-                        params.value("block").toString());
-    }
-  }
-  if (const auto* physics = find_root_item("Physics")) {
-    for (int row = 0; row < physics->childCount(); ++row) {
-      QString header;
-      build_physics_action_block(physics->child(row), &header);
-      if (!header.isEmpty()) {
-        lines << QString("[%1] <- Model Tree Physics/%2")
-                     .arg(header, physics->child(row)->text(0));
-      }
-    }
-  }
-  append_children("Functions", "Functions");
-  append_children("Variables", "Variables");
-  append_children("BC", "BCs");
-  if (const auto* loads = find_root_item("Loads")) {
-    for (int row = 0; row < loads->childCount(); ++row) {
-      const auto* child = loads->child(row);
-      if (!child) {
-        continue;
-      }
-      const QVariantMap params =
-          child->data(0, PropertyEditor::kParamsRole).toMap();
-      lines << QString("[%1/%2] <- Model Tree Loads/%2 (Physical Group=%3)")
-                   .arg(params.value("type").toString() == "Pressure"
-                            ? "BCs"
-                            : "Kernels",
-                        child->text(0),
-                        params.value("boundary").toString());
-    }
-  }
-  if (const auto* interactions = find_root_item("Interactions")) {
-    for (int row = 0; row < interactions->childCount(); ++row) {
-      const auto* child = interactions->child(row);
-      if (!child) {
-        continue;
-      }
-      const QVariantMap params =
-          child->data(0, PropertyEditor::kParamsRole).toMap();
-      lines << QString("[Contact/%1] <- Model Tree Interactions/%1 "
-                       "(primary=%2, secondary=%3, mapping=Contact/Contact)")
-                   .arg(child->text(0), params.value("primary").toString(),
-                        params.value("secondary").toString());
-    }
-  }
-  if (const auto* steps = find_root_item("Steps"); steps && steps->childCount() > 0) {
-    lines << QString("[Executioner] <- Model Tree Steps/%1")
-                 .arg(steps->child(0)->text(0));
-    lines << QString("[TimeStepper] <- Model Tree Steps/%1")
-                 .arg(steps->child(0)->text(0));
-    lines << QString("[Preconditioning/smp] <- Model Tree Steps/%1")
-                 .arg(steps->child(0)->text(0));
-    if (steps->childCount() > 1) {
-      lines << QString("WARNING: %1 Steps saved; only the first is generated in this phase.")
-                   .arg(steps->childCount());
-    }
-  }
-  if (const auto* outputs = find_root_item("Outputs");
-      outputs && outputs->childCount() > 0) {
-    for (int row = 0; row < outputs->childCount(); ++row) {
-      lines << QString("[Outputs] package <- Model Tree Outputs/%1")
-                   .arg(outputs->child(row)->text(0));
-    }
-    lines << "[AuxVariables]/[AuxKernels]/[Postprocessors]/[Times] <- Outputs package";
-  }
-  if (!mesh_snapshot_.groups.isEmpty()) {
-    lines << QString();
-    lines << "Physical Groups:";
-    for (const auto& group : mesh_snapshot_.groups) {
-      lines << QString("- %1 (dim=%2, entities=%3, elements=%4)")
-                   .arg(group.name)
-                   .arg(group.dim)
-                   .arg(group.entity_count)
-                   .arg(group.element_count);
-    }
-  }
-  return lines.join("\n");
-}
-
 bool MainWindow::sync_model_to_input(const QString& project_path_override) {
   if (!moose_panel_) {
     return false;
@@ -10748,16 +9563,28 @@ bool MainWindow::sync_model_to_input(const QString& project_path_override) {
   // 材料 CSV 等相对输入文件可能刚由属性表单更新；每次装配前刷新来源表，
   // 供项目工作目录物化与后续快照打包共同使用。
   moose_panel_->set_extra_file_sources(collect_material_file_sources());
-  const QString functions = build_functions_block(find_root_item("Functions"));
-  const QString variables = build_variables_block(find_root_item("Variables"));
-  const QString materials = build_materials_block(find_root_item("Materials"));
-  const QString bcs = build_bcs_block(find_root_item("BC"));
-  const QString kernels = build_loads_block(find_root_item("Loads"));
-  const QString outputs = build_outputs_block(find_root_item("Outputs"));
-  QString executioner =
-      build_executioner_block(find_root_item("Steps"));
+  // TASK-V02-030：块文本全部由无 Widget 的 MooseInputGenerator 生成；
+  // 此处只做面板编排与 UI 呈现（警告经 Output 通道回传）。
+  const MooseInputGenerator::Output generated =
+      MooseInputGenerator::generate(generator_input());
+  for (const QString& warning : generated.console_warnings) {
+    if (console_) {
+      console_->appendPlainText(warning);
+    }
+  }
+  if (!generated.status_warning.isEmpty()) {
+    statusBar()->showMessage(generated.status_warning, 5000);
+  }
+  const QString functions = generated.functions;
+  const QString variables = generated.variables;
+  const QString materials = generated.materials;
+  const QString bcs = generated.bcs;
+  const QString kernels = generated.loads;
+  const QString outputs = generated.outputs;
+  QString executioner = generated.executioner;
   const QStringList current_preconditioning_headers =
-      generated_headers_with_prefix(executioner, "Preconditioning/");
+      MooseInputGenerator::generated_headers_with_prefix(executioner,
+                                                         "Preconditioning/");
   // W-03e 幂等防护：apply_model_blocks 的 upsert 只锚定 [Executioner]
   // 区，[Preconditioning] 随 executioner 文本注入；若编辑器中已存在完全
   // 相同的生成块（参数未变的重复 sync），本次仅更新 [Executioner] 区，
@@ -10779,68 +9606,71 @@ bool MainWindow::sync_model_to_input(const QString& project_path_override) {
   // builder 返回空串，upsert 为空操作（demo 流程不受影响）。
   {
     QString input = moose_panel_->input_text();
-    auto* physics_root = find_root_item("Physics");
-    QSet<QString> current_physics_headers;
-    if (physics_root && physics_root->childCount() > 0) {
-      input = upsert_generated_block(input, "GlobalParams",
-                                     build_global_params_block());
-      for (int i = 0; i < physics_root->childCount(); ++i) {
-        QString header;
-        const QString block =
-            build_physics_action_block(physics_root->child(i), &header);
-        current_physics_headers.insert(header);
-        input = upsert_generated_block(input, header, block);
+    if (!generated.physics_headers.isEmpty()) {
+      input = MooseInputGenerator::upsert_generated_block(
+          input, "GlobalParams", generated.global_params);
+      for (int i = 0; i < generated.physics_headers.size(); ++i) {
+        input = MooseInputGenerator::upsert_generated_block(
+            input, generated.physics_headers.at(i),
+            generated.physics_blocks.at(i));
       }
     } else {
-      input = upsert_generated_block(input, "GlobalParams", QString());
+      input = MooseInputGenerator::upsert_generated_block(input, "GlobalParams",
+                                                          QString());
     }
-    input = upsert_generated_block(
-        input, "Contact",
-        build_interactions_block(find_root_item("Interactions")));
+    input = MooseInputGenerator::upsert_generated_block(
+        input, "Contact", generated.interactions);
     // 删除已从模型树移除或改名的 Physics action，避免旧 action 与新
     // action 同时残留在输入中。
-    for (const auto& header : generated_headers_with_prefix(
+    for (const auto& header :
+         MooseInputGenerator::generated_headers_with_prefix(
              input, "Physics/SolidMechanics/")) {
-      if (!current_physics_headers.contains(header)) {
-        input = upsert_generated_block(input, header, QString());
+      if (!generated.physics_headers.contains(header)) {
+        input = MooseInputGenerator::upsert_generated_block(input, header,
+                                                            QString());
       }
     }
     // 当前模型没有任何变量时，模板遗留的 IC 也不可能有效。IC 尚无
     // 独立模型树节点，因此在这一明确条件下清理旧 [ICs]。
     if (variables.trimmed().isEmpty()) {
-      input = upsert_generated_block(input, "ICs", QString());
+      input = MooseInputGenerator::upsert_generated_block(input, "ICs",
+                                                          QString());
     }
     // [Preconditioning/<name>] 是 Step 生成的独立顶层块。Step 删除或
     // 预条件器改名后，必须同步移除旧块。
     for (const auto& header :
-         generated_headers_with_prefix(input, "Preconditioning/")) {
+         MooseInputGenerator::generated_headers_with_prefix(
+             input, "Preconditioning/")) {
       if (!current_preconditioning_headers.contains(header)) {
-        input = upsert_generated_block(input, header, QString());
+        input = MooseInputGenerator::upsert_generated_block(input, header,
+                                                            QString());
       }
     }
-    input = upsert_generated_block(input, "AuxVariables",
-                                   build_aux_variables_block());
-    input = upsert_generated_block(input, "AuxKernels",
-                                   build_aux_kernels_block());
-    input = upsert_generated_block(input, "Postprocessors",
-                                   build_postprocessors_block());
-    QString times_header;
-    const QString times = build_times_block(&times_header);
+    input = MooseInputGenerator::upsert_generated_block(input, "AuxVariables",
+                                                        generated.aux_variables);
+    input = MooseInputGenerator::upsert_generated_block(input, "AuxKernels",
+                                                        generated.aux_kernels);
+    input = MooseInputGenerator::upsert_generated_block(input, "Postprocessors",
+                                                        generated.postprocessors);
+    const QString& times = generated.times;
+    const QString& times_header = generated.times_header;
     for (const auto& header :
-         generated_headers_with_prefix(input, "Times/")) {
+         MooseInputGenerator::generated_headers_with_prefix(input, "Times/")) {
       if (header != times_header) {
-        input = upsert_generated_block(input, header, QString());
+        input = MooseInputGenerator::upsert_generated_block(input, header,
+                                                            QString());
       }
     }
     if (!times_header.isEmpty()) {
-      input = upsert_generated_block(input, times_header, times);
+      input = MooseInputGenerator::upsert_generated_block(input, times_header,
+                                                          times);
     }
     if (input != moose_panel_->input_text()) {
       moose_panel_->apply_moose_settings({{"input_text", input}});
     }
   }
   QString merge_error;
-  if (!moose_panel_->finalize_model_sync(build_generation_report(),
+  if (!moose_panel_->finalize_model_sync(generated.generation_report,
                                          &merge_error)) {
     statusBar()->showMessage("Model sync blocked: " + merge_error, 6000);
     QMessageBox::warning(this, "Model Sync Blocked", merge_error);
@@ -19772,6 +18602,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     const QString equiv_dir =
                         QDir::tempPath() + "/gmp_tour_v02_014";
                     QDir(equiv_dir).removeRecursively();
+                    // TASK-V02-030 等价判据：加载时项目自带的 input_text 是
+                    // 重构前保存的基线产物；重构后同步输出必须与它逐字一致。
+                    const QString baseline_input =
+                        moose_panel_->moose_settings()
+                            .value("input_text")
+                            .toString();
                     const bool sync_a_ok =
                         sync_model_to_input(equiv_dir + "/equiv.gmp.yaml");
                     const QString synced_a = moose_panel_->input_text();
@@ -19786,6 +18622,15 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       throw std::runtime_error(
                           "G1 projection-era input sync is not deterministic");
                     }
+                    if (!baseline_input.isEmpty() &&
+                        synced_a != baseline_input) {
+                      throw std::runtime_error(
+                          "G1 generated input diverged from the pre-Stage-3 "
+                          "baseline text");
+                    }
+                    // 注：.work 下的 .i 磁盘文件是 demo 期残留（内容与
+                    // 项目保存的 input_text 不一致），不能当基线；基线以
+                    // 项目 YAML 保存的 input_text 为准（上方已逐字比对）。
                     // 重载后 ID 集一致。
                     const QVariantList ids_before =
                         g1_doc.to_variant_list();
