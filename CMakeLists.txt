@@ -98,64 +98,77 @@ if(GMP_ENABLE_GMSH_GUI)
   target_link_libraries(planegcs PUBLIC Eigen3::Eigen Boost::headers)
 endif()
 
+# ===== TASK-V02-070：CMake 模块化（编译边界对齐 v0.2 架构边界） =====
+add_subdirectory(external/yaml-cpp)
+
+# hc_core：gmp::core 纯逻辑层（ProjectDocument/PropertyBag/DependencyGraph/
+# TransactionManager + 视口共享纯逻辑底座）。不链接 Qt Widgets/Gmsh/VTK/网络。
+add_library(hc_core STATIC
+  src/ProjectDocument.cpp include/gmp/ProjectDocument.h
+  src/PropertyBag.cpp include/gmp/PropertyBag.h
+  src/DependencyGraph.cpp include/gmp/DependencyGraph.h
+  src/TransactionManager.cpp include/gmp/TransactionManager.h
+  src/ViewportCamera.cpp include/gmp/ViewportCamera.h
+  src/ViewportSelection.cpp include/gmp/ViewportSelection.h
+)
+target_include_directories(hc_core PUBLIC include)
+target_link_libraries(hc_core PUBLIC Qt6::Core PRIVATE yaml-cpp)
+
+# hc_simulation：MOOSE 输入生成/快照编排及可带走的元数据层
+#（MooseSnapshot/MooseTemplates/PhysicalGroupManifest/ProjectSchema/
+# MooseMappingRegistry/ApplicationProfile/SimClient/Env/UnitDisplay/
+# ProjectStore/OperationLog）。不依赖 Widgets/Gmsh/VTK。
+add_library(hc_simulation STATIC
+  src/MooseInputGenerator.cpp include/gmp/MooseInputGenerator.h
+  src/SnapshotService.cpp include/gmp/SnapshotService.h
+  src/MooseSnapshot.cpp include/gmp/MooseSnapshot.h
+  src/MooseTemplates.cpp include/gmp/MooseTemplates.h
+  src/PhysicalGroupManifest.cpp include/gmp/PhysicalGroupManifest.h
+  src/ProjectSchema.cpp include/gmp/ProjectSchema.h
+  src/MooseMappingRegistry.cpp include/gmp/MooseMappingRegistry.h
+  src/ApplicationProfile.cpp include/gmp/ApplicationProfile.h
+  src/SimClient.cpp include/gmp/SimClient.h
+  src/Env.cpp include/gmp/Env.h
+  src/UnitDisplay.cpp include/gmp/UnitDisplay.h
+  src/ProjectStore.cpp include/gmp/ProjectStore.h
+  src/OperationLog.cpp include/gmp/OperationLog.h
+)
+target_include_directories(hc_simulation PUBLIC include)
+target_link_libraries(hc_simulation PUBLIC hc_core Qt6::Core Qt6::Network yaml-cpp)
+
+# hc_mesh/hc_cad：Gmsh 会话层服务（PhysicalGroupService/GmshMesher/
+# AssemblyGeometryService + SketchDocument 几何数据）。gmsh 为可选依赖
+#（GMP_ENABLE_GMSH_GUI 关闭时编译为守护桩，可无 gmsh 链接使用）。
+add_library(hc_mesh STATIC
+  src/PhysicalGroupService.cpp include/gmp/PhysicalGroupService.h
+  src/GmshMesher.cpp include/gmp/GmshMesher.h
+  src/AssemblyGeometryService.cpp include/gmp/AssemblyGeometryService.h
+  src/SketchDocument.cpp include/gmp/SketchDocument.h
+)
+target_include_directories(hc_mesh PUBLIC include)
+target_link_libraries(hc_mesh PUBLIC Qt6::Core yaml-cpp)
+if(GMP_ENABLE_GMSH_GUI)
+  target_compile_definitions(hc_mesh PRIVATE GMP_ENABLE_GMSH_GUI)
+  if(TARGET gmsh::shared)
+    target_link_libraries(hc_mesh PUBLIC gmsh::shared)
+  endif()
+endif()
+
 add_executable(gmp_ise
   src/main.cpp
-  src/Env.cpp
-  include/gmp/Env.h
   resources/icons.qrc
   src/MainWindow.cpp
   src/ModelTreeAdapter.cpp
   include/gmp/ModelTreeAdapter.h
-  src/OperationLog.cpp
-  include/gmp/OperationLog.h
   src/StageLeftToolbar.cpp
   include/gmp/StageLeftToolbar.h
   src/GmshPanel.cpp
   src/SketchPanel.cpp
   include/gmp/SketchPanel.h
-  src/SketchDocument.cpp
-  include/gmp/SketchDocument.h
   src/PartFeaturePanel.cpp
   include/gmp/PartFeaturePanel.h
   src/L10n.cpp
   src/MoosePanel.cpp
-  src/MooseTemplates.cpp
-  src/MooseSnapshot.cpp
-  src/MooseMappingRegistry.cpp
-  include/gmp/MooseMappingRegistry.h
-  src/ApplicationProfile.cpp
-  include/gmp/ApplicationProfile.h
-  src/PhysicalGroupManifest.cpp
-  include/gmp/PhysicalGroupManifest.h
-  src/ProjectDocument.cpp
-  include/gmp/ProjectDocument.h
-  src/DependencyGraph.cpp
-  include/gmp/DependencyGraph.h
-  src/TransactionManager.cpp
-  include/gmp/TransactionManager.h
-  src/PropertyBag.cpp
-  include/gmp/PropertyBag.h
-  src/ProjectSchema.cpp
-  include/gmp/ProjectSchema.h
-  src/SimClient.cpp
-  src/UnitDisplay.cpp
-  include/gmp/UnitDisplay.h
-  src/ProjectStore.cpp
-  include/gmp/ProjectStore.h
-  src/MooseInputGenerator.cpp
-  include/gmp/MooseInputGenerator.h
-  src/PhysicalGroupService.cpp
-  include/gmp/PhysicalGroupService.h
-  src/GmshMesher.cpp
-  include/gmp/GmshMesher.h
-  src/AssemblyGeometryService.cpp
-  include/gmp/AssemblyGeometryService.h
-  src/SnapshotService.cpp
-  include/gmp/SnapshotService.h
-  src/ViewportCamera.cpp
-  include/gmp/ViewportCamera.h
-  src/ViewportSelection.cpp
-  include/gmp/ViewportSelection.h
   src/SketchViewport.cpp
   include/gmp/SketchViewport.h
   src/MeshViewport.cpp
@@ -188,7 +201,7 @@ add_executable(gmp_ise
 )
 
 target_include_directories(gmp_ise PRIVATE include)
-target_link_libraries(gmp_ise PRIVATE Qt6::Widgets Qt6::Network)
+target_link_libraries(gmp_ise PRIVATE hc_simulation hc_mesh Qt6::Widgets Qt6::Network)
 
 # TASK-E2E-10: MOOSE 模板库根目录（templates/moose/），运行期可被
 # GMP_MOOSE_TEMPLATES 环境变量覆盖
@@ -196,8 +209,6 @@ target_compile_definitions(gmp_ise PRIVATE
   GMP_TEMPLATE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates/moose"
   GMP_PROFILE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates/moose/profiles")
 
-add_subdirectory(external/yaml-cpp)
-target_link_libraries(gmp_ise PRIVATE yaml-cpp)
 
 if(GMP_ENABLE_GMSH_GUI)
   target_compile_definitions(gmp_ise PRIVATE GMP_ENABLE_GMSH_GUI)
@@ -224,33 +235,9 @@ if(GMP_ENABLE_VTK_VIEWER)
 endif()
 
 # Phase 0 自测程序：验证 ApplicationProfile、MooseMappingRegistry、PhysicalGroupManifest、Snapshot v2、提交清单
-add_executable(gmp_ise_phase0_test tests/test_phase0.cpp
-  src/ApplicationProfile.cpp include/gmp/ApplicationProfile.h
-  src/MooseMappingRegistry.cpp include/gmp/MooseMappingRegistry.h
-  src/MooseSnapshot.cpp include/gmp/MooseSnapshot.h
-  src/MooseTemplates.cpp include/gmp/MooseTemplates.h
-  src/PhysicalGroupManifest.cpp include/gmp/PhysicalGroupManifest.h
-  src/DependencyGraph.cpp include/gmp/DependencyGraph.h
-  src/TransactionManager.cpp include/gmp/TransactionManager.h
-  src/ProjectDocument.cpp include/gmp/ProjectDocument.h
-  src/PropertyBag.cpp include/gmp/PropertyBag.h
-  src/ProjectSchema.cpp include/gmp/ProjectSchema.h
-  src/SimClient.cpp include/gmp/SimClient.h
-  src/UnitDisplay.cpp include/gmp/UnitDisplay.h
-  src/ProjectStore.cpp include/gmp/ProjectStore.h
-  src/MooseInputGenerator.cpp include/gmp/MooseInputGenerator.h
-  src/PhysicalGroupService.cpp include/gmp/PhysicalGroupService.h
-  src/AssemblyGeometryService.cpp include/gmp/AssemblyGeometryService.h
-  src/GmshMesher.cpp include/gmp/GmshMesher.h
-  src/SnapshotService.cpp include/gmp/SnapshotService.h
-  src/ViewportCamera.cpp include/gmp/ViewportCamera.h
-  src/ViewportSelection.cpp include/gmp/ViewportSelection.h
-  src/OperationLog.cpp include/gmp/OperationLog.h
-  src/SketchDocument.cpp include/gmp/SketchDocument.h
-  src/Env.cpp include/gmp/Env.h
-)
+add_executable(gmp_ise_phase0_test tests/test_phase0.cpp)
 target_include_directories(gmp_ise_phase0_test PRIVATE include)
-target_link_libraries(gmp_ise_phase0_test PRIVATE Qt6::Core Qt6::Network yaml-cpp)
+target_link_libraries(gmp_ise_phase0_test PRIVATE hc_simulation hc_mesh Qt6::Core Qt6::Network)
 target_compile_definitions(gmp_ise_phase0_test PRIVATE
   GMP_TEMPLATE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates/moose"
   GMP_PROFILE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/templates/moose/profiles")

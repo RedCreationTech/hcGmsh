@@ -1914,8 +1914,12 @@ void test_assembly_mesher_service_contract(TestContext& test) {
     threw = true;
     message = ex.message();
   }
-  test.expect(threw && message.contains("Gmsh is not enabled"),
-              "mesher prepare without gmsh throws a readable MeshJobError");
+  // 守护桩构建（无 gmsh）拒绝“未启用”；真实 gmsh 构建下空模型同样被
+  // 预检拒绝——两种形态都必须是可读 MeshJobError。
+  test.expect(threw && !message.isEmpty() &&
+                  (message.contains("Gmsh is not enabled") ||
+                   message.contains("No geometry in the current model")),
+              "mesher prepare without a model throws a readable MeshJobError");
 }
 
 // TASK-V02-050：视口共享底座纯逻辑合同（相机数学 + 选择状态机）。
