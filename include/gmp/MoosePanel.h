@@ -184,11 +184,8 @@ class MoosePanel : public QWidget {
   // W-00c：由注入的 application_profile_map_ 组装档案；单位合同缺省时回落
   // unit_contract_map_ 的标量键。
   ApplicationProfile snapshot_profile() const;
-  // W-00c：把 .i 中的绝对文件引用归一化为快照相对名（返回空串=成功；
-  // file_sources 记录 相对名->来源绝对路径，file_roles 记录显式 .e 角色）。
-  QString normalize_snapshot_refs(QString* input_text,
-                                  QMap<QString, QString>* file_sources,
-                                  QMap<QString, QString>* file_roles) const;
+  // W-00c/TASK-V02-031：.i 引用归一化与快照导出编排已下沉到
+  // gmp::SnapshotService（见 include/gmp/SnapshotService.h）。
   void load_settings();
   void save_settings() const;
   void update_exec_history(const QString& path);

@@ -20,6 +20,7 @@
 #include "gmp/PropertyBag.h"
 #include "gmp/SimClient.h"
 #include "gmp/SketchDocument.h"
+#include "gmp/SnapshotService.h"
 #include "gmp/TransactionManager.h"
 #include "gmp/UnitDisplay.h"
 
@@ -1682,6 +1683,146 @@ void test_moose_input_generator_contract(TestContext& test) {
               "generated header scan finds the upserted block");
 }
 
+// TASK-V02-031：SnapshotService 编排层合同（无 Widget，临时目录）。
+// manifest 等价判据：服务编排产物与直调 export_job_snapshot_v2 的合同
+// 字段一致（哈希/角色/相对路径/包内 basename 网格路径），除 created_at
+// 与 case_id（时间字段）外不变。
+void test_snapshot_service_contract(TestContext& test) {
+  QTemporaryDir workspace;
+  const QString source_dir = workspace.filePath("svc-source");
+  const QByteArray mesh_data("gmsh-mesh-v31\n");
+  const QByteArray csv_data("strain,stress\n0,0\n");
+  write_file(QDir(source_dir).filePath("mesh/case.msh"), mesh_data);
+  write_file(QDir(source_dir).filePath("extra/ch.csv"), csv_data);
+
+  // ---- preflight 闸门 ----
+  auto manifest = valid_physical_groups(gmp::sha256_hex(mesh_data));
+  manifest.mesh_path = "mesh/case.msh";
+  test.expect(gmp::SnapshotService::preflight_error(valid_profile(), manifest)
+                  .isEmpty(),
+              "preflight passes with a valid profile and manifest");
+  gmp::ApplicationProfile no_profile;
+  test.expect(gmp::SnapshotService::preflight_error(no_profile, manifest)
+                  .contains("application profile"),
+              "preflight rejects a missing application profile");
+  test.expect(gmp::SnapshotService::preflight_error(
+                  valid_profile(), gmp::PhysicalGroupManifest())
+                  .contains("Physical group manifest"),
+              "preflight rejects an incomplete physical group manifest");
+
+  // ---- normalize_refs ----
+  const QString abs_mesh = QDir(source_dir).filePath("mesh/case.msh");
+  const QString abs_csv = QDir(source_dir).filePath("extra/ch.csv");
+  QString text = "[Mesh]\n  file = '" + abs_mesh + "'\n[]\n"
+                 "[Materials]\n  compression_hardening_file = '" + abs_csv +
+                 "'\n[]\n";
+  QMap<QString, QString> sources;
+  QMap<QString, QString> roles;
+  QMap<QString, QString> extra = {{"other.csv", "/elsewhere/other.csv"}};
+  test.expect(gmp::SnapshotService::normalize_refs(abs_mesh, extra, &text,
+                                                   &sources, &roles)
+                  .isEmpty() &&
+                  !text.contains(abs_mesh) && !text.contains(abs_csv) &&
+                  text.contains("case.msh") &&
+                  sources.value("case.msh") == abs_mesh &&
+                  sources.value("ch.csv") == abs_csv &&
+                  sources.value("other.csv") == "/elsewhere/other.csv",
+              "normalize rewrites absolute refs to basenames and merges "
+              "explicit sources without overriding");
+  QString missing_text = "[Mesh]\n  file = '/nonexistent/none.msh'\n[]\n";
+  test.expect(gmp::SnapshotService::normalize_refs(QString(), {}, 
+                                                   &missing_text, &sources,
+                                                   &roles)
+                  .contains("does not exist"),
+              "normalize rejects references to missing files");
+  // 同名冲突：不同目录的同名文件拒绝。
+  const QString other_dir = workspace.filePath("other");
+  write_file(QDir(other_dir).filePath("case.msh"), "different\n");
+  QString conflict_text = "[Mesh]\n  file = '" + abs_mesh + "'\n"
+                          "  second_file = '" +
+                          QDir(other_dir).filePath("case.msh") + "'\n[]\n";
+  test.expect(gmp::SnapshotService::normalize_refs(QString(), {},
+                                                   &conflict_text, &sources,
+                                                   &roles)
+                  .contains("same"),
+              "normalize rejects same-basename files from different dirs");
+
+  // ---- export_snapshot 编排 ----
+  gmp::SnapshotExportRequest request;
+  request.dest_parent = workspace.filePath("exports");
+  QDir().mkpath(request.dest_parent);
+  request.input_text = text;
+  request.input_path_text = "/work/proj/case.i";
+  request.mesh_path_text = abs_mesh;
+  request.input_mode = "structured";
+  request.project_path = workspace.filePath("proj.gmp.yaml");
+  write_file(request.project_path, "schema_version: 2\nmodel: {}\n");
+  request.profile = valid_profile();
+  request.unit_contract = {{"display_to_solver_factors",
+                            QVariantMap{{"pressure", 1000000.0}}}};
+  request.file_sources = sources;
+  request.file_roles = roles;
+  manifest.mesh_path = abs_mesh;  // 项目内清单允许绝对路径
+  request.physical_groups = manifest;
+  request.generator_version = "gmp-ise-test";
+  const auto outcome = gmp::SnapshotService::export_snapshot(request);
+  test.expect(outcome.ok && outcome.dir_name.startsWith("case-") &&
+                  outcome.result.dir ==
+                      QDir(request.dest_parent).filePath(outcome.dir_name),
+              "service allocates a timestamped case dir and exports");
+  const QJsonObject manifest_json = outcome.result.manifest;
+  test.expect(manifest_json.value("contract_version").toString() == "2.0.0" &&
+                  manifest_json.value("case_id").toString() ==
+                      outcome.dir_name &&
+                  !manifest_json.value("traceability")
+                       .toObject()
+                       .value("project_version")
+                       .toString()
+                       .isEmpty() &&
+                  manifest_json.value("unit_contract")
+                          .toObject()
+                          .value("display_to_solver_factors")
+                          .toObject()
+                          .value("pressure")
+                          .toDouble() == 1000000.0,
+              "manifest carries contract v2 fields, project hash and unit "
+              "factors");
+  const QJsonArray mesh_files = manifest_json.value("input_snapshot")
+                                    .toObject()
+                                    .value("mesh_files")
+                                    .toArray();
+  test.expect(mesh_files.size() == 1 &&
+                  mesh_files.first().toObject().value("name") == "case.msh" &&
+                  mesh_files.first().toObject().value("sha256") ==
+                      gmp::sha256_hex(mesh_data),
+              "packaged manifest references the mesh by in-package basename "
+              "with content hash");
+  test.expect(outcome.result.input_sha256 == gmp::sha256_hex(text.toUtf8()),
+              "input hash matches the normalized .i content");
+  // 版本目录撞名：第二次导出落到 -2 后缀。
+  const auto second = gmp::SnapshotService::export_snapshot(request);
+  test.expect(second.ok && second.dir_name != outcome.dir_name,
+              "repeated export allocates a fresh version directory");
+  // manifest 等价：两次导出除 created_at/case_id 外逐字段一致。
+  QJsonObject a = manifest_json;
+  QJsonObject b = second.result.manifest;
+  a.remove("created_at");
+  a.remove("case_id");
+  b.remove("created_at");
+  b.remove("case_id");
+  test.expect(QJsonDocument(a) == QJsonDocument(b),
+              "service manifests are equivalent apart from time fields");
+
+  // 失败路径：无效清单不产出目录。
+  gmp::SnapshotExportRequest bad = request;
+  bad.physical_groups = gmp::PhysicalGroupManifest();
+  const auto rejected = gmp::SnapshotService::export_snapshot(bad);
+  test.expect(!rejected.ok && !rejected.error.isEmpty() &&
+                  !QFileInfo::exists(QDir(request.dest_parent)
+                                         .filePath(rejected.dir_name)),
+              "invalid manifest fails without leaving a snapshot directory");
+}
+
 void test_submission_manifest(TestContext& test) {
 
   const QByteArray unicode_disposition =
@@ -1801,6 +1942,7 @@ int main(int argc, char* argv[]) {
   test_unit_display_contract(test);
   test_project_store_contract(test);
   test_moose_input_generator_contract(test);
+  test_snapshot_service_contract(test);
   test_submission_manifest(test);
   if (test.failures == 0) {
     qInfo("Phase 0 contract tests PASSED");
