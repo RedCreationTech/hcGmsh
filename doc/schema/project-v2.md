@@ -114,9 +114,10 @@ viewer:
 
 ```yaml
 - id: "9d5c0182-7ee6-4dc7-9c2e-1bd3ab1b7f55" # 可选；加载旧项目时生成，首次保存后固化
+  parent: "c180f159-e335-46ef-931b-385ce37eae31" # 可选；缺省挂载到 kind 对应根节点
   name: "Material-1"
   kind: "Materials"
-  status: "ready"   # ready | incomplete | invalid | stale | disabled
+  status: "ready"   # 规范值：ready | incomplete | invalid | stale | disabled；兼容保留 Generated/Running/Success 等运行态
   params:
     type: "ComputeIsotropicElasticityTensor"
     youngs_modulus: "30e9"

@@ -24,6 +24,7 @@ class ObjectId {
   explicit ObjectId(const QString& value) : value_(value) {}
 
   static ObjectId generate();  // QUuid 随机 ID，冲突概率可忽略
+  static ObjectId root(const QString& kind);  // 固定根节点保留 ID
 
   bool isValid() const { return !value_.isEmpty(); }
   QString toString() const { return value_; }
@@ -44,8 +45,8 @@ class ObjectId {
 // doc/ref/03 §5.3 排期，本阶段保持字符串键以兼容全部既有节点类型。
 using ObjectKind = QString;
 
-// 对象状态机，取值与既有 status 字符串逐字对齐（doc/schema/project-v2.md
-// §3.2）。空字符串与未知大小写按 Ready 解析（旧项目 status: "" 的语义）。
+// 领域状态机的五个规范值。工程文件还有 Generated/Running/Success 等
+// 运行态字符串；ProjectObject 保留原文，status() 对非规范值回退 Ready。
 enum class ObjectStatus { Ready, Incomplete, Invalid, Stale, Disabled };
 
 QString to_string(ObjectStatus status);
@@ -62,9 +63,11 @@ class ProjectObject {
   ObjectId id() const { return id_; }
   const QString& name() const { return name_; }
   const ObjectKind& kind() const { return kind_; }
-  ObjectStatus status() const { return status_; }
+  ObjectStatus status() const { return object_status_from_string(status_text_); }
+  const QString& statusText() const { return status_text_; }
   void setName(const QString& name) { name_ = name; }
-  void setStatus(ObjectStatus status) { status_ = status; }
+  void setStatus(ObjectStatus status) { status_text_ = to_string(status); }
+  void setStatusText(const QString& status) { status_text_ = status; }
 
   PropertyBag& properties();
   const PropertyBag& properties() const;
@@ -76,7 +79,7 @@ class ProjectObject {
   ObjectId id_;
   QString name_;
   ObjectKind kind_;
-  ObjectStatus status_ = ObjectStatus::Ready;
+  QString status_text_ = QStringLiteral("ready");
   std::unique_ptr<PropertyBag> properties_;
 };
 
@@ -87,6 +90,8 @@ class ProjectDocument {
  public:
   ProjectDocument();
   ~ProjectDocument();
+  ProjectDocument(ProjectDocument&&) noexcept;
+  ProjectDocument& operator=(ProjectDocument&&) noexcept;
 
   // 挂载对象。object 未携带 ID 时由文档分配；ID 重复或 parent 无效
   // （非空且不存在）时失败并返回无效 ObjectId。parent 为空 = 顶层对象。

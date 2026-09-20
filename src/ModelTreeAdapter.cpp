@@ -4,6 +4,7 @@
 #include <QTreeWidgetItem>
 
 #include <functional>
+#include <utility>
 
 #include "gmp/PropertyBag.h"
 #include "gmp/PropertyEditor.h"
@@ -14,10 +15,7 @@ ModelTreeAdapter::ModelTreeAdapter(QTreeWidget* tree)
     : QObject(tree), tree_(tree) {}
 
 core::ObjectId ModelTreeAdapter::root_id(const QString& root_name) {
-  if (root_name.trimmed().isEmpty()) {
-    return core::ObjectId();
-  }
-  return core::ObjectId(QStringLiteral("root:") + root_name);
+  return core::ObjectId::root(root_name);
 }
 
 core::ObjectId ModelTreeAdapter::id_for_item(const QTreeWidgetItem* item) const {
@@ -68,6 +66,11 @@ core::ProjectDocument& ModelTreeAdapter::document() {
   return document_;
 }
 
+void ModelTreeAdapter::replace_document(core::ProjectDocument document) {
+  document_ = std::move(document);
+  dirty_ = false;
+}
+
 void ModelTreeAdapter::rebuild_from_tree() {
   document_.clear();
   if (tree_) {
@@ -97,8 +100,8 @@ void ModelTreeAdapter::rebuild_from_tree() {
         auto object = std::make_unique<core::ProjectObject>(
             child->data(0, PropertyEditor::kKindRole).toString(),
             child->text(0), object_id);
-        object->setStatus(core::object_status_from_string(
-            child->data(0, PropertyEditor::kStatusRole).toString()));
+        object->setStatusText(
+            child->data(0, PropertyEditor::kStatusRole).toString());
         object->properties() = core::PropertyBag::from_variant_map(
             child->data(0, PropertyEditor::kParamsRole).toMap());
         document_.addObject(std::move(object), root_object_id);

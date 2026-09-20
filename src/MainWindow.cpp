@@ -10784,8 +10784,10 @@ bool MainWindow::load_project(const QString& path) {
     // ProjectStore；此处只做 Tree/面板应用与 UI 联动。条目名已在
     // ProjectStore 按 unique_child_name 同款规则去重。
     ProjectData data;
+    core::ProjectDocument loaded_document;
     QString load_error;
-    if (!project_store_.load_file(path, &data, &load_error)) {
+    if (!project_store_.load_file(path, &data, &load_error,
+                                  &loaded_document)) {
       suppress_dirty_ = false;
       QMessageBox::warning(this, "Project Load", load_error);
       return false;
@@ -10805,6 +10807,9 @@ bool MainWindow::load_project(const QString& path) {
       child->setData(0, PropertyEditor::kStatusRole, entry.status);
       child->setData(0, PropertyEditor::kParamsRole,
                      normalize_params_for_kind(entry.kind, entry.params));
+    }
+    if (model_tree_adapter_) {
+      model_tree_adapter_->replace_document(std::move(loaded_document));
     }
     project_path_ = path;
     gmp::log_operation("project", "Project loaded: " + path);
@@ -10951,28 +10956,14 @@ bool MainWindow::save_project(const QString& path) {
     // 避免 Material/Section 已就绪而工程仍持久化旧输入文本。
     sync_model_to_input(path);
 
-    // TASK-V02-020：YAML 装配与写盘下沉到 ProjectStore；此处只做
-    // Tree/面板采集。status 回退（kStatusRole 为空取 params.status）是
-    // UI 侧语义，在采集时解析。
+    // HARD-030：模型段直接从 Document 序列化；ProjectData 只采集
+    // 面板设置、快照等非模型元数据。
     ProjectData data;
     data.schema_version = schema_version_;
     data.application_profile = application_profile_;
     data.unit_contract = unit_contract_;
     data.mesh_snapshot = mesh_snapshot_;
     data.input_snapshots = input_snapshots_;
-    data.model_entries = collect_model_entries();
-    for (int i = 0; i < model_tree_->topLevelItemCount(); ++i) {
-      auto* root_item = model_tree_->topLevelItem(i);
-      if (!root_item) {
-        continue;
-      }
-      data.model_roots << root_item->text(0);
-    }
-    for (auto& entry : data.model_entries) {
-      if (entry.status.isEmpty()) {
-        entry.status = entry.params.value("status").toString();
-      }
-    }
     if (gmsh_panel_) {
       data.gmsh_settings = gmsh_panel_->gmsh_settings();
     }
@@ -10983,7 +10974,9 @@ bool MainWindow::save_project(const QString& path) {
       data.viewer_settings = viewer_->viewer_settings();
     }
     QString save_error;
-    if (!project_store_.save_file(path, data, &save_error)) {
+    const core::ProjectDocument* document =
+        model_tree_adapter_ ? &model_tree_adapter_->document() : nullptr;
+    if (!project_store_.save_file(path, data, &save_error, document)) {
       QMessageBox::warning(this, "Project Save", save_error);
       return false;
     }

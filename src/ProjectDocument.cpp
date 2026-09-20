@@ -13,6 +13,12 @@ ObjectId ObjectId::generate() {
   return ObjectId(QUuid::createUuid().toString(QUuid::WithoutBraces));
 }
 
+ObjectId ObjectId::root(const QString& kind) {
+  return kind.trimmed().isEmpty()
+             ? ObjectId()
+             : ObjectId(QStringLiteral("root:") + kind);
+}
+
 QString to_string(ObjectStatus status) {
   switch (status) {
     case ObjectStatus::Ready:
@@ -71,6 +77,9 @@ const PropertyBag& ProjectObject::properties() const {
 
 ProjectDocument::ProjectDocument() = default;
 ProjectDocument::~ProjectDocument() = default;
+ProjectDocument::ProjectDocument(ProjectDocument&&) noexcept = default;
+ProjectDocument& ProjectDocument::operator=(ProjectDocument&&) noexcept =
+    default;
 
 ObjectId ProjectDocument::addObject(std::unique_ptr<ProjectObject> object,
                                     ObjectId parent) {
@@ -165,7 +174,7 @@ QVariantList ProjectDocument::to_variant_list() const {
     entry.insert("id", object->id().toString());
     entry.insert("name", object->name());
     entry.insert("kind", object->kind());
-    entry.insert("status", to_string(object->status()));
+    entry.insert("status", object->statusText());
     entry.insert("parent", parent_.value(object->id().toString()).toString());
     entry.insert("params", object->properties().to_variant_map());
     list.append(entry);
@@ -206,13 +215,7 @@ bool ProjectDocument::from_variant_list(const QVariantList& list,
     seen.insert(id.toString());
     auto object = std::make_unique<ProjectObject>(
         entry.value("kind").toString(), entry.value("name").toString(), id);
-    bool status_ok = false;
-    object->setStatus(object_status_from_string(
-        entry.value("status").toString(), &status_ok));
-    if (!status_ok) {
-      return fail("unknown object status: " +
-                  entry.value("status").toString());
-    }
+    object->setStatusText(entry.value("status").toString());
     object->properties() =
         PropertyBag::from_variant_map(entry.value("params").toMap());
     const ObjectId parent(entry.value("parent").toString());

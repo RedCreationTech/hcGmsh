@@ -1,15 +1,14 @@
 #pragma once
 
 // v0.2 Stage 2 app 层（hc_app 过渡形态，Q5 批复：逻辑边界先行）。
-// ProjectStore：.gmp.yaml 持久化的唯一实现点——schema v2 读写、模型条目
-// 装配、网格路径迁移（legacy out/ 与他项目 .work/case 两种）。只依赖
+// ProjectStore：.gmp.yaml 持久化的唯一实现点——schema v2 读写、模型文档
+// 转换、网格路径迁移（legacy out/ 与他项目 .work/case 两种）。只依赖
 // Qt Core + yaml-cpp + project_schema/PhysicalGroupManifest，不依赖
 // Qt Widgets/Gmsh/VTK/网络；加载/保存失败经错误串上报，由 MainWindow
 // 呈现（本层不弹窗）。
 //
-// 与 ModelTreeAdapter 的关系：本层只产出/消费纯数据 ProjectData；
-// Tree 装载/采集仍是 MainWindow 职责，Document 投影维持现状
-// （TASK-V02-014），不在本层直接装载 Document。
+// 模型数据直接产出/消费 ProjectDocument；面板设置与网格快照等
+// 非模型元数据仍由 ProjectData 承载。
 
 #include <QList>
 #include <QString>
@@ -19,6 +18,10 @@
 #include "gmp/PhysicalGroupManifest.h"
 
 namespace gmp {
+
+namespace core {
+class ProjectDocument;
+}
 
 // ---- 路径工具（自 MainWindow.cpp 匿名命名空间下沉，行为不变） ----
 
@@ -38,6 +41,7 @@ QString enclosing_case_work_dir(const QString& path);
 
 struct ProjectModelEntry {
   QString id;       // schema v2 可选稳定 ObjectId；旧文件加载时生成
+  QString parent_id;  // 可选；缺省时挂载到 kind 对应根节点
   QString name;
   QString kind;     // 根节点名（Parts/Materials/…/Input Cases/…）
   QString status;   // ready|incomplete|invalid|stale|disabled 或空
@@ -64,10 +68,13 @@ class ProjectStore {
   // 加载 .gmp.yaml。版本不受支持/缺少 model 段/文件不可读时返回 false
   // 并写 error（文案与既有弹窗一致）。模型条目名按既有
   // unique_child_name 规则（base、base_2、base_3…）去重。
-  bool load_file(const QString& path, ProjectData* out, QString* error) const;
+  bool load_file(const QString& path, ProjectData* out, QString* error,
+                 core::ProjectDocument* document = nullptr) const;
   // 保存为 schema v2（saved_at 由本层写入当前 UTC 时间）。
+  // document 非空时，模型段以 Document 为准，ProjectData 只提供元数据。
   bool save_file(const QString& path, const ProjectData& data,
-                 QString* error) const;
+                 QString* error,
+                 const core::ProjectDocument* document = nullptr) const;
 
   // 单条网格路径迁移：legacy out/ 或他项目 .work/case/<X>/ 下的路径
   // 迁移到 project_path 自有工作目录（复制文件，目标已存在不覆盖；源

@@ -22,6 +22,7 @@ class ModelTreeAdapter : public QObject {
 
   // 懒同步入口：脏时先从 Tree 全量重建再返回。
   core::ProjectDocument& document();
+  void replace_document(core::ProjectDocument document);
   bool is_dirty() const { return dirty_; }
   void mark_dirty();
   void rebuild_from_tree();

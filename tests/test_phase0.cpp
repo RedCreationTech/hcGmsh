@@ -1358,6 +1358,7 @@ void test_project_store_contract(TestContext& test) {
   mat.id = "object-material";
   mat.name = "concrete_elasticity";
   mat.kind = "Materials";
+  mat.status = "Generated";
   mat.params = {{"type", "ComputeIsotropicElasticityTensor"},
                 {"block", "instance_concrete"},
                 {"youngs_modulus", 29791459780.0},
@@ -1381,8 +1382,10 @@ void test_project_store_contract(TestContext& test) {
   test.expect(store.save_file(project_file, data, &error) && error.isEmpty(),
               "project store saves a v2 project file");
   gmp::ProjectData loaded;
-  test.expect(store.load_file(project_file, &loaded, &error),
-              "project store loads the saved file");
+  gmp::core::ProjectDocument loaded_document;
+  test.expect(store.load_file(project_file, &loaded, &error,
+                              &loaded_document),
+              "project store loads the saved file and document");
   bool entries_equal = loaded.model_entries.size() == 2;
   for (int i = 0; entries_equal && i < 2; ++i) {
     const auto& expected = data.model_entries.at(i);
@@ -1397,6 +1400,24 @@ void test_project_store_contract(TestContext& test) {
               "model entries round-trip with typed params intact");
   test.expect(loaded.model_roots == data.model_roots,
               "all model roots (including empty ones) are preserved");
+  test.expect(loaded_document.roots() ==
+                      QList<gmp::core::ObjectId>{
+                          gmp::core::ObjectId::root("Parts"),
+                          gmp::core::ObjectId::root("Materials"),
+                          gmp::core::ObjectId::root("Input Cases"),
+                          gmp::core::ObjectId::root("Mesh")} &&
+                  loaded_document.parentOf(
+                      gmp::core::ObjectId("object-part")) ==
+                      gmp::core::ObjectId::root("Parts") &&
+                  loaded_document.object(
+                      gmp::core::ObjectId("object-material"))
+                          ->statusText() == "Generated" &&
+                  loaded_document.object(
+                          gmp::core::ObjectId("object-part"))
+                          ->properties()
+                          .get("visible")
+                          .toBool(),
+              "project data converts directly to an ordered typed document");
   test.expect(loaded.gmsh_settings == data.gmsh_settings &&
                   loaded.moose_settings == data.moose_settings &&
                   loaded.viewer_settings == data.viewer_settings,
@@ -1417,12 +1438,57 @@ void test_project_store_contract(TestContext& test) {
   // 二次 round-trip 稳定（第一圈之后的类型形态不再漂移）。
   const QString second_file = workspace.filePath("roundtrip2.gmp.yaml");
   gmp::ProjectData reloaded;
-  test.expect(store.save_file(second_file, loaded, &error) &&
-                  store.load_file(second_file, &reloaded, &error) &&
+  gmp::core::ProjectDocument reloaded_document;
+  test.expect(store.save_file(second_file, loaded, &error,
+                              &loaded_document) &&
+                  store.load_file(second_file, &reloaded, &error,
+                                  &reloaded_document) &&
                   reloaded.model_entries.first().params ==
                       loaded.model_entries.first().params &&
-                  reloaded.gmsh_settings == loaded.gmsh_settings,
-              "second round-trip is a fixed point");
+                  reloaded.model_entries.at(1).status == "Generated" &&
+                  reloaded.gmsh_settings == loaded.gmsh_settings &&
+                  reloaded_document.to_variant_list() ==
+                      loaded_document.to_variant_list(),
+              "document-backed second round-trip is a fixed point");
+
+  gmp::ProjectData hierarchy;
+  hierarchy.model_roots = {"Parts", "Features"};
+  gmp::ProjectModelEntry parent;
+  parent.id = "parent-part";
+  parent.name = "part";
+  parent.kind = "Parts";
+  gmp::ProjectModelEntry child;
+  child.id = "child-feature";
+  child.parent_id = parent.id;
+  child.name = "feature";
+  child.kind = "Features";
+  child.params = {{"distance", 1.25}};
+  hierarchy.model_entries = {parent, child};
+  const QString hierarchy_file = workspace.filePath("hierarchy.gmp.yaml");
+  gmp::core::ProjectDocument hierarchy_document;
+  gmp::ProjectData hierarchy_loaded;
+  test.expect(store.save_file(hierarchy_file, hierarchy, &error) &&
+                  store.load_file(hierarchy_file, &hierarchy_loaded, &error,
+                                  &hierarchy_document) &&
+                  hierarchy_document.parentOf(
+                      gmp::core::ObjectId(child.id)) ==
+                      gmp::core::ObjectId(parent.id) &&
+                  hierarchy_document.children(
+                      gmp::core::ObjectId(parent.id)) ==
+                      QList<gmp::core::ObjectId>{
+                          gmp::core::ObjectId(child.id)},
+              "project store preserves object hierarchy and sibling order");
+  const QString hierarchy_copy =
+      workspace.filePath("hierarchy_copy.gmp.yaml");
+  gmp::ProjectData hierarchy_reloaded;
+  test.expect(store.save_file(hierarchy_copy, hierarchy_loaded, &error,
+                              &hierarchy_document) &&
+                  store.load_file(hierarchy_copy, &hierarchy_reloaded,
+                                  &error) &&
+                  hierarchy_reloaded.model_roots == hierarchy.model_roots &&
+                  hierarchy_reloaded.model_entries.at(1).parent_id ==
+                      parent.id,
+              "document serialization keeps roots and parent ids");
 
   // 名称去重：与 unique_child_name 同款 base/base_2 规则。
   gmp::ProjectData dup;
@@ -1467,9 +1533,16 @@ void test_project_store_contract(TestContext& test) {
              "schema_version: 2\nmodel:\n  Parts:\n"
              "    - {id: same, name: a, params: {}}\n"
              "    - {id: same, name: b, params: {}}\n");
-  test.expect(!store.load_file(duplicate_id_file, &unused, &error) &&
-                  error == "Duplicate project object id: same",
-              "duplicate persistent object ids are rejected");
+  gmp::core::ProjectDocument unchanged_document;
+  unchanged_document.addObject(std::make_unique<gmp::core::ProjectObject>(
+      "sentinel", "sentinel", gmp::core::ObjectId("sentinel")));
+  test.expect(!store.load_file(duplicate_id_file, &unused, &error,
+                               &unchanged_document) &&
+                  error == "Duplicate project object id: same" &&
+                  unchanged_document.count() == 1 &&
+                  unchanged_document.contains(
+                      gmp::core::ObjectId("sentinel")),
+              "invalid loads do not replace the current document");
 
   // ---- 加载错误路径 ----
   test.expect(!store.load_file(workspace.filePath("missing.gmp.yaml"),

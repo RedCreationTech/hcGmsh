@@ -8,6 +8,7 @@
 #include <QSet>
 
 #include <fstream>
+#include <utility>
 
 #include "gmp/OperationLog.h"
 #include "gmp/ProjectDocument.h"
@@ -175,10 +176,70 @@ const QSet<QString> kMooseForceString = {"exec_path",   "input_path",
 const QSet<QString> kViewerForceString = {"current_file", "array_key", "preset",
                                           "output_selected"};
 
+bool data_to_document(const ProjectData& data, core::ProjectDocument* document,
+                      QString* error) {
+  QVariantList objects;
+  for (const QString& kind : data.model_roots) {
+    const core::ObjectId id = core::ObjectId::root(kind);
+    objects.append(QVariantMap{{"id", id.toString()},
+                               {"name", kind},
+                               {"kind", kind},
+                               {"status", "ready"},
+                               {"parent", QString()},
+                               {"params", QVariantMap()}});
+  }
+  for (const ProjectModelEntry& entry : data.model_entries) {
+    objects.append(
+        QVariantMap{{"id", entry.id},
+                    {"name", entry.name},
+                    {"kind", entry.kind},
+                    {"status", entry.status},
+                    {"parent", entry.parent_id.isEmpty()
+                                   ? core::ObjectId::root(entry.kind).toString()
+                                   : entry.parent_id},
+                    {"params", entry.params}});
+  }
+  core::ProjectDocument loaded;
+  if (!loaded.from_variant_list(objects, error)) {
+    return false;
+  }
+  *document = std::move(loaded);
+  return true;
+}
+
+void document_to_data(const core::ProjectDocument& document,
+                      ProjectData* data) {
+  data->model_roots.clear();
+  data->model_entries.clear();
+  for (const core::ObjectId& id : document.roots()) {
+    if (const core::ProjectObject* root = document.object(id)) {
+      data->model_roots.append(root->name());
+    }
+  }
+  for (const QVariant& value : document.to_variant_list()) {
+    const QVariantMap object = value.toMap();
+    const QString parent_id = object.value("parent").toString();
+    if (parent_id.isEmpty()) {
+      continue;
+    }
+    ProjectModelEntry entry;
+    entry.id = object.value("id").toString();
+    entry.name = object.value("name").toString();
+    entry.kind = object.value("kind").toString();
+    entry.status = object.value("status").toString();
+    entry.params = object.value("params").toMap();
+    if (parent_id != core::ObjectId::root(entry.kind).toString()) {
+      entry.parent_id = parent_id;
+    }
+    data->model_entries.append(entry);
+  }
+}
+
 }  // namespace
 
 bool ProjectStore::load_file(const QString& path, ProjectData* out,
-                             QString* error) const {
+                             QString* error,
+                             core::ProjectDocument* document) const {
   if (!out) {
     return false;
   }
@@ -246,6 +307,8 @@ bool ProjectStore::load_file(const QString& path, ProjectData* out,
         }
         used_ids.insert(entry.id);
         entry.kind = kind;
+        entry.parent_id =
+            QString::fromStdString(node["parent"].as<std::string>(""));
         entry.params = project_schema::yaml_map_to_variant_map(node["params"]);
         entry.name = unique_entry_name(&used_names[kind], name);
         entry.status = QString::fromStdString(
@@ -270,7 +333,14 @@ bool ProjectStore::load_file(const QString& path, ProjectData* out,
     data.viewer_settings =
         parse_settings_node(root["viewer"], kViewerForceString);
 
+    core::ProjectDocument loaded_document;
+    if (!data_to_document(data, &loaded_document, error)) {
+      return false;
+    }
     *out = data;
+    if (document) {
+      *document = std::move(loaded_document);
+    }
     return true;
   } catch (const std::exception& e) {
     return fail(QString("Failed to load: %1").arg(e.what()));
@@ -278,7 +348,8 @@ bool ProjectStore::load_file(const QString& path, ProjectData* out,
 }
 
 bool ProjectStore::save_file(const QString& path, const ProjectData& data,
-                             QString* error) const {
+                             QString* error,
+                             const core::ProjectDocument* document) const {
   auto fail = [error](const QString& message) {
     if (error) {
       *error = message;
@@ -286,24 +357,31 @@ bool ProjectStore::save_file(const QString& path, const ProjectData& data,
     return false;
   };
   try {
+    ProjectData payload = data;
+    if (document) {
+      document_to_data(*document, &payload);
+    }
     YAML::Node root;
-    root["schema_version"] = data.schema_version;
+    root["schema_version"] = payload.schema_version;
     root["version"] = 2;  // 保留旧字段以兼容只读 version 的工具
     root["saved_at"] =
         QDateTime::currentDateTimeUtc().toString(Qt::ISODate).toStdString();
     root["application_profile"] =
-        project_schema::variant_map_to_yaml(data.application_profile);
+        project_schema::variant_map_to_yaml(payload.application_profile);
     root["unit_contract"] =
-        project_schema::variant_map_to_yaml(data.unit_contract);
+        project_schema::variant_map_to_yaml(payload.unit_contract);
     root["mesh_snapshot"] =
-        project_schema::mesh_snapshot_to_yaml(data.mesh_snapshot);
+        project_schema::mesh_snapshot_to_yaml(payload.mesh_snapshot);
 
     // 按 model_roots 顺序输出全部根节点（含空根），根内保持条目顺序。
     QMap<QString, YAML::Node> entries_by_kind;
-    for (const auto& entry : data.model_entries) {
+    for (const auto& entry : payload.model_entries) {
       YAML::Node node;
       if (!entry.id.isEmpty()) {
         node["id"] = entry.id.toStdString();
+      }
+      if (!entry.parent_id.isEmpty()) {
+        node["parent"] = entry.parent_id.toStdString();
       }
       node["name"] = entry.name.toStdString();
       node["kind"] = entry.kind.toStdString();
@@ -315,33 +393,33 @@ bool ProjectStore::save_file(const QString& path, const ProjectData& data,
       entries_by_kind[entry.kind].push_back(node);
     }
     YAML::Node model(YAML::NodeType::Map);
-    for (const QString& root_name : data.model_roots) {
+    for (const QString& root_name : payload.model_roots) {
       model[root_name.toStdString()] = entries_by_kind.contains(root_name)
                                            ? entries_by_kind[root_name]
                                            : YAML::Node(YAML::NodeType::Sequence);
     }
     root["model"] = model;
 
-    if (!data.gmsh_settings.isEmpty()) {
+    if (!payload.gmsh_settings.isEmpty()) {
       YAML::Node gmsh_node(YAML::NodeType::Map);
-      write_settings_node(&gmsh_node, data.gmsh_settings);
+      write_settings_node(&gmsh_node, payload.gmsh_settings);
       root["gmsh"] = gmsh_node;
     }
-    if (!data.moose_settings.isEmpty() || !data.input_snapshots.isEmpty()) {
+    if (!payload.moose_settings.isEmpty() || !payload.input_snapshots.isEmpty()) {
       YAML::Node moose_node(YAML::NodeType::Map);
-      write_settings_node(&moose_node, data.moose_settings);
-      if (!data.input_snapshots.isEmpty()) {
+      write_settings_node(&moose_node, payload.moose_settings);
+      if (!payload.input_snapshots.isEmpty()) {
         YAML::Node snaps(YAML::NodeType::Sequence);
-        for (const QString& s : data.input_snapshots) {
+        for (const QString& s : payload.input_snapshots) {
           snaps.push_back(s.toStdString());
         }
         moose_node["input_snapshots"] = snaps;
       }
       root["moose"] = moose_node;
     }
-    if (!data.viewer_settings.isEmpty()) {
+    if (!payload.viewer_settings.isEmpty()) {
       YAML::Node viewer_node(YAML::NodeType::Map);
-      write_settings_node(&viewer_node, data.viewer_settings);
+      write_settings_node(&viewer_node, payload.viewer_settings);
       root["viewer"] = viewer_node;
     }
 
