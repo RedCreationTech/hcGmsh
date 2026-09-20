@@ -97,14 +97,14 @@ ProjectDocument 装载合同
 | 高级材料/基准 | Phase 5 / G3 | ⚪ 未实现 | M-02/M-03、CDP 认可基准与容差未冻结 |
 | 多阶段 | Phase 6 / G4 | ⚪ 仅有需求 | 当前只保存多个 Step，生成器只使用首个 Step 并告警 |
 | 架构 | v0.2 Stage 0～7 | ✅ 已关闭 | 7 个 Stage 已完成；RG-D 人工总准出通过；`v0.2-rc1` 已冻结 |
-| 架构硬化 | v0.2.1 | ⚪ 已规划 | HARD-010～070 尚未实施 |
+| 架构硬化 | v0.2.1 | 🟡 进行中 | HARD-010～040 已完成；HARD-050 为当前剩余核心切片 |
 | 参数化 CAD | v0.3 | ⚪ 路线规划 | Feature Graph/Recompute/Topology Identity 尚未开始 |
 
 ### 2.2 功能能力矩阵
 
 | 能力域 | 已交付 | 尚缺 | 下一动作 |
 |---|---|---|---|
-| 项目生命周期 | 新建、打开、保存、另存为、项目状态隔离、schema v2 | 持久 ObjectId；Document 直接持久化 | HARD-010～030 |
+| 项目生命周期 | 新建、打开、保存、另存为、项目状态隔离、schema v2、持久 ObjectId、Document 直接持久化 | 领域写路径尚未全部切到 Document | HARD-050 |
 | UI 工作台 | 两栏布局、工具组、模型/结果导航、浮动属性窗、独立工作窗、布局恢复 | 少量低优先级 UX 改进 | 只修真实缺陷 |
 | Sketch | 绘制、约束、尺寸、逻辑形状、Undo/Redo、保存恢复 | DoF/过约束诊断、Trim/Extend、Mirror/Pattern 等高级能力 | 参数化 CAD 阶段 |
 | Part/Feature | 拉伸等特征结果、Feature 历史、BREP/mesh 产物 | 不是可重放 Feature Graph；旧 Feature 只是快照历史 | v0.3 Feature Graph |
@@ -123,10 +123,10 @@ ProjectDocument 装载合同
 
 | 架构目标 | 已完成 | 剩余问题 | 处理时点 |
 |---|---|---|---|
-| 核心对象层 | ProjectDocument/ObjectId/PropertyBag | Document 尚非业务真源 | HARD-010～050 |
-| 持久化 | ProjectStore 抽离 | Store 仍消费 ProjectModelEntry；MainWindow 仍从 Tree 采集 | HARD-030 |
+| 核心对象层 | ProjectDocument/ObjectId/PropertyBag；五类可逆领域命令 | Document 尚非全部业务写入真源 | HARD-050 |
+| 持久化 | ProjectStore 与 Document 直接互转；MainWindow 保存不再组装模型条目 | Adapter 仍可从 Tree 反向重建 Document | HARD-050 |
 | 依赖传播 | DependencyGraph 算法与 stale 接线 | 节点仍为 kind；legacy CAE 规则泄漏到 core | HARD-060，G4 前 |
-| 事务 | TransactionManager、Command、审计 | Tree 闭包不可可靠 undo；属性表单事后审计 | HARD-040；HARD-070 后置 |
+| 事务 | TransactionManager、五类可逆领域命令、失败事务闸门 | UI 仍使用 Tree 闭包/属性表单事后审计；无 Undo 栈 | HARD-050；HARD-070 后置 |
 | Simulation | MooseInputGenerator/SnapshotService 无 Widget | Generator 依赖 Store DTO | v0.3 前后按实际需要处理 |
 | Gmsh | PhysicalGroup/Mesher/Assembly 服务抽离 | 全局 current model/session | 多项目或后台 mesh 前处理 |
 | Viewport | Sketch/Mesh/Result 子视口 + facade | 状态仍在 facade；共享 God Header 风险 | 出现真实修改冲突时处理 |

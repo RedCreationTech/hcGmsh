@@ -82,7 +82,7 @@ ProjectDocument& ProjectDocument::operator=(ProjectDocument&&) noexcept =
     default;
 
 ObjectId ProjectDocument::addObject(std::unique_ptr<ProjectObject> object,
-                                    ObjectId parent) {
+                                    ObjectId parent, int index) {
   if (!object) {
     return ObjectId();
   }
@@ -98,7 +98,12 @@ ObjectId ProjectDocument::addObject(std::unique_ptr<ProjectObject> object,
   }
   const ObjectId id = object->id();
   parent_.insert(key, parent);
-  children_[parent.toString()].append(id);
+  QList<ObjectId>& siblings = children_[parent.toString()];
+  if (index < 0 || index > siblings.size()) {
+    siblings.append(id);
+  } else {
+    siblings.insert(index, id);
+  }
   objects_.emplace(key, std::move(object));
   return id;
 }

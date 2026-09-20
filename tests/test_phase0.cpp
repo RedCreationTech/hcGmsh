@@ -1297,6 +1297,122 @@ void test_transaction_manager_contract(TestContext& test) {
               "every finished transaction appends one audit record");
 }
 
+// HARD-040：领域命令只操作 ProjectDocument/ObjectId/值，不依赖 Widgets。
+void test_project_document_commands(TestContext& test) {
+  using namespace gmp::core;
+
+  ProjectDocument document;
+  const ObjectId root = ObjectId::root("Parts");
+  const ObjectId before("before");
+  const ObjectId target("target");
+  const ObjectId child("child");
+  const ObjectId grandchild("grandchild");
+  const ObjectId after("after");
+  auto add = [&document](const ObjectId& id, const QString& name,
+                         const ObjectId& parent = ObjectId()) {
+    return document.addObject(
+        std::make_unique<ProjectObject>("Parts", name, id), parent);
+  };
+  add(root, "Parts");
+  add(before, "before", root);
+  add(target, "target", root);
+  add(child, "child", target);
+  add(grandchild, "grandchild", child);
+  add(after, "after", root);
+
+  QString error;
+  const QVariantList before_create = document.to_variant_list();
+  auto created_object =
+      std::make_unique<ProjectObject>("Parts", "created", ObjectId("created"));
+  created_object->properties().set("typed", 1.25);
+  CreateObjectCommand create(document, std::move(created_object), root, 1);
+  test.expect(create.execute(&error) && error.isEmpty() &&
+                  document.children(root).at(1) == create.createdId() &&
+                  create.revert(&error) &&
+                  document.to_variant_list() == before_create &&
+                  create.execute(&error) &&
+                  document.object(create.createdId())
+                          ->properties()
+                          .get("typed")
+                          .toDouble() == 1.25,
+              "create command executes, reverts, and re-executes with stable id");
+
+  RenameObjectCommand rename(document, create.createdId(), "renamed");
+  test.expect(rename.execute(&error) &&
+                  document.object(create.createdId())->name() == "renamed" &&
+                  rename.revert(&error) &&
+                  document.object(create.createdId())->name() == "created" &&
+                  rename.execute(&error) &&
+                  document.object(create.createdId())->name() == "renamed",
+              "rename command executes, reverts, and re-executes");
+
+  const QVariantMap replacement = {{"count", 3}, {"enabled", true}};
+  SetPropertiesCommand set_properties(document, create.createdId(),
+                                      replacement);
+  test.expect(set_properties.execute(&error) &&
+                  document.object(create.createdId())
+                          ->properties()
+                          .to_variant_map() == replacement &&
+                  set_properties.revert(&error) &&
+                  document.object(create.createdId())
+                          ->properties()
+                          .get("typed")
+                          .toDouble() == 1.25 &&
+                  set_properties.execute(&error) &&
+                  document.object(create.createdId())
+                          ->properties()
+                          .to_variant_map() == replacement,
+              "property command executes, reverts, and re-executes typed values");
+
+  SetStatusCommand set_status(document, create.createdId(),
+                              ObjectStatus::Stale);
+  test.expect(set_status.execute(&error) &&
+                  document.object(create.createdId())->statusText() == "stale" &&
+                  set_status.revert(&error) &&
+                  document.object(create.createdId())->statusText() == "ready" &&
+                  set_status.execute(&error) &&
+                  document.object(create.createdId())->status() ==
+                      ObjectStatus::Stale,
+              "status command executes, reverts, and re-executes");
+
+  const QVariantList before_delete = document.to_variant_list();
+  DeleteObjectCommand remove(document, target);
+  test.expect(remove.execute(&error) && !document.contains(target) &&
+                  !document.contains(child) && !document.contains(grandchild),
+              "delete command removes the complete subtree");
+  const QVariantList after_delete = document.to_variant_list();
+  test.expect(remove.revert(&error) &&
+                  document.to_variant_list() == before_delete &&
+                  document.children(root) ==
+                      QList<ObjectId>{before, create.createdId(), target,
+                                      after} &&
+                  document.children(target) == QList<ObjectId>{child} &&
+                  remove.execute(&error) &&
+                  document.to_variant_list() == after_delete,
+              "delete command restores parent, sibling position, and deep subtree");
+
+  const QVariantList before_failure = document.to_variant_list();
+  RenameObjectCommand never_executed(document, before, "unused");
+  test.expect(!never_executed.revert(&error) &&
+                  error.contains("cannot be restored"),
+              "revert failures return a readable error");
+  TransactionManager tm;
+  test.expect(tm.begin("invalid rename") &&
+                  tm.execute(std::make_unique<RenameObjectCommand>(
+                                 document, before, "temporarily-renamed"),
+                             &error) &&
+                  !tm.execute(std::make_unique<RenameObjectCommand>(
+                                  document, ObjectId("missing"), "name"),
+                              &error) &&
+                  error.contains("does not exist") && !tm.commit() &&
+                  tm.auditLog().isEmpty() &&
+                  tm.rollback(&error) &&
+                  document.to_variant_list() == before_failure &&
+                  !tm.auditLog().last().committed &&
+                  tm.auditLog().last().commands.size() == 1,
+              "a partially executed transaction cannot commit and rolls back");
+}
+
 // 缺陷 2026-09-19-025/026：单位换算显示合同（可无 Widget 测试部分）。
 void test_unit_display_contract(TestContext& test) {
   // 显示格式：不暴露 double 伪精度。
@@ -2333,6 +2449,7 @@ int main(int argc, char* argv[]) {
   test_property_bag_contract(test);
   test_dependency_graph_contract(test);
   test_transaction_manager_contract(test);
+  test_project_document_commands(test);
   test_closure_command_audit_contract(test);
   test_unit_display_contract(test);
   test_project_store_contract(test);

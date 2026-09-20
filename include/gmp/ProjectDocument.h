@@ -94,9 +94,10 @@ class ProjectDocument {
   ProjectDocument& operator=(ProjectDocument&&) noexcept;
 
   // 挂载对象。object 未携带 ID 时由文档分配；ID 重复或 parent 无效
-  // （非空且不存在）时失败并返回无效 ObjectId。parent 为空 = 顶层对象。
+  // （非空且不存在）时失败并返回无效 ObjectId。parent 为空 = 顶层对象；
+  // index < 0 或越界时追加，否则插入指定同级位置。
   ObjectId addObject(std::unique_ptr<ProjectObject> object,
-                     ObjectId parent = ObjectId());
+                     ObjectId parent = ObjectId(), int index = -1);
   // 删除对象及其整个子树；对象不存在返回 false。
   bool removeObject(ObjectId id);
   void clear();
