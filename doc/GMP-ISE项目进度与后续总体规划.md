@@ -97,14 +97,14 @@ ProjectDocument 装载合同
 | 高级材料/基准 | Phase 5 / G3 | ⚪ 未实现 | M-02/M-03、CDP 认可基准与容差未冻结 |
 | 多阶段 | Phase 6 / G4 | ⚪ 仅有需求 | 当前只保存多个 Step，生成器只使用首个 Step 并告警 |
 | 架构 | v0.2 Stage 0～7 | ✅ 已关闭 | 7 个 Stage 已完成；RG-D 人工总准出通过；`v0.2-rc1` 已冻结 |
-| 架构硬化 | v0.2.1 | 🟡 进行中 | HARD-010～040 已完成；HARD-050 为当前剩余核心切片 |
+| 架构硬化 | v0.2.1 | ✅ 核心切片完成 | HARD-010～050 已完成；恢复 G2/G3 功能开发 |
 | 参数化 CAD | v0.3 | ⚪ 路线规划 | Feature Graph/Recompute/Topology Identity 尚未开始 |
 
 ### 2.2 功能能力矩阵
 
 | 能力域 | 已交付 | 尚缺 | 下一动作 |
 |---|---|---|---|
-| 项目生命周期 | 新建、打开、保存、另存为、项目状态隔离、schema v2、持久 ObjectId、Document 直接持久化 | 领域写路径尚未全部切到 Document | HARD-050 |
+| 项目生命周期 | 新建、打开、保存、另存为、项目状态隔离、schema v2、持久 ObjectId、Document 直接持久化与领域写入 | 无当前功能阻塞 | G2/G3 继续复用 |
 | UI 工作台 | 两栏布局、工具组、模型/结果导航、浮动属性窗、独立工作窗、布局恢复 | 少量低优先级 UX 改进 | 只修真实缺陷 |
 | Sketch | 绘制、约束、尺寸、逻辑形状、Undo/Redo、保存恢复 | DoF/过约束诊断、Trim/Extend、Mirror/Pattern 等高级能力 | 参数化 CAD 阶段 |
 | Part/Feature | 拉伸等特征结果、Feature 历史、BREP/mesh 产物 | 不是可重放 Feature Graph；旧 Feature 只是快照历史 | v0.3 Feature Graph |
@@ -123,10 +123,10 @@ ProjectDocument 装载合同
 
 | 架构目标 | 已完成 | 剩余问题 | 处理时点 |
 |---|---|---|---|
-| 核心对象层 | ProjectDocument/ObjectId/PropertyBag；五类可逆领域命令 | Document 尚非全部业务写入真源 | HARD-050 |
-| 持久化 | ProjectStore 与 Document 直接互转；MainWindow 保存不再组装模型条目 | Adapter 仍可从 Tree 反向重建 Document | HARD-050 |
+| 核心对象层 | ProjectDocument/ObjectId/PropertyBag；五类可逆领域命令；Document 为业务真源 | 引用字段尚未全部 ObjectId 化 | 按功能触达渐进迁移 |
+| 持久化 | ProjectStore 与 Document 直接互转；Tree 仅作递归投影 | 无当前阻塞 | 保持 schema v2 兼容 |
 | 依赖传播 | DependencyGraph 算法与 stale 接线 | 节点仍为 kind；legacy CAE 规则泄漏到 core | HARD-060，G4 前 |
-| 事务 | TransactionManager、五类可逆领域命令、失败事务闸门 | UI 仍使用 Tree 闭包/属性表单事后审计；无 Undo 栈 | HARD-050；HARD-070 后置 |
+| 事务 | TransactionManager、五类可逆领域命令、UI 真实命令提交、失败事务闸门 | 无 Undo 栈 | HARD-070，Feature Graph 前 |
 | Simulation | MooseInputGenerator/SnapshotService 无 Widget | Generator 依赖 Store DTO | v0.3 前后按实际需要处理 |
 | Gmsh | PhysicalGroup/Mesher/Assembly 服务抽离 | 全局 current model/session | 多项目或后台 mesh 前处理 |
 | Viewport | Sketch/Mesh/Result 子视口 + facade | 状态仍在 facade；共享 God Header 风险 | 出现真实修改冲突时处理 |
@@ -137,8 +137,7 @@ ProjectDocument 装载合同
 
 ### 3.1 P0：当前发布与后续开发前置
 
-1. **稳定身份缺失**：rename 改变 ObjectId，新引用继续扩展会放大风险。
-2. **Tree 仍是真源**：继添加对象类型会扩大未来迁移范围。
+HARD-010～050 已关闭稳定身份与 Tree 真源问题；当前无阻塞 G2/G3 的架构 P0。
 
 ### 3.2 P1：既定产品功能
 
@@ -206,6 +205,7 @@ ProjectDocument 装载合同
 - **范围**：ProjectDocument 乱序/层级/顺序/原子装载；schema v2 可选持久 ID；ProjectStore 与 Document 直接互转。
 - **不做**：schema v3、全量 name reference 迁移、SimulationModel 新层。
 - **准出**：旧项目无 ID 可读；首次保存固化 ID；rename ID 不变；保存不遍历 Tree 采集模型。
+- **状态**：✅ 已完成（2026-09-20）。
 
 #### TASK-PLAN-011 完成 HARD-040～050
 
@@ -213,6 +213,7 @@ ProjectDocument 装载合同
 - **范围**：最小可逆领域命令；CRUD/属性/状态先写 Document；Tree 递归投影；持久化、生成、校验从 Document/纯数据快照读取。
 - **不做**：用户可见全局 Undo/Redo、通用 Event Bus、模块目录重排。
 - **准出**：正常数据流为 `Command -> ProjectDocument -> Tree`，不存在 Tree 反向全量重建业务路径。
+- **状态**：✅ 已完成（2026-09-20）；114/114 真实点击巡览与 CTest 1/1 通过。
 
 #### M1 停止条件
 
@@ -396,7 +397,7 @@ ProjectDocument 装载合同
 - **G1 线弹性接触：✅ 9/9 已按用户验收结论关闭。**
 - **高级约束、CDP 基准、多 Step：尚未交付。**
 - **v0.2 架构抽离：✅ 代码与人工总准出均已关闭，冻结为 `v0.2-rc1`。**
-- **最终领域真源与稳定身份：尚未完成，是下一次功能扩展前唯一必须处理的架构切片。**
+- **最终领域真源与稳定身份：✅ HARD-010～050 已完成。**
 - **参数化 CAD/Feature Graph：尚未开始。**
 
 ## 11. 总体完成定义

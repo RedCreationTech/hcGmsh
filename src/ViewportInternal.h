@@ -9,7 +9,6 @@
 #include <QFileInfo>
 #include <QString>
 #include <QStringList>
-#include <QTemporaryDir>
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -396,10 +395,8 @@ QString ElementTypeLabel(int element_type) {
 }
 
 #ifdef GMP_ENABLE_GMSH_GUI
-// VtkViewer 与建模/网格面板共享同一个进程内 Gmsh 会话。读取预览文件时
-// 不能 gmsh::clear()：它会把当前 OCC 几何、物理组和网格场一并销毁。
-// 打开文件前先快照 current model；读取完成后优先切回仍存在的原 model，
-// 若该 Gmsh 版本的 open() 替换了原 model，则从快照恢复。
+// VtkViewer 与建模/网格面板共享同一个进程内 Gmsh 会话。把预览文件合并
+// 到独立临时模型，读取后只删除该模型，避免 open/remove 破坏业务模型。
 class ScopedGmshFileModel {
  public:
   explicit ScopedGmshFileModel(const QString& path) {
@@ -413,23 +410,14 @@ class ScopedGmshFileModel {
     gmsh::model::getCurrent(previous_model_);
     has_previous_model_ =
         std::find(names.begin(), names.end(), previous_model_) != names.end();
-
-    if (has_previous_model_) {
-      restore_dir_ = std::make_unique<QTemporaryDir>(
-          QDir::tempPath() + "/gmp_vtk_model_restore_XXXXXX");
-      if (restore_dir_->isValid()) {
-        restore_path_ = restore_dir_->filePath("current_model.geo_unrolled");
-        try {
-          gmsh::write(restore_path_.toStdString());
-        } catch (...) {
-          restore_path_.clear();
-        }
-      }
-    }
-
+    do {
+      temporary_model_ = "gmp_vtk_preview_" +
+                         std::to_string(++next_temporary_model_id_);
+    } while (std::find(names.begin(), names.end(), temporary_model_) !=
+             names.end());
     try {
-      gmsh::open(path.toStdString());
-      file_model_opened_ = true;
+      gmsh::model::add(temporary_model_);
+      gmsh::merge(path.toStdString());
     } catch (...) {
       restore();
       throw;
@@ -443,12 +431,13 @@ class ScopedGmshFileModel {
 
  private:
   void restore() noexcept {
-    if (file_model_opened_) {
+    if (!temporary_model_.empty()) {
       try {
+        gmsh::model::setCurrent(temporary_model_);
         gmsh::model::remove();
       } catch (...) {
       }
-      file_model_opened_ = false;
+      temporary_model_.clear();
     }
     if (has_previous_model_) {
       try {
@@ -457,24 +446,16 @@ class ScopedGmshFileModel {
         if (std::find(names.begin(), names.end(), previous_model_) !=
             names.end()) {
           gmsh::model::setCurrent(previous_model_);
-          return;
         }
-      } catch (...) {
-      }
-    }
-    if (!restore_path_.isEmpty()) {
-      try {
-        gmsh::open(restore_path_.toStdString());
       } catch (...) {
       }
     }
   }
 
+  inline static unsigned long long next_temporary_model_id_ = 0;
   std::string previous_model_;
-  QString restore_path_;
-  std::unique_ptr<QTemporaryDir> restore_dir_;
+  std::string temporary_model_;
   bool has_previous_model_ = false;
-  bool file_model_opened_ = false;
 };
 
 vtkSmartPointer<vtkUnstructuredGrid> BuildGridFromCurrentGmshModel() {

@@ -1206,15 +1206,21 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   property_editor_ = new PropertyEditor(property_stack_);
   property_editor_->set_model_tree(model_tree_);
-  // TASK-V02-014：Tree→Document 投影。itemChanged 覆盖未阻塞的
-  // setData/setText（含 PropertyEditor 直写与重命名）；结构增删经
-  // refresh_module_pages 标脏；阻塞信号的浮动窗提交经 committed 标脏。
   model_tree_adapter_ = new ModelTreeAdapter(model_tree_);
-  connect(model_tree_, &QTreeWidget::itemChanged, model_tree_adapter_,
-          [this]() { model_tree_adapter_->mark_dirty(); });
-  connect(property_editor_, &PropertyEditor::item_written,
-          model_tree_adapter_,
-          [this]() { model_tree_adapter_->mark_dirty(); });
+  property_editor_->set_write_callback(
+      [this](QTreeWidgetItem* item, const QString& name,
+             const QVariantMap& params) {
+        if (!commit_object_edit(item, name, params)) {
+          return false;
+        }
+        invalidate_downstream_from(
+            item->data(0, PropertyEditor::kKindRole).toString());
+        set_project_dirty(true);
+        push_context_to_moose_panel();
+        refresh_module_pages();
+        property_editor_->refresh_form_options();
+        return true;
+      });
   auto* mesh_page = new GmshPanel(property_stack_);
   auto* job_page = new MoosePanel(property_stack_);
   moose_panel_ = job_page;
@@ -1697,7 +1703,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         QVariantMap item_params =
             item->data(0, PropertyEditor::kParamsRole).toMap();
         item_params.insert("mesh", msh);
-        item->setData(0, PropertyEditor::kParamsRole, item_params);
+        commit_object_edit(item, item->text(0), item_params);
       }
       if (viewer_) {
         viewer_->set_mesh_file_from_current_model(msh);
@@ -2040,7 +2046,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     QVariantMap params =
         active_sketch_item_->data(0, PropertyEditor::kParamsRole).toMap();
     params.insert("data", active_sketch_doc_->to_yaml_string());
-    active_sketch_item_->setData(0, PropertyEditor::kParamsRole, params);
+    commit_object_edit(active_sketch_item_, active_sketch_item_->text(0),
+                       params);
     set_project_dirty(true);
   };
   // 退出编辑: 保存 -> 舞台切为当前草图只读预览 -> 面板退出编辑态。
@@ -3536,8 +3543,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
               return;
             }
             params.insert("mesh", path);
-            const QSignalBlocker blocker(model_tree_);
-            item->setData(0, PropertyEditor::kParamsRole, params);
+            commit_object_edit(item, item->text(0), params);
             set_project_dirty(true);
             for (int row = 0; job_table_ && row < job_table_->rowCount(); ++row) {
               auto* row_item = job_table_->item(row, 0);
@@ -3695,11 +3701,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
               if (!mesh_snapshot_.mesh_sha256.isEmpty()) {
                 params.insert("sha256", mesh_snapshot_.mesh_sha256);
               }
-              item->setData(0, PropertyEditor::kParamsRole, params);
-              item->setData(0, PropertyEditor::kStatusRole,
-                            complete ? QString("Generated")
-                                     // “missing” 关键词让节点状态显示为不完整。
-                                     : QString("Missing physical groups"));
+              commit_object_edit(item, item->text(0), params);
+              set_object_status(item,
+                                complete ? QString("Generated")
+                                         // “missing” 关键词让节点状态显示为不完整。
+                                         : QString("Missing physical groups"));
               refresh_tree_statuses();
             }
             push_context_to_moose_panel();
@@ -3785,7 +3791,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                             QString::number(started.secsTo(end)) + "s");
             }
             if (item) {
-              item->setData(0, PropertyEditor::kParamsRole, params);
+              commit_object_edit(item, item->text(0), params);
             } else {
               add_child_item(root, job_id, "Jobs", params);
             }
@@ -3867,7 +3873,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             params.insert("status", "Running");
             params.insert("start_time",
                           QDateTime::currentDateTime().toString(Qt::ISODate));
-            active_job_item_->setData(0, PropertyEditor::kParamsRole, params);
+            commit_object_edit(active_job_item_, active_job_item_->text(0),
+                               params);
             active_job_row_ = append_job_row(name, params);
           });
   connect(job_page, &MoosePanel::job_finished, this,
@@ -3900,7 +3907,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                 params.insert("duration", QString::number(seconds) + "s");
               }
             }
-            active_job_item_->setData(0, PropertyEditor::kParamsRole, params);
+            commit_object_edit(active_job_item_, active_job_item_->text(0),
+                               params);
             const QString job_name = active_job_item_->text(0);
             const QString exodus = info.value("exodus").toString();
             if (!exodus.isEmpty()) {
@@ -6147,24 +6155,14 @@ void MainWindow::open_property_form(QTreeWidgetItem* item,
       dialog_parent(transient_parent ? transient_parent : this));
   floating_property_form_ = form;
   form->set_display_unit_factors(display_unit_factors());
-  // TASK-V02-061：表单提交旁路审计（缓冲语义不变；Q4 无用户可见撤销）。
-  form->set_commit_audit_callback(
-      [this](const QString& label, const QVariantMap& before,
-             const QVariantMap& after) {
-        transaction_manager_.record_committed(label, "property form commit",
-                                              before, after);
-        gmp::log_operation("transaction",
-                           QString("committed: %1 — property form commit")
-                               .arg(label));
+  form->set_commit_callback(
+      [this](QTreeWidgetItem* target, const QString& name,
+             const QVariantMap& params) {
+        return commit_object_edit(target, name, params);
       });
   l10n::apply(form);
   connect(form, &FloatingPropertyForm::committed, this,
           [this](QTreeWidgetItem* committed_item) {
-            if (model_tree_adapter_) {
-              // 提交在 QSignalBlocker 下写目标项，itemChanged 被抑制，
-              // 投影在此显式标脏。
-              model_tree_adapter_->mark_dirty();
-            }
             if (committed_item) {
               invalidate_downstream_from(
                   committed_item->data(0, PropertyEditor::kKindRole)
@@ -6205,13 +6203,33 @@ void MainWindow::open_property_form(QTreeWidgetItem* item,
 }
 
 void MainWindow::clear_model_tree_children() {
-  for (int i = 0; i < model_tree_->topLevelItemCount(); ++i) {
-    auto* root = model_tree_->topLevelItem(i);
-    if (!root) {
-      continue;
-    }
-    root->takeChildren();
+  if (!model_tree_adapter_) {
+    return;
   }
+  if (property_editor_) {
+    property_editor_->set_item(nullptr);
+  }
+  active_sketch_item_ = nullptr;
+  active_job_item_ = nullptr;
+  core::ProjectDocument& document = model_tree_adapter_->document();
+  const QList<core::ObjectId> roots = document.roots();
+  QList<core::ObjectId> objects;
+  for (const core::ObjectId& root : roots) {
+    objects.append(document.children(root));
+  }
+  if (!objects.isEmpty() && transaction_manager_.begin("clear model")) {
+    QString error;
+    for (const core::ObjectId& id : objects) {
+      if (!transaction_manager_.execute(
+              std::make_unique<core::DeleteObjectCommand>(document, id),
+              &error)) {
+        transaction_manager_.rollback();
+        return;
+      }
+    }
+    transaction_manager_.commit();
+  }
+  model_tree_adapter_->project_document();
 }
 
 void MainWindow::refresh_module_node_list(QListWidget* list,
@@ -6278,9 +6296,6 @@ QString MainWindow::build_step_sequence_preview() const {
 }
 
 void MainWindow::refresh_module_pages() {
-  if (model_tree_adapter_) {
-    model_tree_adapter_->mark_dirty();
-  }
   refresh_module_node_list(module_part_list_, "Parts", "No parts yet.");
   refresh_module_node_list(module_material_list_, "Materials", "No materials yet.");
   refresh_module_node_list(module_section_list_, "Sections", "No sections yet.");
@@ -7001,8 +7016,11 @@ void MainWindow::reload_mapping_registry() {
 }
 
 int MainWindow::child_count(const QString& root_name) const {
-  const auto* root = find_root_item(root_name);
-  return root ? root->childCount() : 0;
+  return model_tree_adapter_
+             ? model_tree_adapter_->document()
+                   .children(ModelTreeAdapter::root_id(root_name))
+                   .size()
+             : 0;
 }
 
 void MainWindow::apply_model_tree_filter(const QString& text) {
@@ -7528,30 +7546,51 @@ void MainWindow::invalidate_downstream_from(const QString& source_kind) {
     return graph;
   }();
   const QStringList targets = stale_graph.markStaleFrom(source_kind);
-
-  const QSignalBlocker blocker(model_tree_);
-  for (const QString& target_kind : targets) {
-    auto* root = find_root_item(target_kind);
-    for (int row = 0; root && row < root->childCount(); ++row) {
-      auto* child = root->child(row);
-      if (!child) {
+  if (!model_tree_adapter_) {
+    return;
+  }
+  core::ProjectDocument& document = model_tree_adapter_->document();
+  QList<core::ObjectId> stale_ids;
+  for (const QVariant& value : document.to_variant_list()) {
+      const QVariantMap entry = value.toMap();
+      if (!targets.contains(entry.value("kind").toString()) ||
+          entry.value("parent").toString().isEmpty()) {
         continue;
       }
-      const QString current =
-          child->data(0, PropertyEditor::kStatusRole).toString().toLower();
-      const QString param_status =
-          child->data(0, PropertyEditor::kParamsRole)
-              .toMap()
-              .value("status")
-              .toString()
-              .toLower();
+      const QString current = entry.value("status").toString().toLower();
+      const QString param_status = entry.value("params")
+                                       .toMap()
+                                       .value("status")
+                                       .toString()
+                                       .toLower();
       const QString effective = current.isEmpty() ? param_status : current;
       if (effective.contains("run") || effective.contains("queue") ||
           effective.contains("submit")) {
         continue;
       }
-      child->setData(0, PropertyEditor::kStatusRole, "Stale");
+      if (current != "stale") {
+        stale_ids.append(core::ObjectId(entry.value("id").toString()));
+      }
+  }
+  if (stale_ids.isEmpty() ||
+      !transaction_manager_.begin("invalidate downstream from " + source_kind)) {
+    return;
+  }
+  QString error;
+  for (const core::ObjectId& id : stale_ids) {
+    if (!transaction_manager_.execute(
+            std::make_unique<core::SetStatusCommand>(document, id, "Stale"),
+            &error)) {
+      transaction_manager_.rollback();
+      return;
     }
+  }
+  if (!transaction_manager_.commit()) {
+    transaction_manager_.rollback();
+    return;
+  }
+  for (const core::ObjectId& id : stale_ids) {
+    model_tree_adapter_->project_object(id);
   }
 }
 
@@ -7629,6 +7668,10 @@ void MainWindow::refresh_workflow_status() {
 
 QVariantList MainWindow::collect_workflow_issues() const {
   sync_property_editor_groups_from_snapshot();
+  QMap<QString, QList<ProjectModelEntry>> entries_by_kind;
+  for (const ProjectModelEntry& entry : collect_model_entries()) {
+    entries_by_kind[entry.kind].append(entry);
+  }
   QVariantList issues;
   auto add_issue = [&issues](const QString& severity, const QString& root,
                              const QString& object, const QString& field,
@@ -7666,19 +7709,13 @@ QVariantList MainWindow::collect_workflow_issues() const {
   }
 
   QString mesh_path;
-  if (const auto* mesh_root = find_root_item("Mesh")) {
-    for (int row = mesh_root->childCount() - 1; row >= 0; --row) {
-      const auto* item = mesh_root->child(row);
-      if (!item) {
-        continue;
-      }
-      const QString candidate =
-          item->data(0, PropertyEditor::kParamsRole).toMap().value("path").toString();
+  const QList<ProjectModelEntry> meshes = entries_by_kind.value("Mesh");
+  for (int row = meshes.size() - 1; row >= 0; --row) {
+      const QString candidate = meshes.at(row).params.value("path").toString();
       if (!candidate.trimmed().isEmpty()) {
         mesh_path = candidate;
         break;
       }
-    }
   }
   if (mesh_path.isEmpty() && moose_panel_) {
     mesh_path = moose_panel_->moose_settings().value("mesh_path").toString();
@@ -7722,17 +7759,9 @@ QVariantList MainWindow::collect_workflow_issues() const {
       "Materials", "Sections", "Assembly", "Physics", "Functions",
       "Steps",     "BC",       "Loads",    "Interactions", "Outputs"};
   for (const auto& root_name : roots_to_validate) {
-    const auto* root = find_root_item(root_name);
-    if (!root) {
-      continue;
-    }
     QSet<QString> names;
-    for (int row = 0; row < root->childCount(); ++row) {
-      const auto* child = root->child(row);
-      if (!child) {
-        continue;
-      }
-      const QString name = child->text(0).trimmed();
+    for (const ProjectModelEntry& entry : entries_by_kind.value(root_name)) {
+      const QString name = entry.name.trimmed();
       if (name.isEmpty()) {
         add_issue("error", root_name, QString(), "name",
                   "Object name must not be empty.");
@@ -7741,8 +7770,7 @@ QVariantList MainWindow::collect_workflow_issues() const {
                   "Object name must be unique within its category.");
       }
       names.insert(name);
-      const QVariantMap params =
-          child->data(0, PropertyEditor::kParamsRole).toMap();
+      const QVariantMap params = entry.params;
       if (property_editor_) {
         const QStringList fields = property_editor_->validate_params(root_name, params);
         for (const auto& field : fields) {
@@ -7750,8 +7778,7 @@ QVariantList MainWindow::collect_workflow_issues() const {
                     QString("Required or invalid field: %1").arg(field));
         }
       }
-      const QString status =
-          child->data(0, PropertyEditor::kStatusRole).toString().toLower();
+      const QString status = entry.status.toLower();
       if (status.contains("stale") || status.contains("invalid") ||
           status.contains("outdated")) {
         add_issue("error", root_name, name, "status",
@@ -7780,57 +7807,41 @@ QVariantList MainWindow::collect_workflow_issues() const {
   };
 
   QSet<QString> material_names;
-  if (const auto* materials = find_root_item("Materials")) {
-    for (int row = 0; row < materials->childCount(); ++row) {
-      if (materials->child(row)) {
-        material_names.insert(materials->child(row)->text(0));
-      }
-    }
+  for (const ProjectModelEntry& entry : entries_by_kind.value("Materials")) {
+    material_names.insert(entry.name);
   }
 
-  if (const auto* root = find_root_item("Sections")) {
-    for (int row = 0; row < root->childCount(); ++row) {
-      const auto* child = root->child(row);
-      const QVariantMap params =
-          child->data(0, PropertyEditor::kParamsRole).toMap();
+  for (const ProjectModelEntry& entry : entries_by_kind.value("Sections")) {
+      const QVariantMap params = entry.params;
       const QStringList groups = params.value("block").toString().split(
           QRegularExpression("\\s+"), Qt::SkipEmptyParts);
       if (groups.isEmpty()) {
-        add_issue("error", "Sections", child->text(0), "block",
+        add_issue("error", "Sections", entry.name, "block",
                   "Select at least one physical volume and apply it.");
       }
       for (const auto& group : groups) {
-        check_group("Sections", child->text(0), "block", group, volume_dim);
+        check_group("Sections", entry.name, "block", group, volume_dim);
       }
       const QString material = params.value("material").toString().trimmed();
       if (!material.isEmpty() && !material_names.contains(material)) {
-        add_issue("error", "Sections", child->text(0), "material",
+        add_issue("error", "Sections", entry.name, "material",
                   QString("Referenced Material '%1' does not exist.")
                       .arg(material));
       }
-    }
   }
-  if (const auto* root = find_root_item("Physics")) {
-    for (int row = 0; row < root->childCount(); ++row) {
-      const auto* child = root->child(row);
-      const QString group = child->data(0, PropertyEditor::kParamsRole)
-                                .toMap().value("block").toString();
+  for (const ProjectModelEntry& entry : entries_by_kind.value("Physics")) {
+      const QString group = entry.params.value("block").toString();
       if (group.trimmed().isEmpty()) {
-        add_issue("error", "Physics", child->text(0), "block",
+        add_issue("error", "Physics", entry.name, "block",
                   "Select a physical volume for the Physics action.");
       } else {
-        check_group("Physics", child->text(0), "block", group, volume_dim);
+        check_group("Physics", entry.name, "block", group, volume_dim);
       }
-    }
   }
 
   QSet<QString> function_names;
-  if (const auto* functions = find_root_item("Functions")) {
-    for (int row = 0; row < functions->childCount(); ++row) {
-      if (functions->child(row)) {
-        function_names.insert(functions->child(row)->text(0));
-      }
-    }
+  for (const ProjectModelEntry& entry : entries_by_kind.value("Functions")) {
+    function_names.insert(entry.name);
   }
   QSet<QString> variable_names;
   const QStringList displacement_names = resolve_displacements().split(
@@ -7838,31 +7849,24 @@ QVariantList MainWindow::collect_workflow_issues() const {
   for (const auto& name : displacement_names) {
     variable_names.insert(name);
   }
-  if (const auto* variables = find_root_item("Variables")) {
-    for (int row = 0; row < variables->childCount(); ++row) {
-      if (variables->child(row)) {
-        variable_names.insert(variables->child(row)->text(0));
-      }
-    }
+  for (const ProjectModelEntry& entry : entries_by_kind.value("Variables")) {
+    variable_names.insert(entry.name);
   }
   QSet<QString> constrained_boundary_dofs;
-  if (const auto* root = find_root_item("BC")) {
-    for (int row = 0; row < root->childCount(); ++row) {
-      const auto* child = root->child(row);
-      const QVariantMap params =
-          child->data(0, PropertyEditor::kParamsRole).toMap();
-      check_group("BC", child->text(0), "boundary",
+  for (const ProjectModelEntry& entry : entries_by_kind.value("BC")) {
+      const QVariantMap params = entry.params;
+      check_group("BC", entry.name, "boundary",
                   params.value("boundary").toString(), boundary_dim);
       const QString variable = params.value("variable").toString();
       if (!variable.isEmpty() && !variable_names.contains(variable)) {
-        add_issue("error", "BC", child->text(0), "variable",
+        add_issue("error", "BC", entry.name, "variable",
                   QString("Referenced Variable '%1' does not exist.")
                       .arg(variable));
       }
       if (params.value("type").toString() == "FunctionDirichletBC") {
         const QString function = params.value("function").toString();
         if (!function.isEmpty() && !function_names.contains(function)) {
-          add_issue("error", "BC", child->text(0), "function",
+          add_issue("error", "BC", entry.name, "function",
                     QString("Referenced Function '%1' does not exist.").arg(function));
         }
       }
@@ -7874,25 +7878,21 @@ QVariantList MainWindow::collect_workflow_issues() const {
         constrained_boundary_dofs.insert(
             boundary + "\n" + params.value("variable").toString());
       }
-    }
   }
-  if (const auto* root = find_root_item("Loads")) {
-    for (int row = 0; row < root->childCount(); ++row) {
-      const auto* child = root->child(row);
-      const QVariantMap params =
-          child->data(0, PropertyEditor::kParamsRole).toMap();
+  for (const ProjectModelEntry& entry : entries_by_kind.value("Loads")) {
+      const QVariantMap params = entry.params;
       const QString function = params.value("function").toString();
       if (!function.isEmpty() && !function_names.contains(function)) {
-        add_issue("error", "Loads", child->text(0), "function",
+        add_issue("error", "Loads", entry.name, "function",
                   QString("Referenced Function '%1' does not exist.").arg(function));
       }
       const QString boundary = params.value("boundary").toString();
       if (!boundary.isEmpty()) {
-        check_group("Loads", child->text(0), "boundary", boundary, boundary_dim);
+        check_group("Loads", entry.name, "boundary", boundary, boundary_dim);
       }
       const QString variable = params.value("variable").toString();
       if (!variable.isEmpty() && !variable_names.contains(variable)) {
-        add_issue("error", "Loads", child->text(0), "variable",
+        add_issue("error", "Loads", entry.name, "variable",
                   QString("Referenced Variable '%1' does not exist.")
                       .arg(variable));
       }
@@ -7900,7 +7900,7 @@ QVariantList MainWindow::collect_workflow_issues() const {
       if (type == "Pressure" &&
           (!active_profile_supports_block("BCs") ||
            !mapping_registry_.has_object_type("BCs", "Pressure"))) {
-        add_issue("error", "Loads", child->text(0), "type",
+        add_issue("error", "Loads", entry.name, "type",
                   "Pressure is not supported by the active application profile/mapping.");
       }
       if (type == "Pressure") {
@@ -7912,27 +7912,22 @@ QVariantList MainWindow::collect_workflow_issues() const {
           if (constrained_boundary_dofs.contains(
                   group + "\n" + params.value("variable").toString())) {
             add_issue(
-                "error", "Loads", child->text(0), "boundary/variable",
+                "error", "Loads", entry.name, "boundary/variable",
                 "Pressure conflicts with a prescribed BC on the same boundary and variable.");
           }
         }
       }
-    }
   }
-  if (const auto* root = find_root_item("Interactions")) {
+  {
     QSet<QString> contact_pairs;
-    for (int row = 0; row < root->childCount(); ++row) {
-      const auto* child = root->child(row);
-      if (!child) {
-        continue;
-      }
-      const QVariantMap params =
-          child->data(0, PropertyEditor::kParamsRole).toMap();
+    for (const ProjectModelEntry& entry :
+         entries_by_kind.value("Interactions")) {
+      const QVariantMap params = entry.params;
       const QString type = params.value("type").toString();
       if (type != "Contact" ||
           !active_profile_supports_block("Contact") ||
           !mapping_registry_.has_object_type("Contact", type)) {
-        add_issue("error", "Interactions", child->text(0), "type",
+        add_issue("error", "Interactions", entry.name, "type",
                   QString("Interaction type '%1' is not supported by the active application profile/mapping.")
                       .arg(type));
         continue;
@@ -7940,44 +7935,39 @@ QVariantList MainWindow::collect_workflow_issues() const {
       const QString primary = params.value("primary").toString().trimmed();
       const QString secondary =
           params.value("secondary").toString().trimmed();
-      check_group("Interactions", child->text(0), "primary", primary,
+      check_group("Interactions", entry.name, "primary", primary,
                   boundary_dim);
-      check_group("Interactions", child->text(0), "secondary", secondary,
+      check_group("Interactions", entry.name, "secondary", secondary,
                   boundary_dim);
       if (!primary.isEmpty() && primary == secondary) {
-        add_issue("error", "Interactions", child->text(0), "secondary",
+        add_issue("error", "Interactions", entry.name, "secondary",
                   "Primary and secondary contact surfaces must differ.");
       }
       const QString pair = primary + "\n" + secondary;
       if (!primary.isEmpty() && !secondary.isEmpty() &&
           contact_pairs.contains(pair)) {
-        add_issue("error", "Interactions", child->text(0), "primary/secondary",
+        add_issue("error", "Interactions", entry.name, "primary/secondary",
                   "The same primary/secondary contact pair is already defined.");
       }
       contact_pairs.insert(pair);
     }
   }
-  if (const auto* root = find_root_item("Outputs")) {
-    for (int row = 0; row < root->childCount(); ++row) {
-      const auto* child = root->child(row);
-      const QString boundary = child->data(0, PropertyEditor::kParamsRole)
-                                   .toMap().value("hist_boundary").toString();
+  for (const ProjectModelEntry& entry : entries_by_kind.value("Outputs")) {
+      const QString boundary = entry.params.value("hist_boundary").toString();
       if (!boundary.isEmpty()) {
-        check_group("Outputs", child->text(0), "hist_boundary", boundary,
+        check_group("Outputs", entry.name, "hist_boundary", boundary,
                     boundary_dim);
       }
-      const QVariantMap params =
-          child->data(0, PropertyEditor::kParamsRole).toMap();
+      const QVariantMap params = entry.params;
       if (params.value("hist_disp_avg").toString() == "true") {
         const QString variable = params.value("hist_disp_variable").toString();
         if (!variable.isEmpty() && !variable_names.contains(variable)) {
-          add_issue("error", "Outputs", child->text(0),
+          add_issue("error", "Outputs", entry.name,
                     "hist_disp_variable",
                     QString("Referenced Variable '%1' does not exist.")
                         .arg(variable));
         }
       }
-    }
   }
   if (child_count("Steps") > 1) {
     add_issue("warning", "Steps", QString(), "sequence",
@@ -7985,15 +7975,12 @@ QVariantList MainWindow::collect_workflow_issues() const {
   }
 
   const auto sources = collect_material_file_sources();
-  if (const auto* materials = find_root_item("Materials")) {
-    const QStringList file_keys = {"compression_hardening_file",
-                                   "compression_damage_file",
-                                   "tension_stiffening_file",
-                                   "tension_damage_file"};
-    for (int row = 0; row < materials->childCount(); ++row) {
-      const auto* child = materials->child(row);
-      const QVariantMap params =
-          child->data(0, PropertyEditor::kParamsRole).toMap();
+  const QStringList file_keys = {"compression_hardening_file",
+                                 "compression_damage_file",
+                                 "tension_stiffening_file",
+                                 "tension_damage_file"};
+  for (const ProjectModelEntry& entry : entries_by_kind.value("Materials")) {
+      const QVariantMap params = entry.params;
       if (params.value("type").toString() != "AbaqusCDP") {
         continue;
       }
@@ -8001,11 +7988,10 @@ QVariantList MainWindow::collect_workflow_issues() const {
         const QString path = params.value(key).toString();
         if (!path.isEmpty() && !QFileInfo::exists(path) &&
             !sources.contains(QFileInfo(path).fileName())) {
-          add_issue("error", "Materials", child->text(0), key,
+          add_issue("error", "Materials", entry.name, key,
                     "Material data file does not exist: " + path);
         }
       }
-    }
   }
   return issues;
 }
@@ -8371,61 +8357,109 @@ bool MainWindow::prompt_unique_child_name(QTreeWidgetItem* root,
   return dialog.exec() == QDialog::Accepted;
 }
 
-void MainWindow::record_model_transaction(
-    const QString& label, const QString& description, const QVariantMap& before,
-    const QVariantMap& after, std::function<void()> apply,
-    std::function<void()> revert) {
-  if (!transaction_manager_.begin(label)) {
-    // 无嵌套事务设计下不应发生；兜底直接执行，不丢动作。
-    if (apply) {
-      apply();
-    }
-    return;
+bool MainWindow::execute_document_command(
+    const QString& label, std::unique_ptr<gmp::core::Command> command) {
+  if (!model_tree_adapter_ || !transaction_manager_.begin(label)) {
+    return false;
   }
-  transaction_manager_.execute(std::make_unique<gmp::core::ClosureCommand>(
-      description, before, after, std::move(apply), std::move(revert)));
-  transaction_manager_.commit();
-  gmp::log_operation(
-      "transaction",
-      QString("committed: %1 — %2").arg(label, description));
+  QString error;
+  if (!transaction_manager_.execute(std::move(command), &error) ||
+      !transaction_manager_.commit()) {
+    transaction_manager_.rollback();
+    gmp::log_operation("transaction", "failed: " + label + " — " + error);
+    return false;
+  }
+  gmp::log_operation("transaction", "committed: " + label);
+  return true;
+}
+
+bool MainWindow::commit_object_edit(QTreeWidgetItem* item, const QString& name,
+                                    const QVariantMap& params) {
+  if (!model_tree_adapter_ || !item) {
+    return false;
+  }
+  const core::ObjectId id = model_tree_adapter_->id_for_item(item);
+  core::ProjectObject* object = model_tree_adapter_->document().object(id);
+  if (!object) {
+    return false;
+  }
+  const bool rename = object->name() != name;
+  const bool set_properties = object->properties().to_variant_map() != params;
+  if (!rename && !set_properties) {
+    return true;
+  }
+  const QString label = QString("edit %1/%2").arg(object->kind(), object->name());
+  if (!transaction_manager_.begin(label)) {
+    return false;
+  }
+  QString error;
+  bool ok = true;
+  if (rename) {
+    ok = transaction_manager_.execute(
+        std::make_unique<core::RenameObjectCommand>(
+            model_tree_adapter_->document(), id, name),
+        &error);
+  }
+  if (ok && set_properties) {
+    ok = transaction_manager_.execute(
+        std::make_unique<core::SetPropertiesCommand>(
+            model_tree_adapter_->document(), id, params),
+        &error);
+  }
+  if (!ok || !transaction_manager_.commit()) {
+    transaction_manager_.rollback();
+    gmp::log_operation("transaction", "failed: " + label + " — " + error);
+    return false;
+  }
+  model_tree_adapter_->project_object(id);
+  gmp::log_operation("transaction", "committed: " + label);
+  invalidate_downstream_from(object->kind());
+  set_project_dirty(true);
+  return true;
+}
+
+bool MainWindow::set_object_status(QTreeWidgetItem* item,
+                                   const QString& status) {
+  if (!model_tree_adapter_ || !item) {
+    return false;
+  }
+  const core::ObjectId id = model_tree_adapter_->id_for_item(item);
+  const core::ProjectObject* object = model_tree_adapter_->document().object(id);
+  if (!object || object->statusText() == status) {
+    return object != nullptr;
+  }
+  if (!execute_document_command(
+          QString("status %1/%2").arg(object->kind(), object->name()),
+          std::make_unique<core::SetStatusCommand>(
+              model_tree_adapter_->document(), id, status))) {
+    return false;
+  }
+  model_tree_adapter_->project_object(id);
+  return true;
 }
 
 QTreeWidgetItem* MainWindow::add_child_item(QTreeWidgetItem* root,
                                             const QString& name,
                                             const QString& kind,
-                                            const QVariantMap& params) {
-  if (!root) {
+                                            const QVariantMap& params,
+                                            int index) {
+  if (!root || !model_tree_adapter_) {
     return nullptr;
   }
   const QString safe_name = unique_child_name(root, name);
   const QVariantMap normalized = normalize_params_for_kind(kind, params);
-  const QString object_id = core::ObjectId::generate().toString();
-  // TASK-V02-061：对象创建经事务层（Command + 审计），行为不变。
-  QTreeWidgetItem* item = nullptr;
-  record_model_transaction(
-      QString("add %1/%2").arg(kind, safe_name),
-      QString("create %1 object").arg(kind), {},
-      QVariantMap{{"id", object_id},
-                  {"kind", kind},
-                  {"name", safe_name},
-                  {"params", normalized}},
-      [this, root, kind, safe_name, normalized, object_id, &item]() {
-        auto* created = new QTreeWidgetItem(root);
-        created->setText(0, safe_name);
-        created->setData(0, PropertyEditor::kKindRole, kind);
-        created->setData(0, PropertyEditor::kParamsRole, normalized);
-        created->setData(0, PropertyEditor::kObjectIdRole, object_id);
-        created->setIcon(0, root->icon(0));
-        root->setExpanded(true);
-        model_tree_->setCurrentItem(created);
-        item = created;
-      },
-      [&item]() {
-        if (item && item->parent()) {
-          delete item->parent()->takeChild(item->parent()->indexOfChild(item));
-          item = nullptr;
-        }
-      });
+  auto object = std::make_unique<core::ProjectObject>(kind, safe_name);
+  object->properties() = core::PropertyBag::from_variant_map(normalized);
+  auto command = std::make_unique<core::CreateObjectCommand>(
+      model_tree_adapter_->document(), std::move(object),
+      model_tree_adapter_->id_for_item(root), index);
+  const core::ObjectId id = command->createdId();
+  if (!execute_document_command(QString("add %1/%2").arg(kind, safe_name),
+                                std::move(command))) {
+    return nullptr;
+  }
+  model_tree_adapter_->project_document(id);
+  QTreeWidgetItem* item = model_tree_adapter_->item_for_id(id);
   if (!item) {
     return nullptr;
   }
@@ -8455,28 +8489,19 @@ QTreeWidgetItem* MainWindow::active_part_item() const {
 
 QVariantList MainWindow::assembly_instance_specs() const {
   QVariantList specs;
-  auto* assembly_root = find_root_item("Assembly");
-  auto* parts_root = find_root_item("Parts");
-  for (int row = 0; assembly_root && row < assembly_root->childCount(); ++row) {
-    auto* instance = assembly_root->child(row);
-    if (!instance) {
+  const QList<ProjectModelEntry> entries = collect_model_entries();
+  for (const ProjectModelEntry& instance : entries) {
+    if (instance.kind != "Assembly") {
       continue;
     }
-    QVariantMap spec =
-        instance->data(0, PropertyEditor::kParamsRole).toMap();
-    spec.insert("name", instance->text(0));
+    QVariantMap spec = instance.params;
+    spec.insert("name", instance.name);
     const QString part_name = spec.value("part").toString().trimmed();
-    for (int part_row = 0; parts_root && part_row < parts_root->childCount();
-         ++part_row) {
-      auto* part = parts_root->child(part_row);
-      if (!part || part->text(0) != part_name) {
+    for (const ProjectModelEntry& part : entries) {
+      if (part.kind != "Parts" || part.name != part_name) {
         continue;
       }
-      spec.insert("source_path",
-                  part->data(0, PropertyEditor::kParamsRole)
-                      .toMap()
-                      .value("brep")
-                      .toString());
+      spec.insert("source_path", part.params.value("brep").toString());
       break;
     }
     specs.append(spec);
@@ -8540,9 +8565,8 @@ bool MainWindow::build_assembly_model(bool show_error) {
   }
 #endif
   if (auto* root = find_root_item("Assembly")) {
-    const QSignalBlocker blocker(model_tree_);
     for (int row = 0; row < root->childCount(); ++row) {
-      root->child(row)->setData(0, PropertyEditor::kStatusRole, "Ready");
+      set_object_status(root->child(row), "Ready");
     }
   }
   if (mesh_work_window_) {
@@ -8595,16 +8619,11 @@ QTreeWidgetItem* MainWindow::attach_feature_to_part(
     feature_params.insert("brep", brep_path);
   }
 
-  auto* feature_item = new QTreeWidgetItem(features_root);
-  feature_item->setText(0, feature_name);
-  feature_item->setData(0, PropertyEditor::kKindRole, "Features");
-  feature_item->setData(0, PropertyEditor::kObjectIdRole,
-                        core::ObjectId::generate().toString());
-  feature_item->setData(
-      0, PropertyEditor::kParamsRole,
-      normalize_params_for_kind("Features", feature_params));
-  feature_item->setIcon(0, features_root->icon(0));
-  features_root->setExpanded(true);
+  auto* feature_item = add_child_item(features_root, feature_name, "Features",
+                                      feature_params);
+  if (!feature_item) {
+    return nullptr;
+  }
 
   QVariantMap part_params =
       part->data(0, PropertyEditor::kParamsRole).toMap();
@@ -8621,8 +8640,8 @@ QTreeWidgetItem* MainWindow::attach_feature_to_part(
   } else {
     part_params.insert("brep", brep_path);
   }
-  part->setData(0, PropertyEditor::kParamsRole,
-                normalize_params_for_kind("Parts", part_params));
+  commit_object_edit(part, part->text(0),
+                     normalize_params_for_kind("Parts", part_params));
 
   model_tree_->setCurrentItem(part);
   invalidate_downstream_from("Parts");
@@ -8662,13 +8681,12 @@ void MainWindow::upsert_mesh_item(const QString& path) {
                   gmsh_panel_->gmsh_settings().value("model_source"));
   }
   if (!item) {
-    add_child_item(root, name, "Mesh", params);
+    item = add_child_item(root, name, "Mesh", params);
   } else {
-    item->setData(0, PropertyEditor::kParamsRole, params);
+    commit_object_edit(item, item->text(0), params);
   }
-  item = find_child_by_param(root, "path", path);
   if (item) {
-    item->setData(0, PropertyEditor::kStatusRole, "Generated");
+    set_object_status(item, "Generated");
   }
   set_project_dirty(true);
 }
@@ -8724,10 +8742,10 @@ bool MainWindow::import_exodus_mesh(const QString& path) {
     for (auto it = params.begin(); it != params.end(); ++it) {
       merged.insert(it.key(), it.value());
     }
-    item->setData(0, PropertyEditor::kParamsRole, merged);
+    commit_object_edit(item, item->text(0), merged);
   }
   if (item) {
-    item->setData(0, PropertyEditor::kStatusRole, "Generated");
+    set_object_status(item, "Generated");
   }
   // 决策 6：只有这个显式入口把 .e 当输入网格载入舞台；普通结果 .e
   // 仍走 import_result_file 登记 Results，不触碰 Mesh 节点。
@@ -8790,14 +8808,12 @@ void MainWindow::upsert_result_item(const QString& path,
     params.insert("job", job_name);
   }
   if (!item) {
-    add_child_item(root, name, "Results", params);
+    item = add_child_item(root, name, "Results", params);
   } else {
-    item->setText(0, unique_child_name(root, name, item));
-    item->setData(0, PropertyEditor::kParamsRole, params);
+    commit_object_edit(item, unique_child_name(root, name, item), params);
   }
-  item = find_child_by_param(root, "path", path);
   if (item) {
-    item->setData(0, PropertyEditor::kStatusRole, "Success");
+    set_object_status(item, "Success");
   }
   set_project_dirty(true);
   refresh_results_panel();
@@ -9361,18 +9377,11 @@ QVariantMap MainWindow::normalize_params_for_kind(
 
 QMap<QString, QString> MainWindow::collect_material_file_sources() const {
   QMap<QString, QString> sources;
-  auto* root = find_root_item("Materials");
-  if (!root) {
-    return sources;
-  }
-  for (int i = 0; i < root->childCount(); ++i) {
-    auto* child = root->child(i);
-    if (!child) {
+  for (const ProjectModelEntry& entry : collect_model_entries()) {
+    if (entry.kind != "Materials") {
       continue;
     }
-    const QVariantMap params =
-        child->data(0, PropertyEditor::kParamsRole).toMap();
-    for (auto it = params.begin(); it != params.end(); ++it) {
+    for (auto it = entry.params.begin(); it != entry.params.end(); ++it) {
       if (!it.key().endsWith(QLatin1String("_file"))) {
         continue;
       }
@@ -9403,24 +9412,26 @@ QMap<QString, double> MainWindow::display_unit_factors() const {
 
 QList<ProjectModelEntry> MainWindow::collect_model_entries() const {
   QList<ProjectModelEntry> entries;
-  for (int i = 0; model_tree_ && i < model_tree_->topLevelItemCount(); ++i) {
-    const auto* root = model_tree_->topLevelItem(i);
-    if (!root) {
+  if (!model_tree_adapter_) {
+    return entries;
+  }
+  for (const QVariant& value :
+       model_tree_adapter_->document().to_variant_list()) {
+    const QVariantMap object = value.toMap();
+    const QString parent_id = object.value("parent").toString();
+    if (parent_id.isEmpty()) {
       continue;
     }
-    for (int row = 0; row < root->childCount(); ++row) {
-      const auto* child = root->child(row);
-      if (!child) {
-        continue;
-      }
-      ProjectModelEntry entry;
-      entry.id = child->data(0, PropertyEditor::kObjectIdRole).toString();
-      entry.name = child->text(0);
-      entry.kind = root->text(0);
-      entry.status = child->data(0, PropertyEditor::kStatusRole).toString();
-      entry.params = child->data(0, PropertyEditor::kParamsRole).toMap();
-      entries.append(entry);
+    ProjectModelEntry entry;
+    entry.id = object.value("id").toString();
+    entry.name = object.value("name").toString();
+    entry.kind = object.value("kind").toString();
+    entry.status = object.value("status").toString();
+    entry.params = object.value("params").toMap();
+    if (parent_id != ModelTreeAdapter::root_id(entry.kind).toString()) {
+      entry.parent_id = parent_id;
     }
+    entries.append(entry);
   }
   return entries;
 }
@@ -9762,12 +9773,12 @@ bool MainWindow::sync_model_to_input(const QString& project_path_override) {
       input_item = add_child_item(input_root, input_name, "Input Cases",
                                   input_params);
     } else {
-      input_item->setText(
-          0, unique_child_name(input_root, input_name, input_item));
-      input_item->setData(0, PropertyEditor::kParamsRole, input_params);
+      commit_object_edit(
+          input_item, unique_child_name(input_root, input_name, input_item),
+          input_params);
     }
     if (input_item) {
-      input_item->setData(0, PropertyEditor::kStatusRole, "Generated");
+      set_object_status(input_item, "Generated");
     }
   }
   refresh_workflow_status();
@@ -10142,10 +10153,9 @@ void MainWindow::add_item_under_root(QTreeWidgetItem* root) {
 }
 
 void MainWindow::remove_item(QTreeWidgetItem* item) {
-  if (!item || !item->parent()) {
+  if (!item || !item->parent() || !model_tree_adapter_) {
     return;
   }
-  auto* parent = item->parent();
   const QString kind =
       item->data(0, PropertyEditor::kKindRole).toString();
   const QString name = item->text(0);
@@ -10153,6 +10163,22 @@ void MainWindow::remove_item(QTreeWidgetItem* item) {
       item->data(0, PropertyEditor::kParamsRole).toMap();
   const QString removed_id =
       item->data(0, PropertyEditor::kObjectIdRole).toString();
+  core::ObjectId selected_after =
+      model_tree_adapter_->id_for_item(model_tree_->currentItem());
+  bool removes_selection = false;
+  for (QTreeWidgetItem* cursor = model_tree_->currentItem(); cursor;
+       cursor = cursor->parent()) {
+    if (cursor == item) {
+      removes_selection = true;
+      break;
+    }
+  }
+  if (removes_selection) {
+    selected_after = model_tree_adapter_->id_for_item(item->parent());
+    if (property_editor_) {
+      property_editor_->set_item(nullptr);
+    }
+  }
   const QString current_file = viewer_ ? viewer_->current_file() : QString();
   const bool current_is_mesh =
       current_file.endsWith(".msh", Qt::CaseInsensitive);
@@ -10181,49 +10207,8 @@ void MainWindow::remove_item(QTreeWidgetItem* item) {
       }
     }
   } else if (kind == "Parts") {
-    // Feature 是 Part 的建模历史。删除 Part 时同步移除其历史节点，避免
-    // 留下孤儿 Feature；任一当前网格都可能包含该 Part，必须撤下旧快照。
-    auto* features_root = find_root_item("Features");
-    for (int row = features_root ? features_root->childCount() - 1 : -1;
-         row >= 0; --row) {
-      auto* feature = features_root->child(row);
-      const QVariantMap params =
-          feature->data(0, PropertyEditor::kParamsRole).toMap();
-      if (params.value("part").toString() == name) {
-        delete features_root->takeChild(row);
-      }
-    }
     clear_stage_data = current_is_mesh;
-    // Keep the dangling reference visible. Silent rebinding to another Part
-    // could produce a valid-looking but semantically different assembly.
-    if (auto* assembly_root = find_root_item("Assembly")) {
-      for (int row = 0; row < assembly_root->childCount(); ++row) {
-        auto* instance = assembly_root->child(row);
-        if (instance && instance->data(0, PropertyEditor::kParamsRole)
-                            .toMap()
-                            .value("part")
-                            .toString() == name) {
-          instance->setData(0, PropertyEditor::kStatusRole, "Invalid");
-        }
-      }
-    }
   } else if (kind == "Features") {
-    // 删除 Feature 后清除所属 Part 上的派生结果引用。
-    auto* parts_root = find_root_item("Parts");
-    for (int row = 0; parts_root && row < parts_root->childCount(); ++row) {
-      auto* part = parts_root->child(row);
-      QVariantMap params =
-          part->data(0, PropertyEditor::kParamsRole).toMap();
-      if (params.value("feature").toString() != name) {
-        continue;
-      }
-      params.remove("feature");
-      params.remove("gmsh_volume_tag");
-      params.remove("gmsh_volume_tags");
-      params.remove("brep");
-      params.remove("mesh");
-      part->setData(0, PropertyEditor::kParamsRole, params);
-    }
     clear_stage_data = current_is_mesh;
   } else if (kind == "Mesh") {
     clear_stage_data = current_is_mesh;
@@ -10232,27 +10217,70 @@ void MainWindow::remove_item(QTreeWidgetItem* item) {
         same_file(current_file, removed_params.value("path").toString());
   }
 
-  // TASK-V02-061：对象删除经事务层（Command + 审计），行为不变。
-  // revert 仅恢复本节点（级联删除的 Feature 等不重建；rollback 当前未使用）。
-  record_model_transaction(
-      QString("remove %1/%2").arg(kind, name),
-      QString("remove %1 object").arg(kind),
-      QVariantMap{{"id", removed_id},
-                  {"kind", kind},
-                  {"name", name},
-                  {"params", removed_params}},
-      {},
-      [parent, item]() {
-        parent->removeChild(item);
-        delete item;
-      },
-      [this, parent, kind, name, removed_params, removed_id]() {
-        auto* restored = new QTreeWidgetItem(parent);
-        restored->setText(0, name);
-        restored->setData(0, PropertyEditor::kKindRole, kind);
-        restored->setData(0, PropertyEditor::kParamsRole, removed_params);
-        restored->setData(0, PropertyEditor::kObjectIdRole, removed_id);
-      });
+  core::ProjectDocument& document = model_tree_adapter_->document();
+  if (!transaction_manager_.begin(QString("remove %1/%2").arg(kind, name))) {
+    return;
+  }
+  QString command_error;
+  bool command_ok = true;
+  const QVariantList objects = document.to_variant_list();
+  if (kind == "Parts") {
+    for (const QVariant& value : objects) {
+      const QVariantMap entry = value.toMap();
+      const core::ObjectId id(entry.value("id").toString());
+      if (entry.value("kind").toString() == "Features" &&
+          entry.value("params").toMap().value("part").toString() == name) {
+        command_ok = transaction_manager_.execute(
+            std::make_unique<core::DeleteObjectCommand>(document, id),
+            &command_error);
+      } else if (entry.value("kind").toString() == "Assembly" &&
+                 entry.value("params").toMap().value("part").toString() ==
+                     name) {
+        command_ok = transaction_manager_.execute(
+            std::make_unique<core::SetStatusCommand>(document, id, "Invalid"),
+            &command_error);
+      }
+      if (!command_ok) {
+        break;
+      }
+    }
+  } else if (kind == "Features") {
+    for (const QVariant& value : objects) {
+      const QVariantMap entry = value.toMap();
+      QVariantMap params = entry.value("params").toMap();
+      if (entry.value("kind").toString() != "Parts" ||
+          params.value("feature").toString() != name) {
+        continue;
+      }
+      params.remove("feature");
+      params.remove("gmsh_volume_tag");
+      params.remove("gmsh_volume_tags");
+      params.remove("brep");
+      params.remove("mesh");
+      command_ok = transaction_manager_.execute(
+          std::make_unique<core::SetPropertiesCommand>(
+              document, core::ObjectId(entry.value("id").toString()), params),
+          &command_error);
+      if (!command_ok) {
+        break;
+      }
+    }
+  }
+  if (command_ok) {
+    command_ok = transaction_manager_.execute(
+        std::make_unique<core::DeleteObjectCommand>(
+            document, core::ObjectId(removed_id)),
+        &command_error);
+  }
+  if (!command_ok || !transaction_manager_.commit()) {
+    transaction_manager_.rollback();
+    gmp::log_operation("transaction",
+                       "failed: remove " + kind + "/" + name + " — " +
+                           command_error);
+    return;
+  }
+  gmp::log_operation("transaction", "committed: remove " + kind + "/" + name);
+  model_tree_adapter_->project_document(selected_after);
   if (clear_stage_data && viewer_) {
     viewer_->clear_stage_data();
     active_ui_context_.stage_selections.clear();
@@ -10266,7 +10294,7 @@ void MainWindow::remove_item(QTreeWidgetItem* item) {
 }
 
 void MainWindow::duplicate_item(QTreeWidgetItem* item) {
-  if (!item || !item->parent()) {
+  if (!item || !item->parent() || !model_tree_adapter_) {
     return;
   }
   auto* parent = item->parent();
@@ -10278,35 +10306,21 @@ void MainWindow::duplicate_item(QTreeWidgetItem* item) {
       item->data(0, PropertyEditor::kKindRole).toString();
   const QVariantMap params_for_tx =
       item->data(0, PropertyEditor::kParamsRole).toMap();
-  const QString duplicate_id = core::ObjectId::generate().toString();
-  // TASK-V02-061：对象复制经事务层（Command + 审计），行为不变。
-  QTreeWidgetItem* child = nullptr;
-  record_model_transaction(
-      QString("duplicate %1/%2").arg(kind_for_tx, base),
-      QString("duplicate %1 object").arg(kind_for_tx), {},
-      QVariantMap{{"id", duplicate_id},
-                  {"kind", kind_for_tx}, {"name", base},
-                  {"params", params_for_tx}},
-      [this, parent, kind_for_tx, params_for_tx, base, duplicate_id, &child]() {
-        auto* created = new QTreeWidgetItem(parent);
-        created->setText(0, base);
-        created->setData(0, PropertyEditor::kKindRole, kind_for_tx);
-        created->setData(0, PropertyEditor::kParamsRole, params_for_tx);
-        created->setData(0, PropertyEditor::kObjectIdRole, duplicate_id);
-        created->setIcon(0, parent->icon(0));
-        parent->setExpanded(true);
-        model_tree_->setCurrentItem(created);
-        child = created;
-      },
-      [&child]() {
-        if (child && child->parent()) {
-          delete child->parent()->takeChild(
-              child->parent()->indexOfChild(child));
-          child = nullptr;
-        }
-      });
-  invalidate_downstream_from(
-      item->data(0, PropertyEditor::kKindRole).toString());
+  auto object = std::make_unique<core::ProjectObject>(kind_for_tx, base);
+  object->properties() = core::PropertyBag::from_variant_map(params_for_tx);
+  object->setStatusText(
+      item->data(0, PropertyEditor::kStatusRole).toString());
+  auto command = std::make_unique<core::CreateObjectCommand>(
+      model_tree_adapter_->document(), std::move(object),
+      model_tree_adapter_->id_for_item(parent));
+  const core::ObjectId duplicate_id = command->createdId();
+  if (!execute_document_command(
+          QString("duplicate %1/%2").arg(kind_for_tx, base),
+          std::move(command))) {
+    return;
+  }
+  model_tree_adapter_->project_document(duplicate_id);
+  invalidate_downstream_from(kind_for_tx);
   set_project_dirty(true);
   refresh_module_pages();
   if (property_editor_) {
@@ -10315,7 +10329,7 @@ void MainWindow::duplicate_item(QTreeWidgetItem* item) {
 }
 
 void MainWindow::rename_item(QTreeWidgetItem* item) {
-  if (!item || !item->parent()) {
+  if (!item || !item->parent() || !model_tree_adapter_) {
     return;
   }
   auto* root = item->parent();
@@ -10326,20 +10340,15 @@ void MainWindow::rename_item(QTreeWidgetItem* item) {
       name == item->text(0)) {
     return;
   }
-  const QString old_name = item->text(0);
-  // TASK-V02-061：对象重命名经事务层（Command + 审计），行为不变。
-  record_model_transaction(
-      QString("rename %1/%2").arg(root->text(0), name),
-      QString("rename %1 object").arg(root->text(0)),
-      QVariantMap{{"name", old_name}}, QVariantMap{{"name", name}},
-      [this, item, name]() {
-        item->setText(0, name);
-        model_tree_->setCurrentItem(item);
-      },
-      [this, item, old_name]() {
-        item->setText(0, old_name);
-        model_tree_->setCurrentItem(item);
-      });
+  const core::ObjectId id = model_tree_adapter_->id_for_item(item);
+  if (!execute_document_command(
+          QString("rename %1/%2").arg(root->text(0), name),
+          std::make_unique<core::RenameObjectCommand>(
+              model_tree_adapter_->document(), id, name))) {
+    return;
+  }
+  model_tree_adapter_->project_object(id);
+  model_tree_->setCurrentItem(item);
   // W-01b：重命名可能悬空下游引用（如 Section.material），立即重算状态。
   refresh_workflow_status();
 }
@@ -10373,7 +10382,7 @@ void MainWindow::refresh_job_table() {
         child->data(0, PropertyEditor::kParamsRole).toMap();
     const QVariantMap params = normalize_remote_job_params(saved_params);
     if (params != saved_params) {
-      child->setData(0, PropertyEditor::kParamsRole, params);
+      commit_object_edit(child, child->text(0), params);
     }
     // 作业监控状态筛选：按映射后的状态列匹配。
     if (filter != "all" &&
@@ -10720,7 +10729,7 @@ void MainWindow::migrate_project_mesh_paths(const QString& project_path) {
         effective = target;
         migrated_paths.append(qMakePair(source, target));
         params.insert("path", target);
-        mesh_item->setData(0, PropertyEditor::kParamsRole, params);
+        commit_object_edit(mesh_item, mesh_item->text(0), params);
         if (same_path(mesh_snapshot_.mesh_path, source)) {
           mesh_snapshot_.mesh_path = target;
         }
@@ -10793,20 +10802,28 @@ bool MainWindow::load_project(const QString& path) {
       return false;
     }
 
-    clear_model_tree_children();
-    for (const auto& entry : data.model_entries) {
-      auto* root_item = find_root_item(entry.kind);
-      if (!root_item) {
+    for (const QVariant& value : loaded_document.to_variant_list()) {
+      const QVariantMap entry = value.toMap();
+      if (entry.value("parent").toString().isEmpty()) {
         continue;
       }
-      auto* child = new QTreeWidgetItem(root_item);
-      child->setText(0, entry.name);
-      child->setData(0, PropertyEditor::kKindRole, entry.kind);
-      child->setData(0, PropertyEditor::kObjectIdRole, entry.id);
-      child->setIcon(0, root_item->icon(0));
-      child->setData(0, PropertyEditor::kStatusRole, entry.status);
-      child->setData(0, PropertyEditor::kParamsRole,
-                     normalize_params_for_kind(entry.kind, entry.params));
+      if (core::ProjectObject* object = loaded_document.object(
+              core::ObjectId(entry.value("id").toString()))) {
+        object->properties() = core::PropertyBag::from_variant_map(
+            normalize_params_for_kind(object->kind(),
+                                      object->properties().to_variant_map()));
+      }
+    }
+    if (floating_property_form_) {
+      floating_property_form_->reject();
+    }
+    if (property_editor_) {
+      property_editor_->set_item(nullptr);
+    }
+    active_sketch_item_ = nullptr;
+    active_job_item_ = nullptr;
+    if (model_tree_) {
+      model_tree_->setCurrentItem(nullptr);
     }
     if (model_tree_adapter_) {
       model_tree_adapter_->replace_document(std::move(loaded_document));
@@ -11709,7 +11726,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     form->reject();
                     qApp->sendPostedEvents(nullptr,
                                            QEvent::DeferredDelete);
-                    delete bc_root->takeChild(bc_root->indexOfChild(bc));
+                    remove_item(bc);
                     property_editor_->set_boundary_groups(saved_boundaries);
                   },
                   this});
@@ -11755,8 +11772,8 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                               ->data(0, PropertyEditor::kParamsRole)
                               .toMap();
                       params.insert("gmsh_volume_tag", 101);
-                      parts_root->child(0)->setData(
-                          0, PropertyEditor::kParamsRole, params);
+                      commit_object_edit(parts_root->child(0),
+                                         parts_root->child(0)->text(0), params);
                     }
                     add_child_item(selections_root, "selection_i02",
                                    "Selections",
@@ -11766,15 +11783,13 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     auto* mesh_item = add_child_item(
                         mesh_root, "mesh_i02", "Mesh",
                         {{"status", "Generated"}, {"path", ""}});
-                    mesh_item->setData(0, PropertyEditor::kStatusRole,
-                                       "Generated");
+                    set_object_status(mesh_item, "Generated");
                     auto* input_root = find_root_item("Input Cases");
                     if (input_root->childCount() == 0) {
                       auto* input_item = add_child_item(
                           input_root, "case_i02.i", "Input Cases",
                           {{"status", "Generated"}, {"path", "case_i02.i"}});
-                      input_item->setData(0, PropertyEditor::kStatusRole,
-                                          "Generated");
+                      set_object_status(input_item, "Generated");
                     }
                     add_child_item(jobs_root, "job_i02", "Jobs",
                                    {{"status", "Completed"}});
@@ -11898,7 +11913,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     QVariantMap params =
                         material->data(0, PropertyEditor::kParamsRole).toMap();
                     params.insert("i02_revision", 2);
-                    material->setData(0, PropertyEditor::kParamsRole, params);
+                    commit_object_edit(material, material->text(0), params);
                     refresh_workflow_status();
                     for (const QString& kind :
                          {QString("Mesh"), QString("Input Cases"),
@@ -11909,7 +11924,20 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                   ->data(0, PropertyEditor::kStatusRole)
                                   .toString() != "Stale" ||
                           root->child(0)->text(1).isEmpty()) {
-                        throw std::runtime_error("I-02 downstream invalidation contract failed");
+                        throw std::runtime_error(
+                            QString("I-02 downstream invalidation contract "
+                                    "failed: %1 count=%2 status=%3 badge=%4")
+                                .arg(kind)
+                                .arg(root ? root->childCount() : -1)
+                                .arg(root && root->childCount() > 0
+                                         ? root->child(0)
+                                               ->data(0, PropertyEditor::kStatusRole)
+                                               .toString()
+                                         : QString())
+                                .arg(root && root->childCount() > 0
+                                         ? root->child(0)->text(1)
+                                         : QString())
+                                .toStdString());
                       }
                     }
                   },
@@ -12059,10 +12087,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         !model_tree_->isEnabled()) {
                       throw std::runtime_error("I-03 did not restore context controls after Sketch edit");
                     }
-                    const int row = root->indexOfChild(sketch);
-                    if (row >= 0) {
-                      delete root->takeChild(row);
-                    }
+                    remove_item(sketch);
                     model_tree_->setCurrentItem(root);
                     if (viewer_) {
                       viewer_->set_sketch_preview(nullptr);
@@ -12236,16 +12261,10 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     }
 
                     for (auto* fixture : {added, auto_first, auto_second}) {
-                      const int row = root->indexOfChild(fixture);
-                      if (row >= 0) {
-                        delete root->takeChild(row);
-                      }
+                      remove_item(fixture);
                     }
                     if (created_fixture) {
-                      const int row = root->indexOfChild(existing);
-                      if (row >= 0) {
-                        delete root->takeChild(row);
-                      }
+                      remove_item(existing);
                     }
                     refresh_module_pages();
                   },
@@ -12285,7 +12304,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                         gmsh_panel_->gmsh_settings()
                                                 .value("output_path")
                                                 .toString() == path;
-                    delete root->takeChild(root->indexOfChild(item));
+                    remove_item(item);
                     if (!opened) {
                       throw std::runtime_error(
                           "Mesh tree double-click did not open its workspace");
@@ -12664,7 +12683,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       QVariantMap params =
                           item->data(0, PropertyEditor::kParamsRole).toMap();
                       params.insert("mesh", mesh_path);
-                      item->setData(0, PropertyEditor::kParamsRole, params);
+                      commit_object_edit(item, item->text(0), params);
                     }
                     viewer_->set_mesh_file(mesh_path);
                     if (viewer_->visible_mesh_entity_count(3) != 2) {
@@ -12729,14 +12748,14 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         target->data(0, PropertyEditor::kParamsRole).toMap();
                     part_params.insert("sketch", sketch->text(0));
                     part_params.insert("mesh", mesh_path);
-                    target->setData(0, PropertyEditor::kParamsRole, part_params);
+                    commit_object_edit(target, target->text(0), part_params);
                     for (int row = 0; row < features_root->childCount(); ++row) {
                       auto* feature = features_root->child(row);
                       QVariantMap params =
                           feature->data(0, PropertyEditor::kParamsRole).toMap();
                       if (params.value("part").toString() == part_name) {
                         params.insert("mesh", mesh_path);
-                        feature->setData(0, PropertyEditor::kParamsRole, params);
+                        commit_object_edit(feature, feature->text(0), params);
                       }
                     }
                     if (!viewer_->has_stage_data() ||
@@ -13535,7 +13554,10 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       elastic_block.contains("prop_names") ||
                       elastic_block.contains("unit_factor_stress")) {
                     throw std::runtime_error(
-                        "G1 isotropic material input mapping is incorrect");
+                        QString("G1 isotropic material input mapping is "
+                                "incorrect:\n%1")
+                            .arg(materials_input)
+                            .toStdString());
                   }
                   auto* advanced = property_editor_->findChild<QTableWidget*>(
                       "propertyParamsTable");
@@ -13683,18 +13705,18 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   QVariantMap invalid_saved =
                       elasticity->data(0, PropertyEditor::kParamsRole).toMap();
                   invalid_saved.insert("block", "missing_volume");
-                  elasticity->setData(0, PropertyEditor::kParamsRole,
-                                      invalid_saved);
+                  commit_object_edit(elasticity, elasticity->text(0),
+                                     invalid_saved);
                   if (sync_model_to_input() ||
                       !statusBar()->currentMessage().contains(
                           "unknown volume Physical Group")) {
                     throw std::runtime_error(
                         "G1 saved material with unknown block was synchronized");
                   }
-                  elasticity->setData(0, PropertyEditor::kParamsRole,
-                                      elastic_params);
+                  commit_object_edit(elasticity, elasticity->text(0),
+                                     elastic_params);
                   property_editor_->set_item(nullptr);
-                  delete root->takeChild(root->indexOfChild(elasticity));
+                  remove_item(elasticity);
                   property_editor_->set_volume_groups(saved_volumes);
                   mesh_snapshot_ = saved_snapshot;
                   refresh_module_pages();
@@ -13872,15 +13894,11 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   // 回归旧项目：历史版本可能已把普通材料字段写回 CDP
                   // 节点，编辑器文本也可能含一次旧 upsert 遗留的根闭合行。
                   // 新版同步必须直接清理二者，无需用户重建材料。
-                  {
-                    QSignalBlocker tree_blocker(model_tree_);
-                    QVariantMap legacy_params =
-                        item->data(0, PropertyEditor::kParamsRole).toMap();
-                    legacy_params.insert("prop_names", "prop");
-                    legacy_params.insert("prop_values", "1.0");
-                    item->setData(0, PropertyEditor::kParamsRole,
-                                  legacy_params);
-                  }
+                  QVariantMap legacy_params =
+                      item->data(0, PropertyEditor::kParamsRole).toMap();
+                  legacy_params.insert("prop_names", "prop");
+                  legacy_params.insert("prop_values", "1.0");
+                  commit_object_edit(item, item->text(0), legacy_params);
                   QString legacy_input = moose_panel_->input_text();
                   const QString legacy_close = "\n[]\n\n[BCs]";
                   if (legacy_input.contains(legacy_close)) {
@@ -13924,7 +13942,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   // 还原：移除节点与表单选择，编辑器生成文本留给后续步骤
                   // （无下游断言依赖其内容）。
                   property_editor_->set_item(nullptr);
-                  delete root->takeChild(root->indexOfChild(item));
+                  remove_item(item);
                   refresh_module_pages();
                 },
                 this});
@@ -13985,7 +14003,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
 #endif
                   // 还原：移除节点、恢复网格路径与组清单，避免污染后续步骤。
-                  delete root->takeChild(root->indexOfChild(item));
+                  remove_item(item);
                   if (!saved_mesh_path.isEmpty()) {
                     moose_panel_->set_mesh_path(saved_mesh_path);
                   }
@@ -14178,8 +14196,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   property_editor_->set_item(nullptr);
                   auto* sections = find_root_item("Sections");
                   if (sections) {
-                    delete sections->takeChild(
-                        sections->indexOfChild(section));
+                    remove_item(section);
                   }
                   property_editor_->set_volume_groups(saved_volumes);
                   l10n::set_language(saved_language);
@@ -14488,8 +14505,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         "contract failed");
                   }
                   // 清理：移除节点、恢复快照、删除临时工程文件。
-                  delete reloaded_root->takeChild(
-                      reloaded_root->indexOfChild(reloaded));
+                  remove_item(reloaded);
                   mesh_snapshot_ = saved_snapshot;
                   if (property_editor_) {
                     int model_dim = mesh_snapshot_.mesh_dim;
@@ -14623,7 +14639,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     if (auto* root = find_root_item(root_name)) {
                       for (int i = 0; i < root->childCount(); ++i) {
                         if (root->child(i)->text(0) == name) {
-                          delete root->takeChild(i);
+                          remove_item(root->child(i));
                           break;
                         }
                       }
@@ -14781,8 +14797,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     }
                   }
                   // 清理：恢复巡览会话状态并删除临时工程目录。
-                  delete mesh_root->takeChild(
-                      mesh_root->indexOfChild(mesh_item));
+                  remove_item(mesh_item);
                   mesh_snapshot_ = saved_snapshot;
                   moose_panel_->apply_moose_settings(saved_moose_settings);
                   gmsh_panel_->set_mesh_output_path(saved_gmsh_output);
@@ -14903,7 +14918,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   QVariantMap legacy = merged;
                   legacy.remove("snapshot");
                   legacy.insert("mesh", "/tmp/case-legacy-snapshot");
-                  item->setData(0, PropertyEditor::kParamsRole, legacy);
+                  commit_object_edit(item, item->text(0), legacy);
                   refresh_job_table();
                   const QVariantMap migrated =
                       item->data(0, PropertyEditor::kParamsRole).toMap();
@@ -15111,7 +15126,13 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   if (!in_tree || !in_list ||
                       !viewer_->stage_data_visible()) {
-                    throw std::runtime_error("Results import contract failed");
+                    throw std::runtime_error(
+                        QString("Results import contract failed: tree=%1 "
+                                "list=%2 stage=%3")
+                            .arg(in_tree)
+                            .arg(in_list)
+                            .arg(viewer_->stage_data_visible())
+                            .toStdString());
                   }
                 },
                 results_work_window_});
@@ -15553,12 +15574,10 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         "Mesh selection was not stored per Job");
                   }
                   model_tree_->setCurrentItem(jobs_root);
-                  delete jobs_root->takeChild(jobs_root->indexOfChild(job_2));
-                  delete jobs_root->takeChild(jobs_root->indexOfChild(job_1));
-                  delete mesh_root->takeChild(
-                      mesh_root->indexOfChild(mesh_item_2));
-                  delete mesh_root->takeChild(
-                      mesh_root->indexOfChild(mesh_item_1));
+                  remove_item(job_2);
+                  remove_item(job_1);
+                  remove_item(mesh_item_2);
+                  remove_item(mesh_item_1);
                   refresh_module_pages();
                 },
                 job_work_window_});
@@ -16207,11 +16226,9 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   // 还原：移除节点与表单选择。
                   property_editor_->set_item(nullptr);
-                  delete functions_root->takeChild(
-                      functions_root->indexOfChild(func));
-                  delete functions_root->takeChild(
-                      functions_root->indexOfChild(parsed));
-                  delete bc_root->takeChild(bc_root->indexOfChild(bc));
+                  remove_item(func);
+                  remove_item(parsed);
+                  remove_item(bc);
                   refresh_module_pages();
                 },
                 this});
@@ -16294,8 +16311,8 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   QVariantMap stale_pressure =
                       pressure->data(0, PropertyEditor::kParamsRole).toMap();
                   stale_pressure.insert("variable", "u");
-                  pressure->setData(0, PropertyEditor::kParamsRole,
-                                    stale_pressure);
+                  commit_object_edit(pressure, pressure->text(0),
+                                     stale_pressure);
                   property_editor_->set_item(pressure);
                   QVariantMap unknown_pressure = stale_pressure;
                   unknown_pressure.insert("variable", "missing_pressure_var");
@@ -16430,12 +16447,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   pressure_form->reject();
                   qApp->sendPostedEvents(nullptr, QEvent::DeferredDelete);
                   stale_pressure.insert("variable", "disp_z");
-                  pressure->setData(0, PropertyEditor::kParamsRole,
-                                    stale_pressure);
+                  commit_object_edit(pressure, pressure->text(0),
+                                     stale_pressure);
                   QVariantMap invalid_pressure = stale_pressure;
                   invalid_pressure.insert("boundary", "instance_plate");
-                  pressure->setData(0, PropertyEditor::kParamsRole,
-                                    invalid_pressure);
+                  commit_object_edit(pressure, pressure->text(0),
+                                     invalid_pressure);
                   const QString input_before_invalid_sync =
                       moose_panel_->input_text();
                   if (sync_model_to_input() ||
@@ -16443,8 +16460,8 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     throw std::runtime_error(
                         "G1 invalid Pressure boundary was not blocked on sync");
                   }
-                  pressure->setData(0, PropertyEditor::kParamsRole,
-                                    stale_pressure);
+                  commit_object_edit(pressure, pressure->text(0),
+                                     stale_pressure);
 
                   auto* direct_pressure = add_child_item(
                       loads_root, "tour_pressure_type_switch", "Loads",
@@ -16473,8 +16490,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   direct_form->reject();
                   qApp->sendPostedEvents(nullptr, QEvent::DeferredDelete);
-                  delete loads_root->takeChild(
-                      loads_root->indexOfChild(direct_pressure));
+                  remove_item(direct_pressure);
 
                   property_editor_->set_item(contact);
                   qApp->sendPostedEvents(nullptr, QEvent::DeferredDelete);
@@ -16648,12 +16664,9 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
 
                   property_editor_->set_item(nullptr);
-                  delete functions_root->takeChild(
-                      functions_root->indexOfChild(function));
-                  delete loads_root->takeChild(
-                      loads_root->indexOfChild(pressure));
-                  delete interactions_root->takeChild(
-                      interactions_root->indexOfChild(contact));
+                  remove_item(function);
+                  remove_item(pressure);
+                  remove_item(contact);
                   property_editor_->set_boundary_groups(saved_boundaries);
                   property_editor_->set_volume_groups(saved_volumes);
                   mesh_snapshot_ = saved_snapshot;
@@ -16675,16 +16688,14 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         "W-03e step fixture is missing");
                   }
                   auto* step = add_child_item(steps_root, "tour_step", "Steps",
-                                              {});
+                                              {}, 0);
                   if (!step) {
                     throw std::runtime_error(
                         "W-03e step node was not created");
                   }
                   // 巡览全程载入了演示模型（Steps 根已有 demo transient
-                  // 子项）；v01 口径取第一个 Step，将合同节点移到首位
-                  // 参与生成，清理时移除后原顺序自然恢复。
-                  steps_root->takeChild(steps_root->indexOfChild(step));
-                  steps_root->insertChild(0, step);
+                  // 子项）；v01 口径取第一个 Step，合同节点以文档顺序插入
+                  // 首位参与生成。
                   steps_root->setExpanded(true);
                   property_editor_->set_item(step);
                   // clear_form 以 deleteLater 销毁旧表单控件；同步执行期间
@@ -16813,8 +16824,8 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   // 还原：移除节点与表单选择。
                   property_editor_->set_item(nullptr);
-                  delete steps_root->takeChild(steps_root->indexOfChild(step));
-                  delete steps_root->takeChild(steps_root->indexOfChild(step2));
+                  remove_item(step);
+                  remove_item(step2);
                   refresh_module_pages();
                 },
                 this});
@@ -17000,12 +17011,9 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   // 还原：移除节点、恢复体组清单与表单选择。
                   property_editor_->set_item(nullptr);
-                  delete physics_root->takeChild(
-                      physics_root->indexOfChild(phys));
-                  delete sections_root->takeChild(
-                      sections_root->indexOfChild(section));
-                  delete materials_root->takeChild(
-                      materials_root->indexOfChild(material));
+                  remove_item(phys);
+                  remove_item(section);
+                  remove_item(material);
                   property_editor_->set_volume_groups(saved_volumes);
                   refresh_module_pages();
                 },
@@ -17185,12 +17193,9 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   // 还原：移除节点、恢复面组清单与表单选择。
                   property_editor_->set_item(nullptr);
-                  delete outputs_root->takeChild(
-                      outputs_root->indexOfChild(out_item));
-                  delete sections_root->takeChild(
-                      sections_root->indexOfChild(section));
-                  delete materials_root->takeChild(
-                      materials_root->indexOfChild(material));
+                  remove_item(out_item);
+                  remove_item(section);
+                  remove_item(material);
                   property_editor_->set_boundary_groups(saved_boundaries);
                   refresh_module_pages();
                 },
@@ -17286,11 +17291,10 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     QCoreApplication::sendPostedEvents(
                         nullptr, QEvent::DeferredDelete);
                   }
-                  delete bc_root->takeChild(bc_root->indexOfChild(probe));
+                  remove_item(probe);
                   auto* sections_root = find_root_item("Sections");
                   if (sections_root && section_probe) {
-                    delete sections_root->takeChild(
-                        sections_root->indexOfChild(section_probe));
+                    remove_item(section_probe);
                   }
                   refresh_workflow_status();
                   if (!found_boundary || !found_material || !submit_blocked ||
@@ -18424,8 +18428,8 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       restored_part->data(0, PropertyEditor::kParamsRole)
                           .toMap();
                   changed_part.insert("description", "stale propagation probe");
-                  restored_part->setData(0, PropertyEditor::kParamsRole,
-                                         changed_part);
+                  commit_object_edit(restored_part, restored_part->text(0),
+                                     changed_part);
                   qApp->processEvents();
                   if (restored_b->data(0, PropertyEditor::kStatusRole)
                           .toString()
@@ -18499,10 +18503,8 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                 this});
   steps.append({"model_tree_projection_contract",
                 [this]() {
-                  // TASK-V02-014：Tree→Document 投影一致性合同。Tree 仍是
-                  // 唯一操作入口；经业务漏斗（add_child_item/remove_item）
-                  // 与 itemChanged 覆盖的直写（重命名/参数）后，Document
-                  // 必须与 Tree 完全一致。随后用真实 G1 项目做等价判据：
+                  // HARD-050：Document→Tree 单向投影合同。随后用真实 G1
+                  // 项目做等价判据：
                   // 打开后 Document==Tree，两次同步 .i 逐字一致（同步指向
                   // 临时目录，不触碰用户项目文件）。
                   if (!model_tree_adapter_ || !model_tree_) {
@@ -18514,45 +18516,42 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         model_tree_adapter_->document();
                     int tree_items = 0;
                     bool consistent = true;
+                    std::function<void(const QTreeWidgetItem*)> check_item =
+                        [&](const QTreeWidgetItem* item) {
+                          if (!item) {
+                            return;
+                          }
+                          ++tree_items;
+                          const core::ProjectObject* object =
+                              doc.object(model_tree_adapter_->id_for_item(item));
+                          if (!object ||
+                              item->data(0, PropertyEditor::kObjectIdRole)
+                                  .toString()
+                                  .isEmpty()) {
+                            consistent = false;
+                            return;
+                          }
+                          consistent =
+                              consistent && object->name() == item->text(0) &&
+                              object->kind() ==
+                                  item->data(0, PropertyEditor::kKindRole)
+                                      .toString() &&
+                              object->statusText() ==
+                                  item->data(0, PropertyEditor::kStatusRole)
+                                      .toString() &&
+                              object->properties().to_variant_map() ==
+                                  item->data(0, PropertyEditor::kParamsRole)
+                                      .toMap();
+                          for (int row = 0; row < item->childCount(); ++row) {
+                            check_item(item->child(row));
+                          }
+                        };
                     for (int i = 0; i < model_tree_->topLevelItemCount(); ++i) {
                       const QTreeWidgetItem* root = model_tree_->topLevelItem(i);
                       if (!root) {
                         continue;
                       }
-                      ++tree_items;
-                      consistent =
-                          consistent &&
-                          doc.object(ModelTreeAdapter::root_id(root->text(0))) !=
-                              nullptr;
-                      for (int row = 0; row < root->childCount(); ++row) {
-                        const QTreeWidgetItem* child = root->child(row);
-                        if (!child) {
-                          continue;
-                        }
-                        ++tree_items;
-                        const core::ProjectObject* object =
-                            doc.object(model_tree_adapter_->id_for_item(child));
-                        if (!object ||
-                            child->data(0, PropertyEditor::kObjectIdRole)
-                                .toString()
-                                .isEmpty()) {
-                          consistent = false;
-                          continue;
-                        }
-                        consistent =
-                            consistent &&
-                            object->name() == child->text(0) &&
-                            object->kind() ==
-                                child->data(0, PropertyEditor::kKindRole)
-                                    .toString() &&
-                            object->status() ==
-                                core::object_status_from_string(
-                                    child->data(0, PropertyEditor::kStatusRole)
-                                        .toString()) &&
-                            object->properties().to_variant_map() ==
-                                child->data(0, PropertyEditor::kParamsRole)
-                                    .toMap();
-                      }
+                      check_item(root);
                     }
                     if (!consistent || doc.count() != tree_items) {
                       throw std::runtime_error(
@@ -18634,8 +18633,25 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         "Projection fixture object ids are missing");
                   }
 
+                  // 三层递归投影；删除父对象必须删除完整子树。
+                  auto* nested_item = add_child_item(
+                      func_item, "proj_func_child", "Functions",
+                      {{"type", "PiecewiseLinear"}, {"x", "0"}, {"y", "0"}});
+                  const core::ObjectId nested_id =
+                      model_tree_adapter_->id_for_item(nested_item);
+                  if (!nested_item || !nested_id.isValid()) {
+                    throw std::runtime_error(
+                        "Recursive projection fixture could not be created");
+                  }
+                  assert_consistent("three-level projection");
+
                   // 重命名仅改名称，稳定 ID 不变。
-                  mat_item->setText(0, "proj_mat_renamed");
+                  if (!commit_object_edit(
+                          mat_item, "proj_mat_renamed",
+                          mat_item->data(0, PropertyEditor::kParamsRole)
+                              .toMap())) {
+                    throw std::runtime_error("Rename command failed");
+                  }
                   assert_consistent("rename");
                   const core::ProjectObject* renamed =
                       model_tree_adapter_->document().object(mat_id);
@@ -18653,7 +18669,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         "Duplicate reused the source object id");
                   }
                   remove_item(mat_copy);
-                  // 参数直写传播（itemChanged 钩子）。
+                  // 属性提交必须先写 Document，再更新显示投影。
                   auto* bc_root = find_root_item("BC");
                   QTreeWidgetItem* bc_item = nullptr;
                   for (int i = 0; bc_root && i < bc_root->childCount(); ++i) {
@@ -18664,14 +18680,17 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   QVariantMap edited = bc_item->data(0, PropertyEditor::kParamsRole)
                                            .toMap();
                   edited.insert("value", "0.5");
-                  bc_item->setData(0, PropertyEditor::kParamsRole, edited);
+                  if (!commit_object_edit(bc_item, bc_item->text(0), edited)) {
+                    throw std::runtime_error("Property command failed");
+                  }
                   assert_consistent("param edit");
-                  // 删除后以同名重建也必须获得新 ID。
+                  // 子树删除后以同名重建也必须获得新 ID。
                   remove_item(func_item);
                   assert_consistent("remove");
-                  if (model_tree_adapter_->document().object(func_id)) {
+                  if (model_tree_adapter_->document().object(func_id) ||
+                      model_tree_adapter_->document().object(nested_id)) {
                     throw std::runtime_error(
-                        "Projection kept the removed object");
+                        "Projection kept the removed subtree");
                   }
                   func_item = add_child_item(
                       find_root_item("Functions"), "proj_func", "Functions",
@@ -18685,6 +18704,31 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   assert_consistent("recreate");
 
+                  // Document 直接持久化并重开，层级与属性不得变化。
+                  const QString roundtrip_path =
+                      QDir::tempPath() + "/gmp_hard050_roundtrip.gmp.yaml";
+                  ProjectData roundtrip_data;
+                  QString roundtrip_error;
+                  if (!project_store_.save_file(
+                          roundtrip_path, roundtrip_data, &roundtrip_error,
+                          &model_tree_adapter_->document())) {
+                    throw std::runtime_error(
+                        ("Projection roundtrip save failed: " + roundtrip_error)
+                            .toStdString());
+                  }
+                  ProjectData reopened_data;
+                  core::ProjectDocument reopened_document;
+                  if (!project_store_.load_file(roundtrip_path, &reopened_data,
+                                                &roundtrip_error,
+                                                &reopened_document) ||
+                      reopened_document.to_variant_list() !=
+                          model_tree_adapter_->document().to_variant_list()) {
+                    throw std::runtime_error(
+                        ("Projection roundtrip reopen failed: " + roundtrip_error)
+                            .toStdString());
+                  }
+                  QFile::remove(roundtrip_path);
+
                   // 清理夹具节点。
                   for (const auto& node : fixture) {
                     auto* root = find_root_item(node.root);
@@ -18693,7 +18737,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                              : node.name;
                     for (int i = 0; root && i < root->childCount(); ++i) {
                       if (root->child(i)->text(0) == name) {
-                        delete root->takeChild(i);
+                        remove_item(root->child(i));
                         break;
                       }
                     }

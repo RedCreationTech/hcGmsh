@@ -1,13 +1,10 @@
 #pragma once
 
-// v0.2 Stage 1 app/adapter 层（TASK-V02-014，Q5 批复：逻辑边界先行）。
-// 桥接 gmp::core::ProjectDocument 与现有 QTreeWidget 模型树：Tree 仍是
-// 唯一操作入口并继续承载 Data Role 数据；Document 作为投影经本适配器
-// 懒同步——树变更只标脏，任何 document() 读取先全量重建，保证业务读写
-// 路径上 Document 与 Tree 一致（约束 5 的懒同步选项）。依赖 Qt Widgets，
-// 不属于 core 层。
+// HARD-050 app/adapter 层：ProjectDocument 是唯一领域真源，QTreeWidget
+// 只保存显示缓存与选中/展开等 UI 状态。依赖 Qt Widgets，不属于 core 层。
 
 #include <QObject>
+#include <QStringList>
 
 #include "gmp/ProjectDocument.h"
 
@@ -20,12 +17,11 @@ class ModelTreeAdapter : public QObject {
  public:
   explicit ModelTreeAdapter(QTreeWidget* tree);
 
-  // 懒同步入口：脏时先从 Tree 全量重建再返回。
   core::ProjectDocument& document();
+  const core::ProjectDocument& document() const;
   void replace_document(core::ProjectDocument document);
-  bool is_dirty() const { return dirty_; }
-  void mark_dirty();
-  void rebuild_from_tree();
+  void project_document(const core::ObjectId& selected = core::ObjectId());
+  void project_object(const core::ObjectId& id);
 
   // 根节点使用确定性保留 ID；领域对象 ID 只从专用 Data Role 读取。
   static core::ObjectId root_id(const QString& root_name);
@@ -34,8 +30,8 @@ class ModelTreeAdapter : public QObject {
 
  private:
   QTreeWidget* tree_;
+  QStringList root_names_;
   core::ProjectDocument document_;
-  bool dirty_ = true;
 };
 
 }  // namespace gmp

@@ -9,6 +9,8 @@
 #include <QVariantMap>
 #include <QVariantList>
 
+#include <memory>
+
 #include "gmp/ApplicationProfile.h"
 #include "gmp/MooseMappingRegistry.h"
 #include "gmp/PhysicalGroupManifest.h"
@@ -108,7 +110,8 @@ class MainWindow : public QMainWindow {
   QTreeWidgetItem* add_child_item(QTreeWidgetItem* root,
                                   const QString& name,
                                   const QString& kind,
-                                  const QVariantMap& params);
+                                  const QVariantMap& params,
+                                  int index = -1);
   QTreeWidgetItem* active_part_item() const;
   QVariantList assembly_instance_specs() const;
   bool build_assembly_model(bool show_error = true);
@@ -287,17 +290,14 @@ class MainWindow : public QMainWindow {
   PropertyEditor* property_editor_ = nullptr;
   // TASK-V02-020：.gmp.yaml 持久化实现（schema v2 读写与网格路径迁移）。
   ProjectStore project_store_;
-  // TASK-V02-061：对象 CRUD/表单提交的事务审计层（Q4：无用户可见撤销）。
+  // HARD-050：对象写入只通过 ProjectDocument 领域命令。
   gmp::core::TransactionManager transaction_manager_;
-  // 以 Command 形式执行 apply 并记录审计（label/描述/before/after），
-  // 操作日志写一条 committed 行；revert 仅供内部 rollback 使用。
-  void record_model_transaction(const QString& label, const QString& description,
-                                const QVariantMap& before,
-                                const QVariantMap& after,
-                                std::function<void()> apply,
-                                std::function<void()> revert);
-  // TASK-V02-014：Tree→Document 投影适配器（懒同步）。Tree 仍是唯一操作
-  // 入口；本适配器在每次树变更时标脏，任何 document() 读取先重建。
+  bool execute_document_command(
+      const QString& label, std::unique_ptr<gmp::core::Command> command);
+  bool commit_object_edit(QTreeWidgetItem* item, const QString& name,
+                          const QVariantMap& params);
+  bool set_object_status(QTreeWidgetItem* item, const QString& status);
+  // HARD-050：Document→Tree 单向投影适配器。
   ModelTreeAdapter* model_tree_adapter_ = nullptr;
   FloatingPropertyForm* floating_property_form_ = nullptr;
   QPlainTextEdit* console_ = nullptr;

@@ -24,7 +24,6 @@
 #include <QSplitter>
 #include <QStackedWidget>
 #include <QTimer>
-#include <QTemporaryDir>
 #include <QVBoxLayout>
 #include <QStringList>
 #include <QtCore/Qt>

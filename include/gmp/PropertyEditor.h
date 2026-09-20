@@ -4,6 +4,8 @@
 #include <QPointer>
 #include <QWidget>
 
+#include <functional>
+
 class QLabel;
 class QLineEdit;
 class QPushButton;
@@ -45,6 +47,11 @@ class PropertyEditor : public QWidget {
   void set_load_type_options(const QStringList& options);
   void set_interaction_type_options(const QStringList& options);
   void refresh_form_options();
+  // 主工程编辑器用回调把名称/参数提交为领域命令；未设置时（浮动窗缓冲
+  // 副本）仍只写本地克隆项。
+  void set_write_callback(
+      std::function<bool(QTreeWidgetItem*, const QString&,
+                         const QVariantMap&)> callback);
   bool validate_current(QStringList* issues = nullptr);
   // 参数级校验（纯查询）：返回缺失/异常项列表，供表单与巡览合同复用。
   QStringList validate_params(const QString& kind,
@@ -56,11 +63,6 @@ class PropertyEditor : public QWidget {
   static constexpr int kParamsRole = Qt::UserRole + 2;
   static constexpr int kStatusRole = Qt::UserRole + 3;
   static constexpr int kObjectIdRole = Qt::UserRole + 4;
-
- signals:
-  // TASK-V02-014：表单对 current_item_ 的每次写入（名称/参数）经此信号
-  // 通知 ModelTreeAdapter 标脏投影；读路径仍走 Tree Data Role。
-  void item_written(QTreeWidgetItem* item);
 
  private slots:
   void on_name_changed(const QString& value);
@@ -75,6 +77,7 @@ class PropertyEditor : public QWidget {
  private:
   void load_from_item();
   void save_params_to_item();
+  bool write_item(const QString& name, const QVariantMap& params);
   bool is_root_item() const;
   // 常规页摘要: 按节点类型给出关键信息 (如 Features 的来源草图/参数)
   QString build_node_summary(const QString& kind,
@@ -101,6 +104,8 @@ class PropertyEditor : public QWidget {
   double display_unit_factor(const QString& quantity, double fallback) const;
 
   QTreeWidgetItem* current_item_ = nullptr;
+  std::function<bool(QTreeWidgetItem*, const QString&, const QVariantMap&)>
+      write_callback_;
   QPointer<QTreeWidget> model_tree_;
   QLabel* header_label_ = nullptr;
   QLabel* kind_label_ = nullptr;

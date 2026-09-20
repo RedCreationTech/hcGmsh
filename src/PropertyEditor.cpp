@@ -597,8 +597,7 @@ void PropertyEditor::on_name_changed(const QString& value) {
   if (!current_item_ || is_root_item()) {
     return;
   }
-  current_item_->setText(0, value);
-  emit item_written(current_item_);
+  write_item(value, current_item_->data(0, kParamsRole).toMap());
   refresh_preview();
 }
 
@@ -730,9 +729,27 @@ void PropertyEditor::save_params_to_item() {
     const QString value = val_item ? val_item->text() : QString();
     params.insert(key, value);
   }
-  current_item_->setData(0, kParamsRole, params);
-  emit item_written(current_item_);
+  write_item(current_item_->text(0), params);
   refresh_preview();
+}
+
+void PropertyEditor::set_write_callback(
+    std::function<bool(QTreeWidgetItem*, const QString&,
+                       const QVariantMap&)> callback) {
+  write_callback_ = std::move(callback);
+}
+
+bool PropertyEditor::write_item(const QString& name,
+                                const QVariantMap& params) {
+  if (!current_item_) {
+    return false;
+  }
+  if (write_callback_) {
+    return write_callback_(current_item_, name, params);
+  }
+  current_item_->setText(0, name);
+  current_item_->setData(0, kParamsRole, params);
+  return true;
 }
 
 void PropertyEditor::on_apply_groups() {
@@ -774,7 +791,7 @@ void PropertyEditor::on_apply_groups() {
     // Materials/Loads/Sections/Physics：体组写入 block。
     params.insert("block", selected.join(" "));
   }
-  current_item_->setData(0, kParamsRole, params);
+  write_item(current_item_->text(0), params);
   load_from_item();
   refresh_preview();
 }
@@ -1571,7 +1588,7 @@ void PropertyEditor::apply_template_values(const QVariantMap& values,
   if (changed) {
     // 模板是一组参数，必须一次写入。逐字段 setData 会同步触发模型树刷新，
     // 中途重建本编辑器，导致后续字段（尤其 type）丢失。
-    current_item_->setData(0, kParamsRole, params);
+    write_item(current_item_->text(0), params);
     load_from_item();
   }
   update_validation();
