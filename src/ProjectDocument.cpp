@@ -3,7 +3,7 @@
 #include <QSet>
 #include <QUuid>
 
-#include <vector>
+#include <functional>
 
 #include "gmp/PropertyBag.h"
 
@@ -156,9 +156,11 @@ bool ProjectDocument::setStatus(ObjectId id, ObjectStatus status) {
 
 QVariantList ProjectDocument::to_variant_list() const {
   QVariantList list;
-  // QMap 按键排序遍历，输出与挂载顺序无关，保证确定性。
-  for (const auto& entry_pair : objects_) {
-    const ProjectObject* object = entry_pair.second.get();
+  std::function<void(ObjectId)> append_subtree = [&](ObjectId id) {
+    const ProjectObject* object = this->object(id);
+    if (!object) {
+      return;
+    }
     QVariantMap entry;
     entry.insert("id", object->id().toString());
     entry.insert("name", object->name());
@@ -167,21 +169,30 @@ QVariantList ProjectDocument::to_variant_list() const {
     entry.insert("parent", parent_.value(object->id().toString()).toString());
     entry.insert("params", object->properties().to_variant_map());
     list.append(entry);
+    for (const ObjectId& child : children_.value(id.toString())) {
+      append_subtree(child);
+    }
+  };
+  for (const ObjectId& root : roots()) {
+    append_subtree(root);
   }
   return list;
 }
 
 bool ProjectDocument::from_variant_list(const QVariantList& list,
                                         QString* error) {
+  if (error) {
+    error->clear();
+  }
   auto fail = [error](const QString& message) {
     if (error) {
       *error = message;
     }
     return false;
   };
-  // 两遍装载：先建对象再挂层级，允许条目乱序。
-  std::vector<std::unique_ptr<ProjectObject>> loaded;
-  QMap<QString, ObjectId> parents;
+  std::map<QString, std::unique_ptr<ProjectObject>> loaded_objects;
+  QMap<QString, ObjectId> loaded_parents;
+  QMap<QString, QList<ObjectId>> loaded_children;
   QSet<QString> seen;
   for (const QVariant& value : list) {
     const QVariantMap entry = value.toMap();
@@ -204,22 +215,33 @@ bool ProjectDocument::from_variant_list(const QVariantList& list,
     }
     object->properties() =
         PropertyBag::from_variant_map(entry.value("params").toMap());
-    parents.insert(id.toString(),
-                   ObjectId(entry.value("parent").toString()));
-    loaded.push_back(std::move(object));
+    const ObjectId parent(entry.value("parent").toString());
+    if (parent == id) {
+      return fail("object cannot be its own parent: " + id.toString());
+    }
+    loaded_parents.insert(id.toString(), parent);
+    loaded_children[parent.toString()].append(id);
+    loaded_objects.emplace(id.toString(), std::move(object));
   }
-  for (auto it = parents.cbegin(); it != parents.cend(); ++it) {
+  for (auto it = loaded_parents.cbegin(); it != loaded_parents.cend(); ++it) {
     if (it.value().isValid() && !seen.contains(it.value().toString())) {
       return fail("object parent does not exist: " + it.value().toString());
     }
   }
-  clear();
-  for (auto& object : loaded) {
-    const ObjectId parent = parents.value(object->id().toString());
-    if (!addObject(std::move(object), parent).isValid()) {
-      return fail("failed to mount object during load");
-    }
+
+  // 从根开始计数可达对象；父引用已校验，仍不可达的对象必在环中。
+  QList<ObjectId> reachable = loaded_children.value(QString());
+  for (qsizetype i = 0; i < reachable.size(); ++i) {
+    reachable.append(loaded_children.value(reachable.at(i).toString()));
   }
+  if (reachable.size() != static_cast<qsizetype>(loaded_objects.size())) {
+    return fail("object hierarchy contains a cycle");
+  }
+
+  // 全部校验通过后才替换当前文档，保证失败原子性。
+  objects_.swap(loaded_objects);
+  parent_.swap(loaded_parents);
+  children_.swap(loaded_children);
   return true;
 }
 

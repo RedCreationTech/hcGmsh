@@ -108,7 +108,7 @@ class ProjectDocument {
 
   bool setStatus(ObjectId id, ObjectStatus status);
 
-  // 确定性序列化（遍历顺序固定）：用于 ID 稳定性与 round-trip 合同测试。
+  // 按层级先序稳定序列化，保留根和同父子对象的挂载顺序。
   // 条目：{id, name, kind, status, parent, params}。
   QVariantList to_variant_list() const;
   bool from_variant_list(const QVariantList& list, QString* error = nullptr);

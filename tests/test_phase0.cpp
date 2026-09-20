@@ -818,12 +818,76 @@ void test_project_document_contract(TestContext& test) {
                   reloaded_root->properties().get<QString>(
                       QStringLiteral("type")) == "Part",
               "object properties survive serialization with value types");
-  // 损坏输入：缺 id / 未知父 / 未知状态必须拒绝且不破坏既有内容。
-  test.expect(!roundtrip_target.from_variant_list(
-                  QVariantList{QVariantMap{{"name", "no-id"}}}),
-              "entries without a stable id are rejected");
-  test.expect(roundtrip_target.count() == 2,
-              "rejected load leaves the current document untouched");
+
+  auto entry = [](const QString& id, const QString& parent = QString()) {
+    return QVariantMap{{"id", id},
+                       {"name", id},
+                       {"kind", "Fixture"},
+                       {"status", "ready"},
+                       {"parent", parent},
+                       {"params", QVariantMap{}}};
+  };
+
+  // 乱序与深层装载：child-before-parent 不影响根/同父输入顺序；
+  // 序列化使用层级先序，不使用 ID 字典序表达业务顺序。
+  const ObjectId root_a(QStringLiteral("root-a"));
+  const ObjectId root_b(QStringLiteral("root-b"));
+  const ObjectId child_1(QStringLiteral("child-1"));
+  const ObjectId child_2(QStringLiteral("child-2"));
+  const ObjectId child_3(QStringLiteral("child-3"));
+  const ObjectId grandchild(QStringLiteral("grandchild"));
+  const QVariantList unordered = {
+      entry(grandchild.toString(), child_1.toString()),
+      entry(child_2.toString(), root_a.toString()),
+      entry(root_b.toString()),
+      entry(child_1.toString(), root_a.toString()),
+      entry(root_a.toString()),
+      entry(child_3.toString(), root_a.toString()),
+  };
+  ProjectDocument unordered_target;
+  test.expect(unordered_target.from_variant_list(unordered, &load_error) &&
+                  unordered_target.roots() ==
+                      QList<ObjectId>{root_b, root_a} &&
+                  unordered_target.children(root_a) ==
+                      QList<ObjectId>{child_2, child_1, child_3} &&
+                  unordered_target.children(child_1) ==
+                      QList<ObjectId>{grandchild},
+              "unordered load supports deep child-before-parent hierarchy and "
+              "keeps root/sibling input order");
+  const QVariantList hierarchy_order = unordered_target.to_variant_list();
+  QStringList hierarchy_ids;
+  for (const QVariant& value : hierarchy_order) {
+    hierarchy_ids.append(value.toMap().value("id").toString());
+  }
+  ProjectDocument hierarchy_roundtrip;
+  test.expect(hierarchy_ids ==
+                  QStringList{"root-b", "root-a", "child-2", "child-1",
+                              "grandchild", "child-3"} &&
+                  hierarchy_roundtrip.from_variant_list(hierarchy_order,
+                                                        &load_error) &&
+                  hierarchy_roundtrip.to_variant_list() == hierarchy_order,
+              "hierarchical serialization order is stable across round-trip");
+
+  // 损坏输入：缺 ID、重复 ID、缺失父、自引用和环必须拒绝，
+  // 且任何失败都不破坏当前文档。
+  const QVariantList before_rejected_load = roundtrip_target.to_variant_list();
+  const QVariantMap duplicate = entry(QStringLiteral("duplicate"));
+  test.expect(
+      !roundtrip_target.from_variant_list(
+          QVariantList{QVariantMap{{"name", "no-id"}}}) &&
+          !roundtrip_target.from_variant_list(
+              QVariantList{duplicate, duplicate}) &&
+          !roundtrip_target.from_variant_list(QVariantList{entry(
+              QStringLiteral("orphan"), QStringLiteral("missing-parent"))}) &&
+          !roundtrip_target.from_variant_list(QVariantList{entry(
+              QStringLiteral("self"), QStringLiteral("self"))}) &&
+          !roundtrip_target.from_variant_list(
+              QVariantList{entry(QStringLiteral("cycle-a"),
+                                 QStringLiteral("cycle-b")),
+                           entry(QStringLiteral("cycle-b"),
+                                 QStringLiteral("cycle-a"))}) &&
+          roundtrip_target.to_variant_list() == before_rejected_load,
+      "invalid hierarchy loads are rejected atomically");
 }
 
 // TASK-V02-011：PropertyBag ↔ QVariantMap 双向无损合同。
