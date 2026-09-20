@@ -26,11 +26,8 @@ class ModelTreeAdapter : public QObject {
   void mark_dirty();
   void rebuild_from_tree();
 
-  // 稳定 ObjectId：根节点为 "<根名>"，子节点为 "<根名>/<子节点名>"。
-  // 同名子节点由 unique_child_name 禁止，故同一项目两次加载 ID 集一致
-  // （不用随机 UUID，保住快照/追溯语义）。
-  static core::ObjectId id_for_path(const QString& root_name,
-                                    const QString& child_name);
+  // 根节点使用确定性保留 ID；领域对象 ID 只从专用 Data Role 读取。
+  static core::ObjectId root_id(const QString& root_name);
   core::ObjectId id_for_item(const QTreeWidgetItem* item) const;
   QTreeWidgetItem* item_for_id(const core::ObjectId& id) const;
 

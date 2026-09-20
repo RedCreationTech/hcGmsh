@@ -3,6 +3,8 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 
+#include <functional>
+
 #include "gmp/PropertyBag.h"
 #include "gmp/PropertyEditor.h"
 
@@ -11,48 +13,46 @@ namespace gmp {
 ModelTreeAdapter::ModelTreeAdapter(QTreeWidget* tree)
     : QObject(tree), tree_(tree) {}
 
-core::ObjectId ModelTreeAdapter::id_for_path(const QString& root_name,
-                                             const QString& child_name) {
+core::ObjectId ModelTreeAdapter::root_id(const QString& root_name) {
   if (root_name.trimmed().isEmpty()) {
     return core::ObjectId();
   }
-  return core::ObjectId(child_name.isEmpty()
-                            ? root_name
-                            : root_name + QStringLiteral("/") + child_name);
+  return core::ObjectId(QStringLiteral("root:") + root_name);
 }
 
 core::ObjectId ModelTreeAdapter::id_for_item(const QTreeWidgetItem* item) const {
   if (!item) {
     return core::ObjectId();
   }
-  const QTreeWidgetItem* parent = item->parent();
-  return id_for_path(parent ? parent->text(0) : item->text(0),
-                     parent ? item->text(0) : QString());
+  const QString stored =
+      item->data(0, PropertyEditor::kObjectIdRole).toString();
+  return stored.isEmpty() && !item->parent() ? root_id(item->text(0))
+                                             : core::ObjectId(stored);
 }
 
 QTreeWidgetItem* ModelTreeAdapter::item_for_id(const core::ObjectId& id) const {
   if (!tree_ || !id.isValid()) {
     return nullptr;
   }
-  const QString path = id.toString();
-  const int slash = path.indexOf('/');
-  const QString root_name =
-      slash < 0 ? path : path.left(slash);
-  const QString child_name = slash < 0 ? QString() : path.mid(slash + 1);
-  for (int i = 0; i < tree_->topLevelItemCount(); ++i) {
-    QTreeWidgetItem* root = tree_->topLevelItem(i);
-    if (!root || root->text(0) != root_name) {
-      continue;
+  std::function<QTreeWidgetItem*(QTreeWidgetItem*)> find =
+      [&](QTreeWidgetItem* item) -> QTreeWidgetItem* {
+    if (!item) {
+      return nullptr;
     }
-    if (child_name.isEmpty()) {
-      return root;
+    if (id_for_item(item) == id) {
+      return item;
     }
-    for (int row = 0; row < root->childCount(); ++row) {
-      if (root->child(row) && root->child(row)->text(0) == child_name) {
-        return root->child(row);
+    for (int row = 0; row < item->childCount(); ++row) {
+      if (auto* match = find(item->child(row))) {
+        return match;
       }
     }
     return nullptr;
+  };
+  for (int i = 0; i < tree_->topLevelItemCount(); ++i) {
+    if (auto* match = find(tree_->topLevelItem(i))) {
+      return match;
+    }
   }
   return nullptr;
 }
@@ -72,31 +72,36 @@ void ModelTreeAdapter::rebuild_from_tree() {
   document_.clear();
   if (tree_) {
     for (int i = 0; i < tree_->topLevelItemCount(); ++i) {
-      const QTreeWidgetItem* root = tree_->topLevelItem(i);
+      QTreeWidgetItem* root = tree_->topLevelItem(i);
       if (!root) {
         continue;
       }
-      const core::ObjectId root_id = id_for_path(root->text(0), QString());
+      const core::ObjectId root_object_id = root_id(root->text(0));
       if (!document_.addObject(std::make_unique<core::ProjectObject>(
-                               root->text(0), root->text(0), root_id))
+                               root->text(0), root->text(0), root_object_id))
                .isValid()) {
         continue;
       }
       for (int row = 0; row < root->childCount(); ++row) {
-        const QTreeWidgetItem* child = root->child(row);
+        QTreeWidgetItem* child = root->child(row);
         if (!child) {
           continue;
         }
-        // 同名子节点会被 unique_child_name 拒绝；若仍出现重复路径，
-        // addObject 拒绝并保持先挂载者，一致性合同会暴露数量差异。
+        // 旧会话中尚无专用 role 的节点在第一次投影时获得 ID。
+        core::ObjectId object_id = id_for_item(child);
+        if (!object_id.isValid()) {
+          object_id = core::ObjectId::generate();
+          child->setData(0, PropertyEditor::kObjectIdRole,
+                         object_id.toString());
+        }
         auto object = std::make_unique<core::ProjectObject>(
             child->data(0, PropertyEditor::kKindRole).toString(),
-            child->text(0), id_for_item(child));
+            child->text(0), object_id);
         object->setStatus(core::object_status_from_string(
             child->data(0, PropertyEditor::kStatusRole).toString()));
         object->properties() = core::PropertyBag::from_variant_map(
             child->data(0, PropertyEditor::kParamsRole).toMap());
-        document_.addObject(std::move(object), root_id);
+        document_.addObject(std::move(object), root_object_id);
       }
     }
   }

@@ -37,6 +37,7 @@ QString enclosing_case_work_dir(const QString& path);
 // ---- 纯数据项目模型 ----
 
 struct ProjectModelEntry {
+  QString id;       // schema v2 可选稳定 ObjectId；旧文件加载时生成
   QString name;
   QString kind;     // 根节点名（Parts/Materials/…/Input Cases/…）
   QString status;   // ready|incomplete|invalid|stale|disabled 或空

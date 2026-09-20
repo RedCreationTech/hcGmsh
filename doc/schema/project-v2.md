@@ -113,7 +113,8 @@ viewer:
 每个节点条目统一格式：
 
 ```yaml
-- name: "Material-1"
+- id: "9d5c0182-7ee6-4dc7-9c2e-1bd3ab1b7f55" # 可选；加载旧项目时生成，首次保存后固化
+  name: "Material-1"
   kind: "Materials"
   status: "ready"   # ready | incomplete | invalid | stale | disabled
   params:
@@ -121,6 +122,11 @@ viewer:
     youngs_modulus: "30e9"
     poissons_ratio: "0.2"
 ```
+
+`id` 是全项目唯一的稳定对象身份，与可变的 `name` 分离。旧 schema v2
+文件可省略该字段；加载时为对象生成 UUID，首次保存时写回。固定根节点
+使用 `root:<kind>` 保留 ID，不重复写入 `model` 对象序列。重命名不改变 `id`，
+复制以及删除后重建必须生成新 `id`。重复的非空 `id` 必须拒绝加载。
 
 ### 3.1 新增节点类型
 

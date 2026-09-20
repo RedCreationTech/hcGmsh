@@ -10,6 +10,7 @@
 #include <fstream>
 
 #include "gmp/OperationLog.h"
+#include "gmp/ProjectDocument.h"
 #include "gmp/ProjectSchema.h"
 
 namespace gmp {
@@ -220,6 +221,7 @@ bool ProjectStore::load_file(const QString& path, ProjectData* out,
       return fail("Invalid project file (missing model).");
     }
     QMap<QString, QSet<QString>> used_names;
+    QSet<QString> used_ids;
     for (const auto& it : model) {
       const QString kind = QString::fromStdString(it.first.as<std::string>());
       data.model_roots << kind;
@@ -234,6 +236,15 @@ bool ProjectStore::load_file(const QString& path, ProjectData* out,
           continue;
         }
         ProjectModelEntry entry;
+        entry.id = QString::fromStdString(node["id"].as<std::string>(""));
+        if (entry.id.isEmpty()) {
+          do {
+            entry.id = core::ObjectId::generate().toString();
+          } while (used_ids.contains(entry.id));
+        } else if (used_ids.contains(entry.id)) {
+          return fail("Duplicate project object id: " + entry.id);
+        }
+        used_ids.insert(entry.id);
         entry.kind = kind;
         entry.params = project_schema::yaml_map_to_variant_map(node["params"]);
         entry.name = unique_entry_name(&used_names[kind], name);
@@ -291,6 +302,9 @@ bool ProjectStore::save_file(const QString& path, const ProjectData& data,
     QMap<QString, YAML::Node> entries_by_kind;
     for (const auto& entry : data.model_entries) {
       YAML::Node node;
+      if (!entry.id.isEmpty()) {
+        node["id"] = entry.id.toStdString();
+      }
       node["name"] = entry.name.toStdString();
       node["kind"] = entry.kind.toStdString();
       node["status"] = entry.status.toStdString();

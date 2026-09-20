@@ -1344,6 +1344,7 @@ void test_project_store_contract(TestContext& test) {
   data.mesh_snapshot = valid_physical_groups(QString(64, 'd'));
   data.model_roots = {"Parts", "Materials", "Input Cases", "Mesh"};
   gmp::ProjectModelEntry part;
+  part.id = "object-part";
   part.name = "part_concrete";
   part.kind = "Parts";
   part.status = "Ready";
@@ -1354,6 +1355,7 @@ void test_project_store_contract(TestContext& test) {
                  {"visible", true},
                  {"distance", 0.25}};
   gmp::ProjectModelEntry mat;
+  mat.id = "object-material";
   mat.name = "concrete_elasticity";
   mat.kind = "Materials";
   mat.params = {{"type", "ComputeIsotropicElasticityTensor"},
@@ -1385,7 +1387,8 @@ void test_project_store_contract(TestContext& test) {
   for (int i = 0; entries_equal && i < 2; ++i) {
     const auto& expected = data.model_entries.at(i);
     const auto& actual = loaded.model_entries.at(i);
-    entries_equal = actual.name == expected.name &&
+    entries_equal = actual.id == expected.id &&
+                    actual.name == expected.name &&
                     actual.kind == expected.kind &&
                     actual.status == expected.status &&
                     actual.params == expected.params;
@@ -1407,8 +1410,9 @@ void test_project_store_contract(TestContext& test) {
                       data.mesh_snapshot.mesh_sha256 &&
                   loaded.mesh_snapshot.groups.size() == 1,
               "input snapshots and mesh manifest round-trip");
-  test.expect(read_file(project_file).contains("Input Cases"),
-              "saved file keeps the Input Cases root key (schema shape)");
+  test.expect(read_file(project_file).contains("Input Cases") &&
+                  read_file(project_file).contains("id: object-part"),
+              "saved file keeps root keys and persistent object ids");
 
   // 二次 round-trip 稳定（第一圈之后的类型形态不再漂移）。
   const QString second_file = workspace.filePath("roundtrip2.gmp.yaml");
@@ -1441,11 +1445,33 @@ void test_project_store_contract(TestContext& test) {
   test.expect(store.load_file(dup_file, &dup_loaded, &error) &&
                   dup_loaded.model_entries.size() == 2 &&
                   dup_loaded.model_entries.at(0).name == "part" &&
-                  dup_loaded.model_entries.at(1).name == "part_2",
-              "duplicate entry names are deduplicated with _2 suffix");
+                  dup_loaded.model_entries.at(1).name == "part_2" &&
+                  !dup_loaded.model_entries.at(0).id.isEmpty() &&
+                  dup_loaded.model_entries.at(0).id !=
+                      dup_loaded.model_entries.at(1).id,
+              "legacy entries gain unique ids while names use the _2 suffix");
+  const QString migrated_file = workspace.filePath("dup_with_ids.gmp.yaml");
+  gmp::ProjectData migrated_loaded;
+  test.expect(store.save_file(migrated_file, dup_loaded, &error) &&
+                  store.load_file(migrated_file, &migrated_loaded, &error) &&
+                  migrated_loaded.model_entries.at(0).id ==
+                      dup_loaded.model_entries.at(0).id &&
+                  migrated_loaded.model_entries.at(1).id ==
+                      dup_loaded.model_entries.at(1).id,
+              "legacy generated ids persist across first save and reopen");
+
+  gmp::ProjectData unused;
+  const QString duplicate_id_file =
+      workspace.filePath("duplicate_ids.gmp.yaml");
+  write_file(duplicate_id_file,
+             "schema_version: 2\nmodel:\n  Parts:\n"
+             "    - {id: same, name: a, params: {}}\n"
+             "    - {id: same, name: b, params: {}}\n");
+  test.expect(!store.load_file(duplicate_id_file, &unused, &error) &&
+                  error == "Duplicate project object id: same",
+              "duplicate persistent object ids are rejected");
 
   // ---- 加载错误路径 ----
-  gmp::ProjectData unused;
   test.expect(!store.load_file(workspace.filePath("missing.gmp.yaml"),
                                &unused, &error) &&
                   error.contains("Failed to load"),

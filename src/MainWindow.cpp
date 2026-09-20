@@ -5945,6 +5945,8 @@ void MainWindow::build_model_tree() {
     item->setText(0, name);
     item->setExpanded(true);
     item->setData(0, PropertyEditor::kKindRole, name);
+    item->setData(0, PropertyEditor::kObjectIdRole,
+                  ModelTreeAdapter::root_id(name).toString());
     item->setFlags(item->flags() & ~Qt::ItemIsEditable);
     QIcon icon;
     if (name == "Parts") {
@@ -8397,17 +8399,22 @@ QTreeWidgetItem* MainWindow::add_child_item(QTreeWidgetItem* root,
   }
   const QString safe_name = unique_child_name(root, name);
   const QVariantMap normalized = normalize_params_for_kind(kind, params);
+  const QString object_id = core::ObjectId::generate().toString();
   // TASK-V02-061：对象创建经事务层（Command + 审计），行为不变。
   QTreeWidgetItem* item = nullptr;
   record_model_transaction(
       QString("add %1/%2").arg(kind, safe_name),
       QString("create %1 object").arg(kind), {},
-      QVariantMap{{"kind", kind}, {"name", safe_name}, {"params", normalized}},
-      [this, root, kind, safe_name, normalized, &item]() {
+      QVariantMap{{"id", object_id},
+                  {"kind", kind},
+                  {"name", safe_name},
+                  {"params", normalized}},
+      [this, root, kind, safe_name, normalized, object_id, &item]() {
         auto* created = new QTreeWidgetItem(root);
         created->setText(0, safe_name);
         created->setData(0, PropertyEditor::kKindRole, kind);
         created->setData(0, PropertyEditor::kParamsRole, normalized);
+        created->setData(0, PropertyEditor::kObjectIdRole, object_id);
         created->setIcon(0, root->icon(0));
         root->setExpanded(true);
         model_tree_->setCurrentItem(created);
@@ -8591,6 +8598,8 @@ QTreeWidgetItem* MainWindow::attach_feature_to_part(
   auto* feature_item = new QTreeWidgetItem(features_root);
   feature_item->setText(0, feature_name);
   feature_item->setData(0, PropertyEditor::kKindRole, "Features");
+  feature_item->setData(0, PropertyEditor::kObjectIdRole,
+                        core::ObjectId::generate().toString());
   feature_item->setData(
       0, PropertyEditor::kParamsRole,
       normalize_params_for_kind("Features", feature_params));
@@ -9405,6 +9414,7 @@ QList<ProjectModelEntry> MainWindow::collect_model_entries() const {
         continue;
       }
       ProjectModelEntry entry;
+      entry.id = child->data(0, PropertyEditor::kObjectIdRole).toString();
       entry.name = child->text(0);
       entry.kind = root->text(0);
       entry.status = child->data(0, PropertyEditor::kStatusRole).toString();
@@ -10141,6 +10151,8 @@ void MainWindow::remove_item(QTreeWidgetItem* item) {
   const QString name = item->text(0);
   const QVariantMap removed_params =
       item->data(0, PropertyEditor::kParamsRole).toMap();
+  const QString removed_id =
+      item->data(0, PropertyEditor::kObjectIdRole).toString();
   const QString current_file = viewer_ ? viewer_->current_file() : QString();
   const bool current_is_mesh =
       current_file.endsWith(".msh", Qt::CaseInsensitive);
@@ -10225,17 +10237,21 @@ void MainWindow::remove_item(QTreeWidgetItem* item) {
   record_model_transaction(
       QString("remove %1/%2").arg(kind, name),
       QString("remove %1 object").arg(kind),
-      QVariantMap{{"kind", kind}, {"name", name}, {"params", removed_params}},
+      QVariantMap{{"id", removed_id},
+                  {"kind", kind},
+                  {"name", name},
+                  {"params", removed_params}},
       {},
       [parent, item]() {
         parent->removeChild(item);
         delete item;
       },
-      [this, parent, kind, name, removed_params]() {
+      [this, parent, kind, name, removed_params, removed_id]() {
         auto* restored = new QTreeWidgetItem(parent);
         restored->setText(0, name);
         restored->setData(0, PropertyEditor::kKindRole, kind);
         restored->setData(0, PropertyEditor::kParamsRole, removed_params);
+        restored->setData(0, PropertyEditor::kObjectIdRole, removed_id);
       });
   if (clear_stage_data && viewer_) {
     viewer_->clear_stage_data();
@@ -10262,18 +10278,21 @@ void MainWindow::duplicate_item(QTreeWidgetItem* item) {
       item->data(0, PropertyEditor::kKindRole).toString();
   const QVariantMap params_for_tx =
       item->data(0, PropertyEditor::kParamsRole).toMap();
+  const QString duplicate_id = core::ObjectId::generate().toString();
   // TASK-V02-061：对象复制经事务层（Command + 审计），行为不变。
   QTreeWidgetItem* child = nullptr;
   record_model_transaction(
       QString("duplicate %1/%2").arg(kind_for_tx, base),
       QString("duplicate %1 object").arg(kind_for_tx), {},
-      QVariantMap{{"kind", kind_for_tx}, {"name", base},
+      QVariantMap{{"id", duplicate_id},
+                  {"kind", kind_for_tx}, {"name", base},
                   {"params", params_for_tx}},
-      [this, parent, kind_for_tx, params_for_tx, base, &child]() {
+      [this, parent, kind_for_tx, params_for_tx, base, duplicate_id, &child]() {
         auto* created = new QTreeWidgetItem(parent);
         created->setText(0, base);
         created->setData(0, PropertyEditor::kKindRole, kind_for_tx);
         created->setData(0, PropertyEditor::kParamsRole, params_for_tx);
+        created->setData(0, PropertyEditor::kObjectIdRole, duplicate_id);
         created->setIcon(0, parent->icon(0));
         parent->setExpanded(true);
         model_tree_->setCurrentItem(created);
@@ -10781,6 +10800,7 @@ bool MainWindow::load_project(const QString& path) {
       auto* child = new QTreeWidgetItem(root_item);
       child->setText(0, entry.name);
       child->setData(0, PropertyEditor::kKindRole, entry.kind);
+      child->setData(0, PropertyEditor::kObjectIdRole, entry.id);
       child->setIcon(0, root_item->icon(0));
       child->setData(0, PropertyEditor::kStatusRole, entry.status);
       child->setData(0, PropertyEditor::kParamsRole,
@@ -10940,26 +10960,17 @@ bool MainWindow::save_project(const QString& path) {
     data.unit_contract = unit_contract_;
     data.mesh_snapshot = mesh_snapshot_;
     data.input_snapshots = input_snapshots_;
+    data.model_entries = collect_model_entries();
     for (int i = 0; i < model_tree_->topLevelItemCount(); ++i) {
       auto* root_item = model_tree_->topLevelItem(i);
       if (!root_item) {
         continue;
       }
       data.model_roots << root_item->text(0);
-      for (int j = 0; j < root_item->childCount(); ++j) {
-        auto* child = root_item->child(j);
-        if (!child) {
-          continue;
-        }
-        ProjectModelEntry entry;
-        entry.name = child->text(0);
-        entry.kind = root_item->text(0);
-        entry.params = child->data(0, PropertyEditor::kParamsRole).toMap();
-        entry.status = child->data(0, PropertyEditor::kStatusRole).toString();
-        if (entry.status.isEmpty()) {
-          entry.status = entry.params.value("status").toString();
-        }
-        data.model_entries.append(entry);
+    }
+    for (auto& entry : data.model_entries) {
+      if (entry.status.isEmpty()) {
+        entry.status = entry.params.value("status").toString();
       }
     }
     if (gmsh_panel_) {
@@ -18518,8 +18529,8 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       ++tree_items;
                       consistent =
                           consistent &&
-                          doc.object(ModelTreeAdapter::id_for_path(
-                              root->text(0), QString())) != nullptr;
+                          doc.object(ModelTreeAdapter::root_id(root->text(0))) !=
+                              nullptr;
                       for (int row = 0; row < root->childCount(); ++row) {
                         const QTreeWidgetItem* child = root->child(row);
                         if (!child) {
@@ -18528,7 +18539,10 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         ++tree_items;
                         const core::ProjectObject* object =
                             doc.object(model_tree_adapter_->id_for_item(child));
-                        if (!object) {
+                        if (!object ||
+                            child->data(0, PropertyEditor::kObjectIdRole)
+                                .toString()
+                                .isEmpty()) {
                           consistent = false;
                           continue;
                         }
@@ -18618,15 +18632,34 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   assert_consistent("fixture mount");
 
-                  // 重命名传播（itemChanged 钩子）：旧 ID 消失、新 ID 出现。
+                  const core::ObjectId mat_id =
+                      model_tree_adapter_->id_for_item(mat_item);
+                  const core::ObjectId func_id =
+                      model_tree_adapter_->id_for_item(func_item);
+                  if (!mat_id.isValid() || !func_id.isValid()) {
+                    throw std::runtime_error(
+                        "Projection fixture object ids are missing");
+                  }
+
+                  // 重命名仅改名称，稳定 ID 不变。
                   mat_item->setText(0, "proj_mat_renamed");
                   assert_consistent("rename");
-                  if (model_tree_adapter_->document().object(
-                          ModelTreeAdapter::id_for_path("Materials",
-                                                        "proj_mat"))) {
+                  const core::ProjectObject* renamed =
+                      model_tree_adapter_->document().object(mat_id);
+                  if (model_tree_adapter_->id_for_item(mat_item) != mat_id ||
+                      !renamed || renamed->name() != "proj_mat_renamed") {
                     throw std::runtime_error(
-                        "Projection kept the pre-rename object id");
+                        "Rename changed the persistent object id");
                   }
+                  // 复制获得新 ID。
+                  duplicate_item(mat_item);
+                  auto* mat_copy = model_tree_->currentItem();
+                  if (!mat_copy || mat_copy->parent() != mat_item->parent() ||
+                      model_tree_adapter_->id_for_item(mat_copy) == mat_id) {
+                    throw std::runtime_error(
+                        "Duplicate reused the source object id");
+                  }
+                  remove_item(mat_copy);
                   // 参数直写传播（itemChanged 钩子）。
                   auto* bc_root = find_root_item("BC");
                   QTreeWidgetItem* bc_item = nullptr;
@@ -18640,21 +18673,27 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   edited.insert("value", "0.5");
                   bc_item->setData(0, PropertyEditor::kParamsRole, edited);
                   assert_consistent("param edit");
-                  // 删除传播（业务漏斗 remove_item）。
+                  // 删除后以同名重建也必须获得新 ID。
                   remove_item(func_item);
                   assert_consistent("remove");
-                  if (model_tree_adapter_->document().object(
-                          ModelTreeAdapter::id_for_path("Functions",
-                                                        "proj_func"))) {
+                  if (model_tree_adapter_->document().object(func_id)) {
                     throw std::runtime_error(
                         "Projection kept the removed object");
                   }
+                  func_item = add_child_item(
+                      find_root_item("Functions"), "proj_func", "Functions",
+                      {{"type", "PiecewiseLinear"},
+                       {"x", "0 1"},
+                       {"y", "0 1"}});
+                  if (!func_item ||
+                      model_tree_adapter_->id_for_item(func_item) == func_id) {
+                    throw std::runtime_error(
+                        "Delete and recreate reused the old object id");
+                  }
+                  assert_consistent("recreate");
 
                   // 清理夹具节点。
                   for (const auto& node : fixture) {
-                    if (node.name == "proj_func") {
-                      continue;  // 已删
-                    }
                     auto* root = find_root_item(node.root);
                     const QString name = node.name == "proj_mat"
                                              ? QString("proj_mat_renamed")
@@ -18683,12 +18722,23 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     assert_consistent("g1 load");
                     const core::ProjectDocument& g1_doc =
                         model_tree_adapter_->document();
-                    if (!g1_doc.object(ModelTreeAdapter::id_for_path(
-                            "Materials", "concrete_elasticity")) ||
-                        !g1_doc.object(ModelTreeAdapter::id_for_path(
-                            "Interactions", "contact_plate_concrete")) ||
-                        !g1_doc.object(ModelTreeAdapter::id_for_path(
-                            "Assembly", "instance_plate"))) {
+                    auto has_object = [this, &g1_doc](const QString& root_name,
+                                                      const QString& name) {
+                      auto* root = find_root_item(root_name);
+                      for (int row = 0; root && row < root->childCount(); ++row) {
+                        auto* child = root->child(row);
+                        if (child && child->text(0) == name) {
+                          return g1_doc.object(
+                                     model_tree_adapter_->id_for_item(child)) !=
+                                 nullptr;
+                        }
+                      }
+                      return false;
+                    };
+                    if (!has_object("Materials", "concrete_elasticity") ||
+                        !has_object("Interactions",
+                                    "contact_plate_concrete") ||
+                        !has_object("Assembly", "instance_plate")) {
                       throw std::runtime_error(
                           "G1 projection is missing known objects");
                     }
@@ -18725,26 +18775,6 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     // 注：.work 下的 .i 磁盘文件是 demo 期残留（内容与
                     // 项目保存的 input_text 不一致），不能当基线；基线以
                     // 项目 YAML 保存的 input_text 为准（上方已逐字比对）。
-                    // 重载后 ID 集一致。
-                    const QVariantList ids_before =
-                        g1_doc.to_variant_list();
-                    if (!load_project(g1_project)) {
-                      throw std::runtime_error(
-                          "G1 project failed to reload for id stability check");
-                    }
-                    QStringList id_set_a;
-                    for (const auto& value : ids_before) {
-                      id_set_a << value.toMap().value("id").toString();
-                    }
-                    QStringList id_set_b;
-                    for (const auto& value :
-                         model_tree_adapter_->document().to_variant_list()) {
-                      id_set_b << value.toMap().value("id").toString();
-                    }
-                    if (id_set_a.isEmpty() || id_set_a != id_set_b) {
-                      throw std::runtime_error(
-                          "G1 object ids are not stable across reloads");
-                    }
                     // 恢复巡览会话：演示模型 + 原快照。
                     load_demo_diffusion(false);
                     mesh_snapshot_ = saved_snapshot;

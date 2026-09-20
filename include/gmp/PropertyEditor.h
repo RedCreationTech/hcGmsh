@@ -55,6 +55,7 @@ class PropertyEditor : public QWidget {
   static constexpr int kKindRole = Qt::UserRole + 1;
   static constexpr int kParamsRole = Qt::UserRole + 2;
   static constexpr int kStatusRole = Qt::UserRole + 3;
+  static constexpr int kObjectIdRole = Qt::UserRole + 4;
 
  signals:
   // TASK-V02-014：表单对 current_item_ 的每次写入（名称/参数）经此信号
