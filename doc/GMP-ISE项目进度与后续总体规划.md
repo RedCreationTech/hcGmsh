@@ -1,10 +1,10 @@
 # GMP-ISE 项目进度与后续总体规划
 
-> 编制日期：2026-09-19（2026-09-20 用户批准执行）
-> 当前代码基线：`main@de30de7cfe1e`
+> 编制日期：2026-09-19（2026-09-20 用户批准执行并持续回填）
+> 当前代码基线：`main@4c184f4a3d5b`
 > 规划模式：项目总览 + 开发任务编排
 > 主要依据：`doc/UI重构开发任务清单.md`、`doc/UI重构下一阶段任务清单.md`、`manual/test05.md`、`doc/v0.2重构任务清单.md`、`doc/v0.2.1架构硬化任务清单.md`、`doc/ref/HC-Gmsh-v0.2-重构成果复核与进一步优化计划.md`
-> 状态：**已批准执行；G1-08/09 按用户长期实际使用结论验收通过，不再作为遗留任务**
+> 状态：**已批准执行；G1 已关闭，HARD-010～050 已完成；G2 目标应用支持矩阵已冻结，进入产品实现阶段**
 
 ---
 
@@ -49,12 +49,14 @@ ProjectDocument 装载合同
 - `VtkViewer` facade、Gmsh 全局 Session、模块目录不理想，但尚未阻断单项目、串行网格和既定 G1～G3。
 - 当前最有产品价值的缺口是“真实求解成功和结果闭环”，不是再增加一批内部类。
 
-### 0.4 为什么不能马上全面补功能
+### 0.4 架构硬化后如何恢复功能开发
 
-- ObjectId 仍由 `<根名>/<对象名>` 派生，rename 会改变身份。
-- 项目保存、生成输入和大量校验仍从 QTreeWidget 读取业务数据。
-- Reference Point、Coupling、多 Step 和 Feature Graph 都会新增更多跨对象引用；继续使用名称引用会加重悬空引用和迁移风险。
-- 当前 Transaction 的删除回滚只恢复本节点，属性表单仍是事后审计，不能直接接通用 Undo。
+`HARD-010～050` 已解决持久 ObjectId、Document 真源、Store 直连 Document 和最小可逆领域命令问题。Reference Point/Coupling 可以进入实现，但必须继续遵守：
+
+- 新对象和跨对象引用使用持久 ObjectId，不新增 Tree-only 数据。
+- 目标应用语法先经真实版本验证，再进入 profile/mapping 和 UI。
+- G2 只实现 Reference Point/Coupling 闭环，不顺带扩展多 Step、Feature Graph 或通用约束框架。
+- `HARD-060`、`HARD-070` 分别保留到 G4 与 Feature Graph 前，不重新阻塞 G2/G3。
 
 ## 1. 当前基线
 
@@ -62,7 +64,7 @@ ProjectDocument 装载合同
 
 | 项目 | 当前状态 | 结论 |
 |---|---|---|
-| Git 基线 | `main`、`origin/main` 均为 `de30de7cfe1e` | v0.2 代码工作已结束 |
+| Git 基线 | `main`、`origin/main` 均为 `4c184f4a3d5b` | HARD-010～050 与当前 C4 总结已推送 |
 | 构建 | `cmake --build build -j4` 无待编译项 | 通过 |
 | CTest | `gmp_ise_phase0`，`1/1`，约 `0.94 s` | 通过 |
 | GUI 巡览 | 114 步真实点击基线 | 最近 v0.2 提交记录全绿 |
@@ -93,7 +95,7 @@ ProjectDocument 装载合同
 | UI | Phase 0～3 | ✅ 完成 | 数据合同、布局、交互、视觉/可访问性均已自动与人工准出 |
 | 前处理 | Phase 4 / G0 | ✅ 完成 | 应用档案、Physical Groups、材料/Section、Physics/Step、BC/Load、Outputs、生成校验、快照、提交入口已准出 |
 | 真实算例 | Phase 5 / G1 | ✅ 9/9 通过 | G1-01～07 按原证据通过；G1-08/09 于 2026-09-20 按用户长期实际使用结论验收通过，不另补外部证据 |
-| 高级约束 | Phase 5 / G2 | ⚪ 未实现 | Reference Point/Coupling 的 UI、映射、传力验证均待开发 |
+| 高级约束 | Phase 5 / G2 | 🟡 实施中 | 目标语法与最小传力探针已验证；产品领域对象、UI、生成、校验和端到端准出待完成 |
 | 高级材料/基准 | Phase 5 / G3 | ⚪ 未实现 | M-02/M-03、CDP 认可基准与容差未冻结 |
 | 多阶段 | Phase 6 / G4 | ⚪ 仅有需求 | 当前只保存多个 Step，生成器只使用首个 Step 并告警 |
 | 架构 | v0.2 Stage 0～7 | ✅ 已关闭 | 7 个 Stage 已完成；RG-D 人工总准出通过；`v0.2-rc1` 已冻结 |
@@ -245,12 +247,37 @@ HARD-010～050 已关闭稳定身份与 Tree 真源问题；当前无阻塞 G2/G
 
 ### Milestone M3：G2 Reference Point / Coupling
 
+#### M3 阶段目标
+
+仅通过 GMP-ISE UI 建立可持久化的 Reference Point 与 Coupling，生成目标 DamSafetyApp 接受的真实约束对象，并形成从领域对象、输入、快照、Job 到 CSV/Exodus 的完整追溯。G2 准出必须同时证明：
+
+1. Reference Point 是带持久 ObjectId 的独立工程对象，保存重开和 rename 不丢失身份。
+2. Coupling 通过 ObjectId 引用参考点，通过 Physical Group 引用耦合面；引用、维度和自由度错误在提交前阻断。
+3. 生成使用已验证的 `EqualValueBoundaryConstraint`，不得退化为加载面统一 `DirichletBC`。
+4. UI 生成项目在锁定目标版本上预检和求解成功，参考点与耦合面位移一致，反力输出非空且可追溯。
+5. `TEST-P5-G2-01～05`、CTest 和不少于 114 步真实点击巡览全部通过。
+
+本阶段不实现多 Step、CDP 基准、对象级 DependencyGraph、全局 Undo/Redo 或通用求解器中立 Constraint 框架。
+
 #### TASK-PLAN-030 冻结目标应用支持矩阵
 
 - **优先级**：P0。
 - **关联**：TASK-P5-04、M-02。
 - **工作**：确认目标应用实际对象语法、参数、自由度、输出和限制；先有 `--check-input` 原型，再开 UI。
 - **准出**：能力矩阵与 mapping 合同确定，不用普通面位移伪装 Coupling。
+- **状态**：✅ 已完成（2026-09-20）。
+- **冻结合同**：
+  - 目标版本：DamSafetyApp `8e0ddf5c165bbae1e83b3b4f66e284bc36d3d7c3`、MOOSE `4bce02d91b56c7ed845a5747df4d24f415592504`。
+  - 约束对象：`EqualValueBoundaryConstraint`。
+  - 关键参数：`variable`、`primary_node_coord`、`secondary`、`penalty`、`formulation = kinematic`。
+  - 小应变线弹性探针使用 total small strain；`ComputeLinearElasticStress` 不得与 `incremental = true` 组合。
+  - 参考点输出按稳定边界名 `rp_load` 读取，不依赖网格导入后可能变化的 node ID。
+- **外部证据**：
+  - 首轮 `job_20260920_115426_4wamaj`：`--check-input` 通过；因探针误设 `incremental = true` 在材料初始化阶段失败，未产生 CSV，不属于接口读取故障或 Coupling 语法失败。
+  - 最终 `job_20260920_141020_cch4er`：`succeeded`；输入 SHA-256 `fcd9082302b37151fdda477927c88d56f6c6eb172948f9eeeaba72f5fb942ab9`，网格 SHA-256 `3dcda34fbf09a945632140e539e40ac3407c1692a7093ca0cf574d3decbe3edb`。
+  - 实测 `rp_disp_z = -0.001 m`、`top_disp_z = -0.0010000000000659 m`，绝对差约 `6.6e-14 m`；`top_reaction_z = -3.1252958216062e7 N`。
+  - 结果 SHA-256：CSV `4cf769bcc30df7d89c84f251a0b8afd193eba9f8784fd46f6dd76bdb020ab1d1`，Exodus `30cb5bae8d270c8f28f13b75a09550666c6bafb19482a520a26223d1d40a556f`，solve log `0a4c1e5ec739758a80dbcb7b2bedb8b4f97067cbf12f3849f83044fcc9a8de99`。
+- **证据边界**：该手工探针只关闭目标语法和最小传力风险，不替代 UI 生成、持久化、负向校验和正式 G2 端到端准出。
 
 #### TASK-PLAN-031 实现领域对象、UI 与生成映射
 
@@ -259,6 +286,92 @@ HARD-010～050 已关闭稳定身份与 Tree 真源问题；当前无阻塞 G2/G
 - **工作**：Reference Point、耦合面引用、运动学参数、预检、生成报告、snapshot 追溯。
 - **架构约束**：新对象必须使用持久 ObjectId；不得新增 Tree-only 数据。
 - **准出**：TEST-P5-G2-01～05 全部完成，传力和反力平衡有数值证据。
+- **状态**：⏳ 待实施；按以下子任务持续回填。
+
+##### TASK-PLAN-031A 领域对象与稳定引用
+
+- **优先级**：P0。
+- **目标**：Reference Point 成为独立可持久化对象；Coupling 使用 ObjectId 引用参考点。
+- **工作**：保存参考点坐标、名称、ObjectId、状态；保存耦合面、自由度、formulation、penalty 和参考点 ID；删除、重命名、复制与保存重开语义明确。
+- **准出**：rename 不改变引用；删除参考点使 Coupling 明确失效；新建同名参考点不得静默重绑。
+- **状态**：⬜ 未开始。
+
+##### TASK-PLAN-031B 应用档案与 Mapping
+
+- **优先级**：P0。
+- **依赖**：TASK-PLAN-031A、TASK-PLAN-030。
+- **目标**：把冻结的真实对象合同写入 `DamSafetyApp-opt` profile 与 mapping registry。
+- **工作**：以 `EqualValueBoundaryConstraint` 替换未验证的 Coupling 占位映射；声明关键参数、自由度和支持级别；不支持档案保留对象但阻断生成。
+- **准出**：表单、验证器和生成器共用同一 mapping；不存在 `CoupledDirichletBC` 与真实映射并存歧义。
+- **状态**：⬜ 未开始。
+
+##### TASK-PLAN-031C UI 与属性表单
+
+- **优先级**：P1。
+- **依赖**：TASK-PLAN-031A/031B。
+- **目标**：通过 UI 创建、编辑 Reference Point 和 Coupling，不手改 `.i`。
+- **工作**：提供参考点坐标、参考点选择、二维耦合面选择、自由度、kinematic formulation 和 penalty；候选受活动档案和 Physical Group 维度约束。
+- **准出**：完成 TEST-P5-G2-01/02 的创建、编辑、保存重开和引用恢复路径。
+- **状态**：⬜ 未开始。
+
+##### TASK-PLAN-031D 工作流校验与负向合同
+
+- **优先级**：P0。
+- **依赖**：TASK-PLAN-031A～031C。
+- **目标**：错误配置在生成/提交前可定位阻断。
+- **工作**：覆盖参考点缺失、耦合面缺失/维度错误、自由度为空、同自由度 BC 冲突、活动档案不支持五类错误。
+- **准出**：TEST-P5-G2-05 五类负向路径全部通过，恢复配置后重新同步能力恢复。
+- **状态**：⬜ 未开始。
+
+##### TASK-PLAN-031E 确定性生成与来源报告
+
+- **优先级**：P0。
+- **依赖**：TASK-PLAN-031B～031D。
+- **目标**：按所选自由度生成真实 `[Constraints]` 对象和稳定输出。
+- **工作**：生成 `primary_node_coord`、`secondary`、`penalty`、`formulation`；位移加载施加到参考点；参考点输出按稳定边界名读取；来源报告关联 RP、Coupling、Physical Group 和 mapping。
+- **准出**：两次同步逐字一致；不存在加载面统一 DirichletBC 替代；TEST-P5-G2-03 通过。
+- **状态**：⬜ 未开始。
+
+##### TASK-PLAN-031F Snapshot 与追溯
+
+- **优先级**：P1。
+- **依赖**：TASK-PLAN-031E。
+- **目标**：Reference Point/Coupling 进入快照和 Job 证据链。
+- **工作**：manifest 固化应用版本、mapping 版本和对象来源；上游变化使旧输入、快照和 Job stale。
+- **准出**：项目对象、`.i`、manifest、Job 和结果可以互相追溯。
+- **状态**：⬜ 未开始。
+
+##### TASK-PLAN-031G 自动合同与定向巡览
+
+- **优先级**：P0。
+- **依赖**：TASK-PLAN-031A～031F。
+- **工作**：CTest 增加 Coupling 生成/负向合同；新增 `reference_point_coupling_contract` 定向 UI 巡览，覆盖创建、保存重开、引用失效/恢复和确定性生成。
+- **执行规则**：日常仅运行直接相关的 1～2 个定向用例；提交前执行全量真实点击巡览和 CTest。
+- **准出**：本任务合同全绿，既有基线不减少。
+- **状态**：⬜ 未开始。
+
+##### TASK-PLAN-031H G2 端到端准出
+
+- **优先级**：P0 闸门。
+- **依赖**：TASK-PLAN-031A～031G。
+- **工作**：执行 TEST-P5-G2-01～05；用 UI 生成的新快照完成真实 `--check-input`、远端求解、CSV/Exodus 下载和 Results 回放。
+- **准出**：参考点与耦合面位移满足冻结容差，反力方向和量值可解释；无未关闭 P0 缺陷；CTest 与不少于 114 步真实点击巡览通过。
+- **产出**：执行记录、证据索引、计划/手册回填、独立提交并推送 `origin/main`。
+- **状态**：⬜ 未开始。
+
+#### M3 跟踪总表
+
+| 工作项 | 当前状态 | 关联验收 | 下一动作 |
+|---|---|---|---|
+| TASK-PLAN-030 支持矩阵 | ✅ 完成 | G2 目标应用原型 | 回填后冻结，不再重复探测 |
+| TASK-PLAN-031A 领域对象 | ⬜ 未开始 | TEST-P5-G2-01/02 | 建立 RP 与 Coupling 的 ObjectId 引用 |
+| TASK-PLAN-031B Profile/Mapping | ⬜ 未开始 | TEST-P5-G2-03/05 | 写入已验证对象合同 |
+| TASK-PLAN-031C UI | ⬜ 未开始 | TEST-P5-G2-01/02 | 创建属性表单与选择器 |
+| TASK-PLAN-031D 校验 | ⬜ 未开始 | TEST-P5-G2-05 | 五类阻断合同 |
+| TASK-PLAN-031E 生成 | ⬜ 未开始 | TEST-P5-G2-03 | 确定性 Constraints/输出/报告 |
+| TASK-PLAN-031F 追溯 | ⬜ 未开始 | TEST-P5-G2-04 | Snapshot/Job/Result 链 |
+| TASK-PLAN-031G 自动合同 | ⬜ 未开始 | G2 回归 | CTest + 定向巡览 |
+| TASK-PLAN-031H 总准出 | ⬜ 未开始 | TEST-P5-G2-01～05 | UI 生成项目真实求解与全量回归 |
 
 ### Milestone M4：G3 CDP 与认可基准
 
@@ -330,8 +443,8 @@ HARD-010～050 已关闭稳定身份与 Tree 真源问题；当前无阻塞 G2/G
 
 | 轨道 | 可并行内容 | 不可越过的边界 |
 |---|---|---|
-| 外部验证轨道 | G2 应用支持矩阵、CDP 基准准备 | 不得用未验证语法先造 UI |
-| 本地开发轨道 | M1 架构硬化、P2 文档/体验小修 | 不得提前实施 G2/P6 数据模型 |
+| 外部验证轨道 | G2 UI 生成算例准出、CDP 基准准备 | G2 原型已冻结；不得用手工探针替代产品闭环 |
+| 本地开发轨道 | TASK-PLAN-031A～031G | 不扩展到 G3/G4 或 Feature Graph |
 
 单个代码变更仍遵守 `AGENTS.md`：日常跑 1～2 个相关定向巡览；提交前全量 114 步巡览 + CTest。
 
@@ -354,7 +467,7 @@ HARD-010～050 已关闭稳定身份与 Tree 真源问题；当前无阻塞 G2/G
 | SSOT 反转修改面过大 | UI 回归或项目损坏 | 按 CRUD→属性→读取→持久化分小提交；失败装载原子替换 |
 | 旧项目没有 ID | 引用在迁移期不稳定 | 加载生成、首次保存固化；rename 保持会话 ID |
 | 外部环境持续不可用 | G3 真实基准无法准出 | 本地工作与外部证据分轨；G1 已按用户验收结论关闭 |
-| Coupling 目标应用不支持 | UI 先做后废弃 | 先冻结能力矩阵和真实 `--check-input` 原型 |
+| Coupling 产品实现偏离已验证原型 | UI 可用但目标应用拒绝或传力错误 | profile/mapping/生成器共用冻结合同；正式准出重复真实求解 |
 | CDP 基准定义不清 | 无限调参、结论不可复核 | 执行前冻结模型、曲线、指标、容差 |
 | 多 Step 路线选错 | 状态丢失或生成无效 | 先做 P6-01，不先写多个 Executioner |
 | 架构任务再次膨胀 | 功能长期停滞 | M1 明确停止于 HARD-050，其他债触发式处理 |
