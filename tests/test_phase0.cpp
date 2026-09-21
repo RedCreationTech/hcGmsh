@@ -1905,6 +1905,28 @@ void test_moose_input_generator_contract(TestContext& test) {
                   out.postprocessors.contains("[load_top_disp_avg]"),
               "aux variables/kernels and history postprocessors follow the "
               "outputs package");
+  auto v01 = input;
+  for (auto& model_entry : v01.entries) {
+    if (model_entry.kind == "Outputs") {
+      model_entry.params.insert("history_profile", "cdp_uniaxial_z");
+    }
+  }
+  const auto v01_out = gmp::MooseInputGenerator::generate(v01);
+  const QStringList v01_history = {
+      "[min_stress_zz]", "[RP1_Force]", "[Bottom_Force]",
+      "[Top_Force_X]", "[Top_Force_Y]", "[RP1_Displacement]",
+      "[max_damagec]", "[max_damaget]", "[max_mises]",
+      "[max_stress_zz]", "[max_local_iterations]",
+      "[max_accepted_substeps]", "[max_jacobian_fallbacks]"};
+  bool v01_history_complete = true;
+  for (const auto& marker : v01_history) {
+    v01_history_complete =
+        v01_history_complete && v01_out.postprocessors.contains(marker);
+  }
+  test.expect(v01_history_complete &&
+                  v01_out.postprocessors.contains("boundary = bottom") &&
+                  v01_out.postprocessors.contains("value_type = min"),
+              "V01 history preset emits the frozen uniaxial postprocessors");
   test.expect(out.console_warnings.isEmpty() && out.status_warning.isEmpty(),
               "clean G1-shaped input produces no warnings");
 

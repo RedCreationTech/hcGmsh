@@ -7953,12 +7953,19 @@ QVariantList MainWindow::collect_workflow_issues() const {
     }
   }
   for (const ProjectModelEntry& entry : entries_by_kind.value("Outputs")) {
+      const QVariantMap params = entry.params;
+      if (params.value("history_profile").toString() ==
+          "cdp_uniaxial_z") {
+        check_group("Outputs", entry.name, "history_profile", "top",
+                    boundary_dim);
+        check_group("Outputs", entry.name, "history_profile", "bottom",
+                    boundary_dim);
+      }
       const QString boundary = entry.params.value("hist_boundary").toString();
       if (!boundary.isEmpty()) {
         check_group("Outputs", entry.name, "hist_boundary", boundary,
                     boundary_dim);
       }
-      const QVariantMap params = entry.params;
       if (params.value("hist_disp_avg").toString() == "true") {
         const QString variable = params.value("hist_disp_variable").toString();
         if (!variable.isEmpty() && !variable_names.contains(variable)) {
@@ -8721,9 +8728,19 @@ bool MainWindow::import_exodus_mesh(const QString& path) {
     return false;
   }
   const QString abs = QFileInfo(path).absoluteFilePath();
-  // 侧集/节点集名提取（W-02b）；失败不阻断导入，仅警告。
-  const QStringList boundary_names =
-      viewer_ ? viewer_->read_exodus_side_set_names(abs) : QStringList();
+  // Exodus 元数据直接成为输入网格 manifest；Section、BC、快照共用它，
+  // 不再要求用户为已有 element block 伪造 Gmsh Physical Group。
+  const PhysicalGroupManifest imported_manifest =
+      viewer_ ? viewer_->read_exodus_mesh_manifest(abs)
+              : PhysicalGroupManifest();
+  const QStringList boundary_names = imported_manifest.mesh_dim > 0
+                                         ? imported_manifest.group_names(
+                                               imported_manifest.mesh_dim - 1)
+                                         : QStringList();
+  const QStringList volume_names = imported_manifest.mesh_dim > 0
+                                       ? imported_manifest.group_names(
+                                             imported_manifest.mesh_dim)
+                                       : QStringList();
 
   QVariantMap params;
   params.insert("path", abs);
@@ -8731,6 +8748,21 @@ bool MainWindow::import_exodus_mesh(const QString& path) {
   params.insert("role", "input_mesh");
   if (!boundary_names.isEmpty()) {
     params.insert("boundary_names", boundary_names.join(" "));
+  }
+  if (!volume_names.isEmpty()) {
+    params.insert("volume_names", volume_names.join(" "));
+  }
+  if (imported_manifest.node_count > 0) {
+    params.insert("node_count", imported_manifest.node_count);
+  }
+  if (imported_manifest.element_count > 0) {
+    params.insert("element_count", imported_manifest.element_count);
+  }
+  if (!imported_manifest.element_type.isEmpty()) {
+    params.insert("element_type", imported_manifest.element_type);
+  }
+  if (!imported_manifest.mesh_sha256.isEmpty()) {
+    params.insert("sha256", imported_manifest.mesh_sha256);
   }
   auto* item = find_child_by_param(root, "path", abs);
   const QString base = QFileInfo(abs).baseName();
@@ -8757,6 +8789,13 @@ bool MainWindow::import_exodus_mesh(const QString& path) {
   if (moose_panel_) {
     moose_panel_->set_mesh_path(abs);
   }
+  if (!imported_manifest.groups.isEmpty()) {
+    mesh_snapshot_ = imported_manifest;
+    if (gmsh_panel_) {
+      gmsh_panel_->set_physical_group_manifest(
+          imported_manifest.to_variant_map());
+    }
+  }
   if (boundary_names.isEmpty()) {
     if (console_) {
       console_->appendPlainText(
@@ -8771,6 +8810,7 @@ bool MainWindow::import_exodus_mesh(const QString& path) {
     // boundary 名清单喂给组 chips 通道（与 GmshPanel::boundary_groups 同路）。
     if (property_editor_) {
       property_editor_->set_boundary_groups(boundary_names);
+      property_editor_->set_volume_groups(volume_names);
     }
     if (moose_panel_) {
       moose_panel_->set_boundary_groups(boundary_names);
@@ -8779,10 +8819,14 @@ bool MainWindow::import_exodus_mesh(const QString& path) {
         "Exodus mesh imported: " + QFileInfo(abs).fileName(), 3000);
   }
   gmp::log_operation(
-      "mesh", QString("Exodus mesh imported as input mesh: %1 (boundaries: %2)")
-                  .arg(abs, boundary_names.isEmpty()
-                                ? QString("none")
-                                : boundary_names.join(", ")));
+      "mesh",
+      QString("Exodus mesh imported as input mesh: %1 (volumes: %2; "
+              "boundaries: %3)")
+          .arg(abs,
+               volume_names.isEmpty() ? QString("none")
+                                      : volume_names.join(", "),
+               boundary_names.isEmpty() ? QString("none")
+                                         : boundary_names.join(", ")));
   refresh_tree_statuses();
   push_context_to_moose_panel();
   set_project_dirty(true);
@@ -9204,6 +9248,7 @@ QVariantMap MainWindow::default_params_for_kind(const QString& kind) const {
     // 旧行为（单 Exodus 块），勾选后经 build_outputs_block 成组产出。
     return {{"type", "Exodus"},
             {"field_outputs", ""},
+            {"history_profile", "custom"},
             {"hist_reaction_force", "false"},
             {"hist_displacement_avg", "false"},
             {"hist_extremum", "false"},
@@ -13968,6 +14013,9 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                                     .toString();
                   const QStringList saved_boundaries =
                       property_editor_->boundary_groups();
+                  const QStringList saved_volumes =
+                      property_editor_->volume_groups();
+                  const PhysicalGroupManifest saved_snapshot = mesh_snapshot_;
                   if (!import_exodus_mesh(mesh)) {
                     throw std::runtime_error(
                         "W-02b exodus import entry returned false");
@@ -13988,6 +14036,23 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     throw std::runtime_error(
                         "W-02b stage did not load the imported exodus mesh");
                   }
+                  auto* group_table = gmsh_panel_
+                                          ? gmsh_panel_->findChild<
+                                                QTableWidget*>(
+                                                "physicalGroupTable")
+                                          : nullptr;
+                  auto find_group_row = [group_table](const QString& name) {
+                    if (!group_table) {
+                      return -1;
+                    }
+                    for (int row = 0; row < group_table->rowCount(); ++row) {
+                      const auto* item = group_table->item(row, 2);
+                      if (item && item->text() == name) {
+                        return row;
+                      }
+                    }
+                    return -1;
+                  };
 #ifdef GMP_ENABLE_VTK_VIEWER
                   const QStringList names =
                       params.value("boundary_names")
@@ -13997,9 +14062,26 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   if (!names.contains("top") || !names.contains("bottom") ||
                       !property_editor_->boundary_groups().contains("top") ||
                       !property_editor_->boundary_groups().contains(
-                          "bottom")) {
+                          "bottom") ||
+                      !property_editor_->volume_groups().contains(
+                          "concrete_cube__concrete") ||
+                      mesh_snapshot_.mesh_dim != 3 ||
+                      mesh_snapshot_.node_count != 1331 ||
+                      mesh_snapshot_.element_count != 1000 ||
+                      mesh_snapshot_.element_type != "HEX8" ||
+                      !mesh_snapshot_.has_group("concrete_cube__concrete", 3) ||
+                      !mesh_snapshot_.has_group("top", 2) ||
+                      !mesh_snapshot_.has_group("bottom", 2) ||
+                      find_group_row("concrete_cube__concrete") < 0 ||
+                      find_group_row("bottom") < 0 ||
+                      find_group_row("top") < 0 ||
+                      !group_table ||
+                      group_table->selectionMode() !=
+                          QAbstractItemView::NoSelection ||
+                      mesh_snapshot_.mesh_sha256 !=
+                          "51d296cd1e43d8bb47e2984f49b9ca8aef29db47caf9bb34dbe93974a212f03e") {
                     throw std::runtime_error(
-                        "W-02b boundary name extraction contract failed");
+                        "W-02b Exodus manifest extraction contract failed");
                   }
 #endif
                   // 还原：移除节点、恢复网格路径与组清单，避免污染后续步骤。
@@ -14008,7 +14090,14 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     moose_panel_->set_mesh_path(saved_mesh_path);
                   }
                   property_editor_->set_boundary_groups(saved_boundaries);
+                  property_editor_->set_volume_groups(saved_volumes);
                   moose_panel_->set_boundary_groups(saved_boundaries);
+                  mesh_snapshot_ = saved_snapshot;
+                  if (gmsh_panel_) {
+                    gmsh_panel_->set_physical_group_manifest(
+                        saved_snapshot.to_variant_map());
+                  }
+                  push_context_to_moose_panel();
                   refresh_module_pages();
                 },
                 mesh_work_window_});
@@ -17191,6 +17280,38 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         "W-03d idempotency contract failed (repeated sync "
                         "duplicated generated blocks)");
                   }
+                  // V01 标准历史输出预设：真实 UI 选择后应逐项生成冻结
+                  // 算例的顶/底反力、顶面位移和差异化极值请求。
+                  property_editor_->set_item(out_item);
+                  flush_form_rebuilds();
+                  auto* history_profile =
+                      property_editor_->findChild<QComboBox*>(
+                          "outputsHistoryProfile");
+                  if (!history_profile ||
+                      history_profile->findText("cdp_uniaxial_z") < 0) {
+                    throw std::runtime_error(
+                        "V01 history output preset is unavailable");
+                  }
+                  history_profile->setCurrentText("cdp_uniaxial_z");
+                  flush_form_rebuilds();
+                  sync_model_to_input();
+                  const QString v01_input = moose_panel_->input_text();
+                  const QStringList v01_history = {
+                      "[min_stress_zz]", "[RP1_Force]", "[Bottom_Force]",
+                      "[Top_Force_X]", "[Top_Force_Y]",
+                      "[RP1_Displacement]", "[max_damagec]",
+                      "[max_damaget]", "[max_mises]", "[max_stress_zz]",
+                      "[max_local_iterations]",
+                      "[max_accepted_substeps]",
+                      "[max_jacobian_fallbacks]"};
+                  for (const auto& marker : v01_history) {
+                    if (!v01_input.contains(marker)) {
+                      throw std::runtime_error(
+                          QString("V01 history preset is missing %1")
+                              .arg(marker)
+                              .toStdString());
+                    }
+                  }
                   // 还原：移除节点、恢复面组清单与表单选择。
                   property_editor_->set_item(nullptr);
                   remove_item(out_item);
@@ -17198,6 +17319,180 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   remove_item(material);
                   property_editor_->set_boundary_groups(saved_boundaries);
                   refresh_module_pages();
+                },
+                this});
+  steps.append({"cdp_v01_structured_reproduction_contract",
+                [this, resolve_tour_fixture]() {
+                  // STD-CAE-040：从空模型树只用现有结构化对象组成 V01。
+                  // 各表单的真实点击由相邻定向合同覆盖；本合同证明这些
+                  // 对象能共同生成一份可通过本地工作流预检的完整输入。
+                  if (!property_editor_ || !moose_panel_ || !model_tree_ ||
+                      !viewer_) {
+                    throw std::runtime_error(
+                        "V01 structured reproduction fixture is missing");
+                  }
+                  const QString restore_path =
+                      QDir::tempPath() + "/gmp_tour_v01_restore.gmp.yaml";
+                  if (!save_project(restore_path)) {
+                    throw std::runtime_error(
+                        "V01 could not save the restore fixture");
+                  }
+                  auto restore = [this, &restore_path]() {
+                    const bool ok = load_project(restore_path);
+                    QFile::remove(restore_path);
+                    QDir(QFileInfo(restore_path).absolutePath() +
+                         "/.work/case/gmp_tour_v01_restore")
+                        .removeRecursively();
+                    return ok;
+                  };
+
+                  property_editor_->set_item(nullptr);
+                  clear_model_tree_children();
+                  set_active_app_profile("DamSafetyApp-opt",
+                                         /*mark_dirty=*/false);
+
+                  const QString fixture_dir =
+                      resolve_tour_fixture("cdp-v01");
+                  const QString mesh =
+                      QDir(fixture_dir).filePath("uniaxial_compression_mesh.e");
+                  if (fixture_dir.isEmpty() || !import_exodus_mesh(mesh)) {
+                    restore();
+                    throw std::runtime_error(
+                        "V01 Exodus fixture could not be imported");
+                  }
+
+                  QVariantMap material{
+                      {"type", "AbaqusCDP"},
+                      {"youngs_modulus", "29791500000"},
+                      {"poissons_ratio", "0.2"},
+                      {"dilation_angle", "36"},
+                      {"eccentricity", "0.1"},
+                      {"biaxial_to_uniaxial_compression_ratio", "1.16"},
+                      {"tensile_meridian_ratio", "0.667"},
+                      {"viscosity", "5e-4"},
+                      {"tension_recovery", "0"},
+                      {"compression_recovery", "1"},
+                      {"maximum_substeps", "256"},
+                      {"maximum_strain_increment", "2.5e-5"},
+                      {"enable_performance_diagnostics", "true"},
+                      {"unit_factor_stress", "1000000"}};
+                  for (const QString& name :
+                       {QString("compression_hardening"),
+                        QString("compression_damage"),
+                        QString("tension_stiffening"),
+                        QString("tension_damage")}) {
+                    material.insert(name + "_file",
+                                    QDir(fixture_dir).filePath(name + ".csv"));
+                  }
+                  add_child_item(find_root_item("Materials"), "concrete",
+                                 "Materials", material);
+                  add_child_item(
+                      find_root_item("Sections"), "concrete_section",
+                      "Sections",
+                      {{"type", "SolidSection"},
+                       {"material", "concrete"},
+                       {"block", "concrete_cube__concrete"}});
+
+                  QVariantMap physics = default_params_for_kind("Physics");
+                  physics.insert("block", "concrete_cube__concrete");
+                  add_child_item(find_root_item("Physics"), "concrete",
+                                 "Physics", physics);
+                  add_child_item(find_root_item("Functions"),
+                                 "top_displacement", "Functions",
+                                 {{"type", "ParsedFunction"},
+                                  {"expression", "2.5e-05*t"}});
+                  auto add_bc = [this](const QString& name,
+                                       const QVariantMap& params) {
+                    add_child_item(find_root_item("BC"), name, "BC", params);
+                  };
+                  add_bc("bottom_z", {{"type", "DirichletBC"},
+                                      {"variable", "disp_z"},
+                                      {"boundary", "bottom"},
+                                      {"value", "0"}});
+                  add_bc("top_x_gauge", {{"type", "DirichletBC"},
+                                         {"variable", "disp_x"},
+                                         {"boundary", "top"},
+                                         {"value", "0"}});
+                  add_bc("top_y_gauge", {{"type", "DirichletBC"},
+                                         {"variable", "disp_y"},
+                                         {"boundary", "top"},
+                                         {"value", "0"}});
+                  add_bc("top_z", {{"type", "FunctionDirichletBC"},
+                                   {"variable", "disp_z"},
+                                   {"boundary", "top"},
+                                   {"function", "top_displacement"}});
+                  add_child_item(find_root_item("Steps"), "step_v01", "Steps",
+                                 default_params_for_kind("Steps"));
+
+                  QVariantMap outputs = default_params_for_kind("Outputs");
+                  outputs.insert(
+                      "field_outputs",
+                      "DamageC DamageT kappa_c kappa_t local_iterations "
+                      "accepted_substeps jacobian_fallbacks "
+                      "integration_microseconds");
+                  outputs.insert("history_profile", "cdp_uniaxial_z");
+                  outputs.insert("times_enabled", "true");
+                  outputs.insert("file_base", "uniaxial_tension_single");
+                  add_child_item(find_root_item("Outputs"), "v01_outputs",
+                                 "Outputs", outputs);
+
+                  QString failure;
+                  if (!sync_model_to_input()) {
+                    failure = "V01 model-to-input synchronization failed";
+                  }
+                  const QString input = moose_panel_->input_text();
+                  const QStringList expected{
+                      "[Mesh/file]",
+                      "file = " + mesh,
+                      "[Physics/SolidMechanics/QuasiStatic/concrete]",
+                      "block = concrete_cube__concrete",
+                      "[Functions]",
+                      "[top_displacement]",
+                      "expression = 2.5e-05*t",
+                      "[bottom_z]",
+                      "[top_x_gauge]",
+                      "[top_y_gauge]",
+                      "[top_z]",
+                      "type = ComputeIsotropicElasticityTensor",
+                      "type = ComputeMultipleInelasticStress",
+                      "type = AbaqusCDPStressUpdate",
+                      "compression_hardening_file = compression_hardening.csv",
+                      "[integration_microseconds]",
+                      "property = cdp_integration_microseconds",
+                      "[RP1_Force]",
+                      "[Bottom_Force]",
+                      "[RP1_Displacement]",
+                      "[max_jacobian_fallbacks]",
+                      "[Preconditioning/smp]",
+                      "[Executioner]",
+                      "[TimeStepper]",
+                      "[Times/field_output_times]",
+                      "file_base = uniaxial_tension_single"};
+                  for (const auto& marker : expected) {
+                    if (failure.isEmpty() && !input.contains(marker)) {
+                      failure = "V01 generated input is missing: " + marker;
+                    }
+                  }
+                  if (failure.isEmpty()) {
+                    for (const QVariant& value : collect_workflow_issues()) {
+                      const QVariantMap issue = value.toMap();
+                      if (issue.value("severity").toString() == "error") {
+                        failure = QString("V01 preflight error: %1 / %2 / %3")
+                                      .arg(issue.value("root").toString(),
+                                           issue.value("field").toString(),
+                                           issue.value("message").toString());
+                        break;
+                      }
+                    }
+                  }
+                  const bool restored = restore();
+                  if (!restored) {
+                    throw std::runtime_error(
+                        "V01 could not restore the tour project");
+                  }
+                  if (!failure.isEmpty()) {
+                    throw std::runtime_error(failure.toStdString());
+                  }
                 },
                 this});
   steps.append({"workflow_preflight_contract",

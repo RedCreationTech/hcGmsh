@@ -60,6 +60,8 @@ class QStackedWidget;
 
 namespace gmp {
 
+struct PhysicalGroupManifest;
+
 // 草图绘制工具 (VtkViewer::set_sketch_tool 参数,
 // 与 SketchPanel::tool_selected 信号的 int 值一一对应)
 enum SketchTool {
@@ -122,6 +124,9 @@ class VtkViewer : public QWidget {
   void refresh_sketch();
   void set_exodus_file(const QString& path);
   void set_exodus_history(const QStringList& paths);
+  // 显式导入 Exodus 输入网格时提取 element block、node/side set 与
+  // 网格计数，供 Section/BC/快照共用同一份 manifest。
+  PhysicalGroupManifest read_exodus_mesh_manifest(const QString& path) const;
   // W-02b：轻量读取 Exodus 文件的可作为 MOOSE boundary 的集合名
   // （side set 为主；本类网格常以 node set 表达边界，故一并收录 node set）。
   // 读取失败返回空清单，不抛异常、不影响舞台当前状态。

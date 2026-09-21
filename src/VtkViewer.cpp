@@ -1,6 +1,7 @@
 #include "gmp/VtkViewer.h"
 
 #include "gmp/MeshViewport.h"
+#include "gmp/PhysicalGroupManifest.h"
 #include "gmp/ResultViewport.h"
 #include "gmp/SketchViewport.h"
 #include "ViewportInternal.h"
@@ -1786,6 +1787,10 @@ bool VtkViewer::is_mesh_entity_preview_visible(int dim, int tag) const {
 }
 void VtkViewer::set_exodus_history(const QStringList& paths) {
   result_viewport_->set_exodus_history(paths);
+}
+PhysicalGroupManifest VtkViewer::read_exodus_mesh_manifest(
+    const QString& path) const {
+  return result_viewport_->read_exodus_mesh_manifest(path);
 }
 QStringList VtkViewer::read_exodus_side_set_names(const QString& path) const {
   return result_viewport_->read_exodus_side_set_names(path);

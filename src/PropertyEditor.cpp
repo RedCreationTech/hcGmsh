@@ -2286,6 +2286,8 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     add_checkbox_group("Field Variables", "field_outputs",
                        kCdpFieldOutputVariables, "outputsFieldOutputs");
     add_section("History Output");
+    add_combo("History Preset", "history_profile",
+              {"custom", "cdp_uniaxial_z"}, "outputsHistoryProfile");
     add_combo("Reaction Force", "hist_reaction_force", {"false", "true"},
               "outputsHistReactionForce");
     add_combo("Displacement Avg", "hist_displacement_avg", {"false", "true"},

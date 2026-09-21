@@ -164,6 +164,7 @@ class GmshPanel : public QWidget {
   // TASK-V02-040：自定义组定义/恢复/校验下沉到 PhysicalGroupService。
   PhysicalGroupService physical_group_service_;
   QHash<QString, int> physical_group_element_counts_;
+  QVariantList physical_group_manifest_groups_;
 
   QComboBox* model_selector_ = nullptr;
   QLineEdit* geo_path_ = nullptr;

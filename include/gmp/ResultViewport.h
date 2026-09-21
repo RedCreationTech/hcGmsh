@@ -15,12 +15,14 @@ namespace gmp {
 
 class VtkViewer;
 class SketchDocument;
+struct PhysicalGroupManifest;
 
 class ResultViewport {
  public:
   explicit ResultViewport(VtkViewer* host) : host_(host) {}
   void set_exodus_file(const QString& path);
   void set_exodus_history(const QStringList& paths);
+  PhysicalGroupManifest read_exodus_mesh_manifest(const QString& path) const;
   QStringList read_exodus_side_set_names(const QString& path) const;
   QString plot_snapshot_text() const;
   QString plot_stats_snapshot() const;

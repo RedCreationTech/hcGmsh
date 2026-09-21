@@ -3064,8 +3064,15 @@ QString MoosePanel::find_exec_in_parents(const QString& relative,
 
 QStringList MoosePanel::read_boundary_groups_from_mesh(const QString& mesh_path) const {
   QStringList names;
-  if (QFileInfo(mesh_path).suffix().compare("msh", Qt::CaseInsensitive) == 0) {
+  const QString suffix = QFileInfo(mesh_path).suffix().toLower();
+  if (suffix == "msh") {
     return parse_msh_physical_groups(mesh_path);
+  }
+  // Exodus metadata is extracted by ResultViewport during import. Opening an
+  // Exodus file through Gmsh can throw while its global project lock is held,
+  // leaving every later geometry/mesh operation stuck in the busy state.
+  if (suffix == "e" || suffix == "exo" || suffix == "exodus") {
+    return names;
   }
 #ifndef GMP_ENABLE_GMSH_GUI
   return parse_msh_physical_groups(mesh_path);

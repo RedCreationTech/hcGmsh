@@ -1266,6 +1266,8 @@ void GmshPanel::set_assembly_instances(const QVariantList& instances) {
 void GmshPanel::reset_project_physical_groups() {
   physical_group_service_.clear();
   physical_group_element_counts_.clear();
+  physical_group_manifest_groups_.clear();
+  update_physical_group_table();
 }
 
 bool GmshPanel::build_assembly(QString* error) {
@@ -1397,6 +1399,7 @@ QVariantMap GmshPanel::gmsh_settings() const {
 
 void GmshPanel::set_physical_group_manifest(const QVariantMap& manifest) {
   physical_group_element_counts_.clear();
+  physical_group_manifest_groups_.clear();
   const QVariantList groups = manifest.value("physical_groups").toList();
   for (const QVariant& value : groups) {
     const QVariantMap group = value.toMap();
@@ -1406,6 +1409,7 @@ void GmshPanel::set_physical_group_manifest(const QVariantMap& manifest) {
     if (dim < 0 || dim > 3 || name.isEmpty() || element_count < 0) {
       continue;
     }
+    physical_group_manifest_groups_.append(group);
     physical_group_element_counts_.insert(
         QString("name:%1:%2").arg(dim).arg(name), element_count);
     for (const QVariant& tag_value : group.value("tags").toList()) {
@@ -3376,8 +3380,62 @@ void GmshPanel::update_physical_group_table() {
   if (!phys_group_table_) {
     return;
   }
+  auto show_imported_manifest = [this]() {
+    if (physical_group_manifest_groups_.isEmpty()) {
+      return false;
+    }
+    const QSignalBlocker blocker(phys_group_table_);
+    phys_group_table_->setSelectionMode(QAbstractItemView::NoSelection);
+    phys_group_table_->setRowCount(physical_group_manifest_groups_.size());
+    for (int row = 0; row < physical_group_manifest_groups_.size(); ++row) {
+      const QVariantMap group =
+          physical_group_manifest_groups_.at(row).toMap();
+      const QVariantList tags = group.value("tags").toList();
+      QStringList tag_text;
+      for (const QVariant& tag : tags) {
+        tag_text << tag.toString();
+      }
+      phys_group_table_->setItem(
+          row, 0,
+          new QTableWidgetItem(group.value("dim", -1).toString()));
+      phys_group_table_->setItem(
+          row, 1, new QTableWidgetItem(tag_text.join(", ")));
+      phys_group_table_->setItem(
+          row, 2, new QTableWidgetItem(group.value("name").toString()));
+      phys_group_table_->setItem(
+          row, 3,
+          new QTableWidgetItem(l10n::tr("Imported Exodus set (read-only)")));
+      phys_group_table_->setItem(
+          row, 4,
+          new QTableWidgetItem(
+              group.value("entity_count", 0).toString()));
+      phys_group_table_->setItem(
+          row, 5,
+          new QTableWidgetItem(
+              group.value("element_count", 0).toString()));
+    }
+    phys_group_table_->clearSelection();
+    phys_group_table_->setCurrentItem(nullptr);
+    phys_group_table_->resizeColumnsToContents();
+    if (phys_group_add_) {
+      phys_group_add_->setEnabled(false);
+    }
+    if (phys_group_update_) {
+      phys_group_update_->setEnabled(false);
+    }
+    if (phys_group_delete_) {
+      phys_group_delete_->setEnabled(false);
+    }
+    if (phys_group_feedback_) {
+      phys_group_feedback_->setText(l10n::tr(
+          "Physical groups imported from Exodus are read-only."));
+    }
+    return true;
+  };
   if (!gmsh_ready_) {
-    phys_group_table_->setRowCount(0);
+    if (!show_imported_manifest()) {
+      phys_group_table_->setRowCount(0);
+    }
     return;
   }
   std::vector<std::pair<int, int>> groups;
@@ -3387,6 +3445,25 @@ void GmshPanel::update_physical_group_table() {
     append_log(QString("Physical group list failed: %1").arg(ex.what()));
     phys_group_table_->setRowCount(0);
     return;
+  }
+
+  if (groups.empty() && show_imported_manifest()) {
+    return;
+  }
+
+  phys_group_table_->setSelectionMode(QAbstractItemView::SingleSelection);
+  if (phys_group_add_) {
+    phys_group_add_->setEnabled(true);
+  }
+  if (phys_group_update_) {
+    phys_group_update_->setEnabled(true);
+  }
+  if (phys_group_delete_) {
+    phys_group_delete_->setEnabled(true);
+  }
+  if (phys_group_feedback_) {
+    phys_group_feedback_->setText(l10n::tr(
+        "Group tag stays unchanged when its member entities are updated."));
   }
 
   const QString current =

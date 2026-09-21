@@ -22,7 +22,8 @@ EntryView entries_of(const QList<ProjectModelEntry>& entries,
 
 // W-03d：Outputs 套餐命名空间键（旧通用路径与通用子块输出时跳过）。
 const QStringList kOutputsPackageKeys = {
-    "field_outputs",          "hist_reaction_force",
+    "field_outputs",          "history_profile",
+    "hist_reaction_force",
     "hist_displacement_avg",  "hist_extremum",
     "hist_boundary",          "hist_disp_variable",
     "hist_extremum_variables", "hist_extremum_types",
@@ -664,6 +665,7 @@ QVariantMap outputs_package_config(const EntryView& output_items) {
   QStringList field_vars;
   QStringList extremum_vars;
   QStringList extremum_types;
+  QString history_profile;
   bool hist_reaction = false;
   bool hist_disp_avg = false;
   bool hist_extremum = false;
@@ -696,6 +698,13 @@ QVariantMap outputs_package_config(const EntryView& output_items) {
     const auto enabled = [&params](const QString& key) {
       return params.value(key).toString().trimmed() == "true";
     };
+    const QString candidate_profile =
+        params.value("history_profile").toString().trimmed();
+    if (!candidate_profile.isEmpty() && candidate_profile != "custom") {
+      history_profile = candidate_profile;
+    } else if (history_profile.isEmpty()) {
+      history_profile = candidate_profile;
+    }
     hist_reaction = hist_reaction || enabled("hist_reaction_force");
     hist_disp_avg = hist_disp_avg || enabled("hist_displacement_avg");
     hist_extremum = hist_extremum || enabled("hist_extremum");
@@ -744,9 +753,12 @@ QVariantMap outputs_package_config(const EntryView& output_items) {
   if (!any_exodus_key) {
     exodus_on = true;
   }
-  const bool package_active = !field_vars.isEmpty() || hist_reaction ||
+  const bool package_active = !field_vars.isEmpty() ||
+                              history_profile == "cdp_uniaxial_z" ||
+                              hist_reaction ||
                               hist_disp_avg || hist_extremum || times_enabled;
   cfg.insert("field_outputs", field_vars);
+  cfg.insert("history_profile", history_profile);
   cfg.insert("hist_reaction_force", hist_reaction);
   cfg.insert("hist_displacement_avg", hist_disp_avg);
   cfg.insert("hist_extremum", hist_extremum);
@@ -902,6 +914,76 @@ QString build_aux_kernels_block(const QVariantMap& cfg,
 
 QString build_postprocessors_block(const QVariantMap& cfg,
                                    QStringList* warnings) {
+  if (cfg.value("history_profile").toString() == "cdp_uniaxial_z") {
+    return QString::fromUtf8(R"([Postprocessors]
+  [min_stress_zz]
+    type = ElementExtremeValue
+    variable = stress_zz
+    value_type = min
+  []
+  [RP1_Force]
+    type = NodalSum
+    variable = resid_z
+    boundary = top
+  []
+  [Bottom_Force]
+    type = NodalSum
+    variable = resid_z
+    boundary = bottom
+  []
+  [Top_Force_X]
+    type = NodalSum
+    variable = resid_x
+    boundary = top
+  []
+  [Top_Force_Y]
+    type = NodalSum
+    variable = resid_y
+    boundary = top
+  []
+  [RP1_Displacement]
+    type = AverageNodalVariableValue
+    variable = disp_z
+    boundary = top
+  []
+  [max_damagec]
+    type = ElementExtremeValue
+    variable = DamageC
+    value_type = max
+  []
+  [max_damaget]
+    type = ElementExtremeValue
+    variable = DamageT
+    value_type = max
+  []
+  [max_mises]
+    type = ElementExtremeValue
+    variable = vonmises_stress
+    value_type = max
+  []
+  [max_stress_zz]
+    type = ElementExtremeValue
+    variable = stress_zz
+    value_type = max
+  []
+  [max_local_iterations]
+    type = ElementExtremeValue
+    variable = local_iterations
+    value_type = max
+  []
+  [max_accepted_substeps]
+    type = ElementExtremeValue
+    variable = accepted_substeps
+    value_type = max
+  []
+  [max_jacobian_fallbacks]
+    type = ElementExtremeValue
+    variable = jacobian_fallbacks
+    value_type = max
+  []
+[]
+)");
+  }
   const bool hist_reaction = cfg.value("hist_reaction_force").toBool();
   const bool hist_disp_avg = cfg.value("hist_displacement_avg").toBool();
   const bool hist_extremum = cfg.value("hist_extremum").toBool();

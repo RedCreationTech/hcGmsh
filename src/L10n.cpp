@@ -645,6 +645,7 @@ const QHash<QString, QString>& zh_dict() {
       {"Field Output", "场输出"},
       {"Field Variables", "场输出变量"},
       {"History Output", "历史输出"},
+      {"History Preset", "历史输出预设"},
       {"Reaction Force", "边界反力"},
       {"Displacement Avg", "边界平均位移"},
       {"Extremum", "场量极值"},
@@ -735,6 +736,9 @@ const QHash<QString, QString>& zh_dict() {
       {"Group Tag", "组标识"},
       {"Group tag stays unchanged when its member entities are updated.",
        "更新成员实体时，物理组标识保持不变。"},
+      {"Imported Exodus set (read-only)", "导入的 Exodus 集合（只读）"},
+      {"Physical groups imported from Exodus are read-only.",
+       "从 Exodus 导入的物理组为只读。"},
       {"IDs or dim:tag list", "ID 或 dim:tag 列表"},
       {"Output mesh path (*.msh)", "输出网格路径 (*.msh)"},
       // ===== MoosePanel =====
