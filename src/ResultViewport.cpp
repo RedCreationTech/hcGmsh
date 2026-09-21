@@ -2,6 +2,7 @@
 
 #include "gmp/MooseSnapshot.h"
 #include "gmp/PhysicalGroupManifest.h"
+#include "gmp/L10n.h"
 #include "gmp/VtkViewer.h"
 #include "ViewportInternal.h"
 #include "ViewportInternal.h"
@@ -101,6 +102,9 @@ namespace gmp {
 
 void ResultViewport::set_exodus_file(const QString& path) {
   host_->current_file_ = path;
+  history_cache_.clear();
+  host_->result_probe_id_ = -1;
+  host_->result_path_point_ids_.clear();
   if (!host_->file_label_) {
     return;
   }
@@ -292,6 +296,14 @@ QString ResultViewport::table_snapshot_text() const {
 
 QString ResultViewport::table_stats_snapshot() const {
   return host_->cached_table_stats_;
+}
+
+QVariantMap ResultViewport::plot_snapshot() const {
+  return host_->cached_plot_data_;
+}
+
+QVariantMap ResultViewport::table_snapshot() const {
+  return host_->cached_table_data_;
 }
 
 
@@ -693,7 +705,8 @@ void ResultViewport::update_vector_tab() {
 void ResultViewport::update_plot_view() {
 #ifndef GMP_ENABLE_VTK_VIEWER
   host_->cached_plot_text_ = QString::fromUtf8("vtk disabled");
-  host_->cached_plot_stats_ = QString::fromUtf8("vtk disabled");
+  host_->cached_plot_stats_ = l10n::tr("vtk disabled");
+  host_->cached_plot_data_.clear();
   return;
 #endif
   vtkDataSet* data = nullptr;
@@ -712,7 +725,8 @@ void ResultViewport::update_plot_view() {
   }
   if (!data) {
     host_->cached_plot_text_ = QString::fromUtf8("No data");
-    host_->cached_plot_stats_ = QString::fromUtf8("No data");
+    host_->cached_plot_stats_ = l10n::tr("No data");
+    host_->cached_plot_data_.clear();
     return;
   }
 
@@ -725,7 +739,8 @@ void ResultViewport::update_plot_view() {
   }
   if (key.isEmpty()) {
     host_->cached_plot_text_ = QString::fromUtf8("No array selected");
-    host_->cached_plot_stats_ = QString::fromUtf8("No array selected");
+    host_->cached_plot_stats_ = l10n::tr("No array selected");
+    host_->cached_plot_data_.clear();
     return;
   }
 
@@ -743,7 +758,8 @@ void ResultViewport::update_plot_view() {
   }
   if (!array) {
     host_->cached_plot_text_ = QString::fromUtf8("Selected array not found");
-    host_->cached_plot_stats_ = QString::fromUtf8("Invalid array");
+    host_->cached_plot_stats_ = l10n::tr("Invalid array");
+    host_->cached_plot_data_.clear();
     return;
   }
 
@@ -798,16 +814,218 @@ void ResultViewport::update_plot_view() {
     lines << QString("... %1 rows omitted ...").arg(tuples - limit);
   }
   host_->cached_plot_text_ = lines.join('\n');
-  host_->cached_plot_stats_ = QString("mode=%1 tuples=%2")
-                           .arg(host_->mode_ == VtkViewer::DataMode::Mesh ? "mesh" : "exodus")
-                           .arg(tuples);
+  host_->cached_plot_stats_ =
+      QString("%1=%2 %3=%4")
+          .arg(l10n::tr("Mode"),
+               host_->mode_ == VtkViewer::DataMode::Mesh ? "mesh" : "exodus",
+               l10n::tr("Tuples"))
+          .arg(tuples);
+
+  QStringList component_labels;
+  if (comps > 1) {
+    component_labels << "Magnitude";
+    for (int component = 0; component < comps; ++component)
+      component_labels << QString("C%1").arg(component);
+  } else {
+    component_labels << "Value";
+  }
+  const QString field = key.mid(2);
+  if (!host_->result_history_enabled_) {
+    host_->cached_plot_data_ = {
+        {"source", host_->current_file_},
+        {"field", field},
+        {"association", key.startsWith("P:") ? "Point" : "Cell"},
+        {"x_label", "Time"},
+        {"y_label", comps > 1 ? field + " magnitude" : field},
+        {"components", component_labels},
+        {"series", QVariantList()},
+        {"mode", "history deferred until Plot is opened"}};
+    return;
+  }
+  const bool spatial_path = key.startsWith("P:") &&
+                            host_->result_path_point_ids_.size() >= 2;
+  if (spatial_path) {
+    QVariantList series;
+    for (const QString& component : component_labels) {
+      const int component_index =
+          component.startsWith("C") ? component.mid(1).toInt() : -1;
+      QVariantList points;
+      double distance = 0.0;
+      double previous[3] = {0.0, 0.0, 0.0};
+      bool have_previous = false;
+      for (qlonglong raw_id : host_->result_path_point_ids_) {
+        const vtkIdType id = static_cast<vtkIdType>(raw_id);
+        if (id < 0 || id >= data->GetNumberOfPoints() ||
+            id >= array->GetNumberOfTuples())
+          continue;
+        double position[3];
+        data->GetPoint(id, position);
+        if (have_previous) {
+          const double dx = position[0] - previous[0];
+          const double dy = position[1] - previous[1];
+          const double dz = position[2] - previous[2];
+          distance += std::sqrt(dx * dx + dy * dy + dz * dz);
+        }
+        std::copy(position, position + 3, previous);
+        have_previous = true;
+        const double value =
+            component_index >= 0
+                ? array->GetComponent(id, component_index)
+                : (comps > 1 ? ComputeMagnitude(array, id)
+                             : array->GetComponent(id, 0));
+        points << QVariant(QVariantList{distance, value});
+      }
+      if (points.size() >= 2) {
+        series << QVariant(QVariantMap{
+            {"name", QString("%1 path %2").arg(key.mid(2), component)},
+            {"component", component},
+            {"y_label", key.mid(2)},
+            {"points", points}});
+      }
+    }
+    host_->cached_plot_data_ = {
+        {"source", host_->current_file_},
+        {"field", key.mid(2)},
+        {"association", "Point path"},
+        {"x_label", "Path distance"},
+        {"y_label", comps > 1 ? key.mid(2) + " magnitude" : key.mid(2)},
+        {"components", component_labels},
+        {"series", series},
+        {"mode", "spatial path (picked points)"}};
+    return;
+  }
+  const bool selected_entity =
+      host_->result_probe_id_ >= 0 &&
+      ((key.startsWith("P:") && host_->result_probe_point_) ||
+       (key.startsWith("C:") && !host_->result_probe_point_));
+  const QString cache_key =
+      QString("%1|%2|%3|%4")
+          .arg(host_->current_file_, key)
+          .arg(selected_entity ? host_->result_probe_id_ : -1)
+          .arg(selected_entity && host_->result_probe_point_ ? 1 : 0);
+  const auto cached = history_cache_.constFind(cache_key);
+  if (cached != history_cache_.cend()) {
+    host_->cached_plot_data_ = cached.value();
+    return;
+  }
+  QHash<QString, QVariantList> selected_points;
+  QHash<QString, QVariantList> minimum_points;
+  QHash<QString, QVariantList> mean_points;
+  QHash<QString, QVariantList> maximum_points;
+  auto append_sample = [this, selected_entity, component_labels,
+                        &selected_points, &minimum_points, &mean_points,
+                        &maximum_points](vtkDataArray* values, double x) {
+    if (!values || values->GetNumberOfTuples() == 0) return;
+    const int components = values->GetNumberOfComponents();
+    const vtkIdType count = values->GetNumberOfTuples();
+    for (const QString& label : component_labels) {
+      const int component = label.startsWith("C") ? label.mid(1).toInt() : -1;
+      auto value_at = [values, components, component](vtkIdType row) {
+        return component >= 0
+                   ? values->GetComponent(row, component)
+                   : (components > 1 ? ComputeMagnitude(values, row)
+                                     : values->GetComponent(row, 0));
+      };
+      double minimum = std::numeric_limits<double>::infinity();
+      double maximum = -std::numeric_limits<double>::infinity();
+      double sum = 0.0;
+      for (vtkIdType row = 0; row < count; ++row) {
+        const double value = value_at(row);
+        minimum = std::min(minimum, value);
+        maximum = std::max(maximum, value);
+        sum += value;
+      }
+      if (selected_entity && host_->result_probe_id_ < count) {
+        const vtkIdType row = static_cast<vtkIdType>(host_->result_probe_id_);
+        selected_points[label]
+            << QVariant(QVariantList{x, value_at(row)});
+      }
+      minimum_points[label] << QVariant(QVariantList{x, minimum});
+      mean_points[label]
+          << QVariant(QVariantList{x, sum / static_cast<double>(count)});
+      maximum_points[label] << QVariant(QVariantList{x, maximum});
+    }
+  };
+  if (host_->mode_ == VtkViewer::DataMode::Exodus && host_->reader_ &&
+      host_->geom_ && !host_->time_steps_.empty()) {
+    const int restore_index = current_time_step_index();
+    vtkInformation* info = host_->geom_->GetOutputInformation(0);
+    const int total = static_cast<int>(host_->time_steps_.size());
+    emit host_->result_history_progress(field, 0, total);
+    for (int index = 0; index < total; ++index) {
+      const double time = host_->time_steps_.at(index);
+      info->Set(vtkStreamingDemandDrivenPipeline::UPDATE_TIME_STEP(), time);
+      host_->geom_->Update();
+      vtkDataSet* sample = vtkDataSet::SafeDownCast(host_->geom_->GetOutput());
+      vtkDataArray* values = nullptr;
+      if (sample && key.startsWith("P:")) {
+        values = sample->GetPointData()->GetArray(key.mid(2).toUtf8().constData());
+      } else if (sample && key.startsWith("C:")) {
+        values = sample->GetCellData()->GetArray(key.mid(2).toUtf8().constData());
+      }
+      append_sample(values, time);
+      if ((index + 1) == total || (index + 1) % qMax(1, total / 20) == 0)
+        emit host_->result_history_progress(field, index + 1, total);
+    }
+    info->Set(vtkStreamingDemandDrivenPipeline::UPDATE_TIME_STEP(),
+              host_->time_steps_.at(qBound(
+                  0, restore_index,
+                  static_cast<int>(host_->time_steps_.size()) - 1)));
+    host_->geom_->Update();
+  } else {
+    append_sample(array, 0.0);
+  }
+  QVariantList series;
+  for (const QString& component : component_labels) {
+    const QString y_label = component == "Value"
+                                ? field
+                                : field + " " + component.toLower();
+    if (selected_entity && !selected_points.value(component).isEmpty()) {
+      series << QVariant(QVariantMap{
+          {"name", QString("%1 %2 %3%4")
+                       .arg(field, key.startsWith("P:") ? "point" : "cell")
+                       .arg(host_->result_probe_id_)
+                       .arg(component == "Value"
+                                ? QString()
+                                : " " + component)},
+          {"component", component},
+          {"y_label", y_label},
+          {"points", selected_points.value(component)}});
+    } else {
+      series << QVariant(QVariantMap{{"name", y_label + " min"},
+                                      {"component", component},
+                                      {"y_label", y_label},
+                                      {"points", minimum_points.value(component)}})
+             << QVariant(QVariantMap{{"name", y_label + " mean"},
+                                      {"component", component},
+                                      {"y_label", y_label},
+                                      {"points", mean_points.value(component)}})
+             << QVariant(QVariantMap{{"name", y_label + " max"},
+                                      {"component", component},
+                                      {"y_label", y_label},
+                                      {"points", maximum_points.value(component)}});
+    }
+  }
+  host_->cached_plot_data_ = {
+      {"source", host_->current_file_},
+      {"field", field},
+      {"association", key.startsWith("P:") ? "Point" : "Cell"},
+      {"x_label", host_->mode_ == VtkViewer::DataMode::Exodus ? "Time" : "Sample"},
+      {"y_label", comps > 1 ? field + " magnitude" : field},
+      {"components", component_labels},
+      {"series", series},
+      {"mode", selected_entity ? "selected-entity history"
+                                  : "field min/mean/max envelope"}};
+  history_cache_.insert(cache_key, host_->cached_plot_data_);
 }
 
 
 void ResultViewport::update_table_view() {
 #ifndef GMP_ENABLE_VTK_VIEWER
   host_->cached_table_text_ = QString::fromUtf8("vtk disabled");
-  host_->cached_table_stats_ = QString::fromUtf8("vtk disabled");
+  host_->cached_table_stats_ = l10n::tr("vtk disabled");
+  host_->cached_table_data_.clear();
+  emit host_->result_data_changed();
   return;
 #endif
   vtkDataSet* data = nullptr;
@@ -826,7 +1044,9 @@ void ResultViewport::update_table_view() {
   }
   if (!data) {
     host_->cached_table_text_ = QString::fromUtf8("No data");
-    host_->cached_table_stats_ = QString::fromUtf8("No data");
+    host_->cached_table_stats_ = l10n::tr("No data");
+    host_->cached_table_data_.clear();
+    emit host_->result_data_changed();
     return;
   }
 
@@ -839,7 +1059,9 @@ void ResultViewport::update_table_view() {
   }
   if (key.isEmpty()) {
     host_->cached_table_text_ = QString::fromUtf8("No array selected");
-    host_->cached_table_stats_ = QString::fromUtf8("No array selected");
+    host_->cached_table_stats_ = l10n::tr("No array selected");
+    host_->cached_table_data_.clear();
+    emit host_->result_data_changed();
     return;
   }
 
@@ -857,7 +1079,9 @@ void ResultViewport::update_table_view() {
   }
   if (!array) {
     host_->cached_table_text_ = QString::fromUtf8("Invalid array");
-    host_->cached_table_stats_ = QString::fromUtf8("Invalid array");
+    host_->cached_table_stats_ = l10n::tr("Invalid array");
+    host_->cached_table_data_.clear();
+    emit host_->result_data_changed();
     return;
   }
 
@@ -895,29 +1119,76 @@ void ResultViewport::update_table_view() {
     text_rows << QString("... omitted %1 rows ...").arg(tuples - rows);
   }
   host_->cached_table_text_ = text_rows.join('\n');
+  QVariantList raw_rows;
+  raw_rows.reserve(static_cast<qsizetype>(tuples));
+  for (vtkIdType i = 0; i < tuples; ++i) {
+    QVariantList row;
+    row << static_cast<qlonglong>(i);
+    for (int c = 0; c < comps; ++c) {
+      row << array->GetComponent(i, c);
+    }
+    if (comps > 1) {
+      row << ComputeMagnitude(array, i);
+    }
+    raw_rows << QVariant(row);
+  }
+  host_->cached_table_data_ = {
+      {"source", host_->current_file_},
+      {"field", key.mid(2)},
+      {"association", key.startsWith("P:") ? "Point" : "Cell"},
+      {"time", host_->time_steps_.empty()
+                   ? QVariant(0.0)
+                   : QVariant(host_->time_steps_.at(
+                         qBound(0, current_time_step_index(),
+                                static_cast<int>(host_->time_steps_.size()) - 1)))},
+      {"columns", headers},
+      {"rows", raw_rows},
+      {"total_rows", static_cast<qlonglong>(tuples)}};
   if (comps > 1) {
     VectorStats stats = AnalyzeVectorArray(array);
     if (stats.has_data) {
       host_->cached_table_stats_ =
-          QString("mode=%1, tuples=%2, show=%3, %4")
-              .arg(host_->mode_ == VtkViewer::DataMode::Mesh ? "mesh" : "exodus")
+          QString("%1=%2, %3=%4, %5=%6, %7")
+              .arg(l10n::tr("Mode"),
+                   host_->mode_ == VtkViewer::DataMode::Mesh ? "mesh" : "exodus",
+                   l10n::tr("Tuples"))
               .arg(tuples)
+              .arg(l10n::tr("Shown"))
               .arg(rows)
               .arg(FormatVectorStatsText(stats));
     } else {
       host_->cached_table_stats_ =
-          QString("tuples=%1, show=%2, components=%3")
+          QString("%1=%2, %3=%4, %5=%6")
+              .arg(l10n::tr("Tuples"))
               .arg(tuples)
+              .arg(l10n::tr("Shown"))
               .arg(rows)
+              .arg(l10n::tr("Components"))
               .arg(comps);
     }
   } else {
+    double range[2] = {0.0, 0.0};
+    array->GetRange(range);
+    vtkIdType nonzero = 0;
+    for (vtkIdType row = 0; row < tuples; ++row) {
+      const double value = array->GetComponent(row, 0);
+      if (std::isfinite(value) && value != 0.0) ++nonzero;
+    }
     host_->cached_table_stats_ =
-        QString("tuples=%1, show=%2, components=%3")
+        QString("%1=%2, %3=[%4, %5], %6=%7%8")
+            .arg(l10n::tr("Tuples"))
             .arg(tuples)
-            .arg(rows)
-            .arg(comps);
+            .arg(l10n::tr("Range"))
+            .arg(range[0], 0, 'g', 8)
+            .arg(range[1], 0, 'g', 8)
+            .arg(l10n::tr("Nonzero"))
+            .arg(nonzero)
+            .arg(nonzero == 0 && !host_->time_steps_.empty()
+                     ? QString(" — ") +
+                           l10n::tr("all values are zero at this time step")
+                     : QString());
   }
+  emit host_->result_data_changed();
 }
 
 
@@ -1127,6 +1398,7 @@ void ResultViewport::refresh_from_disk() {
   const bool changed =
       (host_->last_file_size_ != fi.size()) || (host_->last_file_mtime_ != fi.lastModified());
   if (changed) {
+    history_cache_.clear();
     host_->last_file_size_ = fi.size();
     host_->last_file_mtime_ = fi.lastModified();
     if (host_->mode_ == VtkViewer::DataMode::Exodus) {
@@ -1161,19 +1433,16 @@ void ResultViewport::refresh_time_only() {
     return;
   }
   if (!host_->time_steps_.empty()) {
-    vtkInformation* info = host_->reader_->GetOutputInformation(0);
+    vtkInformation* info = host_->geom_->GetOutputInformation(0);
     if (info) {
       const int idx = host_->time_slider_->value();
       const double t = host_->time_steps_[idx];
       info->Set(vtkStreamingDemandDrivenPipeline::UPDATE_TIME_STEP(), t);
     }
   }
-  host_->reader_->Update();
-  // 同 update_pipeline：强制下游随新时间步重新执行（reader 输出原地复用，
-  // 仅 reader->Update() 不会触发 geom 重算）。
-  if (host_->block_pad_) {
-    host_->block_pad_->Modified();
-  }
+  // 在最终消费者上请求时间步，让 VTK 将 UPDATE_TIME_STEP 正确向上游传播。
+  // 直接写 reader 的 output information 会在下游 Update 时被当前请求覆盖，
+  // 导致不同时间步反复读取同一帧。
   host_->geom_->Update();
   // 时间步变化后场数据已更新，必须重算当前数组范围并刷新映射，
   // 否则色标仍停留在旧时间步（加载时 t=0 全为 0，云图恒为均匀色）。

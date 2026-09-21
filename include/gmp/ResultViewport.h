@@ -6,6 +6,7 @@
 // 无 Q_OBJECT：信号经 host_ 发射（VtkViewer 声明其为 friend）。
 
 #include <QList>
+#include <QHash>
 #include <QPoint>
 #include <QString>
 #include <QStringList>
@@ -28,6 +29,8 @@ class ResultViewport {
   QString plot_stats_snapshot() const;
   QString table_snapshot_text() const;
   QString table_stats_snapshot() const;
+  QVariantMap plot_snapshot() const;
+  QVariantMap table_snapshot() const;
   void on_reload();
   int current_time_step_index() const;
   void set_time_step_index(int index);
@@ -54,6 +57,7 @@ class ResultViewport {
 
  private:
   VtkViewer* host_;
+  QHash<QString, QVariantMap> history_cache_;
 };
 
 }  // namespace gmp

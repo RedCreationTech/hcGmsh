@@ -28,6 +28,7 @@
 #include <QDockWidget>
 #include <QCloseEvent>
 #include <QEvent>
+#include <QEventLoop>
 #include <QMouseEvent>
 #include <QStackedWidget>
 #include <QFrame>
@@ -67,14 +68,20 @@
 #include <QTextStream>
 #include <QDateTime>
 #include <QTimer>
+#include <QTemporaryDir>
+#include <algorithm>
 #include <memory>
 #include <cmath>
 #include <functional>
 #include <stdexcept>
 #include <vector>
+#include <filesystem>
 
 #include <fstream>
 #include <QFileInfo>
+#include <QFutureWatcher>
+#include <QProgressDialog>
+#include <QtConcurrent>
 #include <QJsonArray>
 #include <yaml-cpp/yaml.h>
 
@@ -91,6 +98,8 @@
 #include "gmp/PartFeaturePanel.h"
 #include "gmp/PropertyEditor.h"
 #include "gmp/ProjectSchema.h"
+#include "gmp/ResultsWidgets.h"
+#include "gmp/ResultData.h"
 #include "gmp/SketchDocument.h"
 #include "gmp/StageLeftToolbar.h"
 #include "gmp/SketchPanel.h"
@@ -1060,13 +1069,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   plot_open_row->addWidget(plot_refresh_btn);
   plot_open_row->addWidget(plot_status, 1);
   plot_layout->addLayout(plot_open_row);
-  auto* plot_view = new QPlainTextEdit(plot_page);
-  plot_view->setReadOnly(true);
-  plot_view->setLineWrapMode(QPlainTextEdit::NoWrap);
+  auto* plot_view = new gmp::ResultsPlotWidget(plot_page);
+  results_plot_widget_ = plot_view;
   QFont mono;
   mono.setFamilies({"SFMono-Regular", "Monaco", "Consolas", "Menlo"});
   mono.setStyleHint(QFont::Monospace);
-  plot_view->setFont(mono);
   plot_layout->addWidget(plot_view, 1);
 
   auto* table_page = new QWidget();
@@ -1076,15 +1083,27 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* table_open_row = new QHBoxLayout();
   auto* table_open_btn = new QPushButton("Open Visualization", table_page);
   auto* table_refresh_btn = new QPushButton("Refresh", table_page);
+  auto* table_time_step = new QSpinBox(table_page);
+  results_table_time_step_ = table_time_step;
+  table_time_step->setObjectName("resultTableTimeStep");
+  table_time_step->setRange(0, 0);
+  table_time_step->setEnabled(false);
+  table_time_step->setPrefix(l10n::tr("Time step") + " ");
+  table_time_step->setToolTip(
+      "The table shows entity values at this viewport time step.");
+  auto* table_latest_btn = new QPushButton("Latest", table_page);
+  table_latest_btn->setObjectName("resultTableLatestStep");
+  table_latest_btn->setEnabled(false);
+  table_latest_btn->setToolTip("Show the last available result time step.");
   auto* table_status = new QLabel("No data", table_page);
   table_open_row->addWidget(table_open_btn);
   table_open_row->addWidget(table_refresh_btn);
+  table_open_row->addWidget(table_time_step);
+  table_open_row->addWidget(table_latest_btn);
   table_open_row->addWidget(table_status, 1);
   table_layout->addLayout(table_open_row);
-  auto* table_view = new QPlainTextEdit(table_page);
-  table_view->setReadOnly(true);
-  table_view->setLineWrapMode(QPlainTextEdit::NoWrap);
-  table_view->setFont(mono);
+  auto* table_view = new gmp::ResultsTableWidget(table_page);
+  results_table_widget_ = table_view;
   table_layout->addWidget(table_view, 1);
   // 中央区域只保留 Viewport；Plot/Table 在 Results 工作窗中展示。
   center_tabs->tabBar()->hide();
@@ -2394,6 +2413,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   results_import->setToolTip(
       "Import an external result file (.e/.exo/.msh/.csv/.txt/.log) into "
       "the results list.");
+  auto* results_import_package =
+      new QPushButton("Import Task Directory...", results_page);
+  results_import_package->setObjectName("resultsImportPackage");
+  results_import_package->setToolTip(
+      "Import a task root or its results directory and classify all artifacts.");
+  auto* results_verify_package = new QPushButton("Verify Package", results_page);
+  results_verify_package->setObjectName("resultsVerifyPackage");
+  auto* results_trash_copy =
+      new QPushButton("Trash Project Copy...", results_page);
+  results_trash_copy->setObjectName("resultsTrashProjectCopy");
+  auto* results_relocate = new QPushButton("Relocate...", results_page);
+  results_relocate->setObjectName("resultsRelocatePackage");
+  auto* results_rescan = new QPushButton("Rescan...", results_page);
+  results_rescan->setObjectName("resultsRescanPackage");
   auto* results_open_view = new QPushButton("Open in Viewer", results_page);
   auto* results_open_text = new QPushButton("Open as Text", results_page);
   auto* results_preview_toggle = new QPushButton("Preview", results_page);
@@ -2412,10 +2445,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   results_type_filter_->addItem("Solver (.e/.exo)", "e");
   results_type_filter_->addItem("Mesh (.msh)", "msh");
   results_type_filter_->addItem("Text (.txt/.csv/.log/.yaml/.yml)", "txt");
-  // 操作行拆两行（P0 审计 C7）：第一行文件操作，第二行视图与过滤。
+  // 文件、结果包和视图操作分行，避免窄窗口下按钮挤压。
   results_file_actions->addWidget(results_open_root);
   results_file_actions->addWidget(results_refresh);
   results_file_actions->addWidget(results_import);
+  results_file_actions->addWidget(results_import_package);
   connect(results_import, &QPushButton::clicked, this, [this]() {
     const QString path = QFileDialog::getOpenFileName(
         this, "Import Result File", QDir::homePath(),
@@ -2425,10 +2459,199 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       import_result_file(path);
     }
   });
+  connect(results_import_package, &QPushButton::clicked, this, [this]() {
+    const QString path = QFileDialog::getExistingDirectory(
+        this, "Import Task Directory", QDir::homePath());
+    if (!path.isEmpty()) import_result_package(path);
+  });
+  connect(results_verify_package, &QPushButton::clicked, this,
+          [this, results_verify_package]() {
+    if (!results_list_ || !results_list_->currentItem()) return;
+    const QString job =
+        results_list_->currentItem()->data(Qt::UserRole + 1).toString();
+    const QString package_root =
+        results_list_->currentItem()->data(Qt::UserRole + 3).toString();
+    auto* root = find_root_item("Results");
+    for (int i = 0; root && i < root->childCount(); ++i) {
+      const QVariantMap params = root->child(i)
+                                     ->data(0, PropertyEditor::kParamsRole)
+                                     .toMap();
+      if (params.value("role").toString() != "result_package" ||
+          (!package_root.isEmpty() &&
+           params.value("package_root").toString() != package_root) ||
+          (package_root.isEmpty() && !job.isEmpty() &&
+           params.value("package_job_id").toString() != job))
+        continue;
+      const gmp::ResultPackage package = gmp::inspect_result_package(
+          params.value("package_root").toString());
+      if (!package.managed) {
+        QMessageBox::information(
+            this, "Package Integrity",
+            "This is an unmanaged package without snapshot-manifest.json; "
+            "integrity cannot be verified.");
+        return;
+      }
+      results_verify_package->setEnabled(false);
+      auto* progress = new QProgressDialog(
+          "Computing SHA-256 for every manifest file...", QString(), 0, 0,
+          this);
+      progress->setWindowTitle("Package Integrity");
+      progress->setWindowModality(Qt::WindowModal);
+      progress->setCancelButton(nullptr);
+      progress->show();
+      auto* watcher = new QFutureWatcher<QStringList>(this);
+      connect(watcher, &QFutureWatcher<QStringList>::finished, this,
+              [this, watcher, progress, results_verify_package,
+               package_root]() {
+                const QStringList issues = watcher->result();
+                watcher->deleteLater();
+                progress->close();
+                progress->deleteLater();
+                results_verify_package->setEnabled(true);
+                if (auto* root = find_root_item("Results")) {
+                  for (int row = 0; row < root->childCount(); ++row) {
+                    auto* item = root->child(row);
+                    QVariantMap saved = item->data(
+                                                0,
+                                                PropertyEditor::kParamsRole)
+                                            .toMap();
+                    if (saved.value("package_root").toString() !=
+                        package_root)
+                      continue;
+                    saved.insert("integrity_status",
+                                 issues.isEmpty() ? "verified" : "failed");
+                    const QString main_relative = QDir::cleanPath(
+                        QDir(package_root)
+                            .relativeFilePath(
+                                saved.value("main_exodus").toString()));
+                    bool main_result_usable = true;
+                    for (const QString& issue : issues) {
+                      if (issue.endsWith(main_relative)) {
+                        main_result_usable = false;
+                        break;
+                      }
+                    }
+                    saved.insert("main_result_usable", main_result_usable);
+                    saved.insert("integrity_issues", issues);
+                    commit_object_edit(item, item->text(0), saved);
+                    set_object_status(item,
+                                      issues.isEmpty() ? "Success" : "Warning");
+                    set_project_dirty(true);
+                    break;
+                  }
+                }
+                refresh_results_panel();
+                QMessageBox::information(
+                    this, "Package Integrity",
+                    issues.isEmpty()
+                        ? "SHA-256 verification passed for every manifest file."
+                        : issues.join("\n"));
+              });
+      watcher->setFuture(QtConcurrent::run(
+          [package]() { return gmp::verify_result_package(package); }));
+      return;
+    }
+    QMessageBox::information(this, "Package Integrity",
+                             "Select a managed result package first.");
+  });
+  connect(results_trash_copy, &QPushButton::clicked, this, [this]() {
+    if (!results_list_ || !results_list_->currentItem()) return;
+    const QString package_root =
+        results_list_->currentItem()->data(Qt::UserRole + 3).toString();
+    auto* root = find_root_item("Results");
+    QTreeWidgetItem* package_item = nullptr;
+    QVariantMap params;
+    for (int row = 0; root && row < root->childCount(); ++row) {
+      const QVariantMap candidate =
+          root->child(row)->data(0, PropertyEditor::kParamsRole).toMap();
+      if (candidate.value("package_root").toString() == package_root) {
+        package_item = root->child(row);
+        params = candidate;
+        break;
+      }
+    }
+    if (!package_item || params.value("import_mode").toString() != "copy") {
+      QMessageBox::information(
+          this, "Trash Project Copy",
+          "Select a result package imported as a project copy. External "
+          "references are never deleted by this action.");
+      return;
+    }
+    const QString allowed_root =
+        QDir(QFileInfo(project_path_).absolutePath())
+            .absoluteFilePath(".work/results");
+    const QString target = QFileInfo(package_root).absoluteFilePath();
+    if (!target.startsWith(QDir::cleanPath(allowed_root) + QDir::separator())) {
+      QMessageBox::warning(this, "Trash Project Copy",
+                           "Refusing to delete a directory outside the current "
+                           "project's .work/results folder.");
+      return;
+    }
+    qint64 bytes = 0;
+    QDirIterator files(target, QDir::Files, QDirIterator::Subdirectories);
+    while (files.hasNext()) bytes += QFileInfo(files.next()).size();
+    if (QMessageBox::warning(
+            this, "Trash Project Copy",
+            QString("Move this project copy to the system Trash?\n\n%1\n%2 MB\n\n"
+                    "The original external source is not affected.")
+                .arg(target)
+                .arg(bytes / 1048576.0, 0, 'f', 2),
+            QMessageBox::Yes | QMessageBox::Cancel,
+            QMessageBox::Cancel) != QMessageBox::Yes)
+      return;
+    QString trashed_path;
+    if (!QFile::moveToTrash(target, &trashed_path)) {
+      QMessageBox::critical(this, "Trash Project Copy",
+                            "The directory could not be moved to Trash.");
+      return;
+    }
+    remove_item(package_item);
+    statusBar()->showMessage("Project result copy moved to Trash: " +
+                                 trashed_path,
+                             5000);
+  });
+  connect(results_relocate, &QPushButton::clicked, this, [this]() {
+    if (!results_list_ || !results_list_->currentItem() ||
+        results_list_->currentItem()
+                ->data(Qt::UserRole + 3)
+                .toString()
+                .isEmpty()) {
+      QMessageBox::information(this, "Relocate Result Package",
+                               "Select a result package first.");
+      return;
+    }
+    const QString old_root =
+        results_list_->currentItem()->data(Qt::UserRole + 3).toString();
+    const QString path = QFileDialog::getExistingDirectory(
+        this, "Relocate Result Package", QDir::homePath());
+    if (!path.isEmpty()) import_result_package(path, old_root);
+  });
+  connect(results_rescan, &QPushButton::clicked, this, [this]() {
+    if (!results_list_ || !results_list_->currentItem()) return;
+    const QString path =
+        results_list_->currentItem()->data(Qt::UserRole + 3).toString();
+    if (path.isEmpty() || !QFileInfo::exists(path)) {
+      QMessageBox::information(
+          this, "Rescan Result Package",
+          "The package directory is unavailable. Use Relocate first.");
+      return;
+    }
+    import_result_package(path);
+  });
   results_file_actions->addStretch(1);
   auto* results_file_row = new QWidget(results_page);
   results_file_row->setLayout(results_file_actions);
   results_layout->addWidget(results_file_row);
+
+  auto* results_package_actions = new QHBoxLayout();
+  results_package_actions->addWidget(results_verify_package);
+  results_package_actions->addWidget(results_rescan);
+  results_package_actions->addWidget(results_relocate);
+  results_package_actions->addWidget(results_trash_copy);
+  results_package_actions->addStretch(1);
+  auto* results_package_row = new QWidget(results_page);
+  results_package_row->setLayout(results_package_actions);
+  results_layout->addWidget(results_package_row);
 
   auto* results_view_actions = new QHBoxLayout();
   results_view_actions->addWidget(results_open_view);
@@ -2470,6 +2693,34 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     }
     const QString ext = QFileInfo(path).suffix().toLower();
     if (ext == "e" || ext == "exo" || ext == "exodus") {
+      const QString package_root = row->data(Qt::UserRole + 3).toString();
+      if (!package_root.isEmpty()) {
+        if (auto* root = find_root_item("Results")) {
+          for (int index = 0; index < root->childCount(); ++index) {
+            const QVariantMap registered =
+                root->child(index)
+                    ->data(0, PropertyEditor::kParamsRole)
+                    .toMap();
+            if (registered.value("package_root").toString() == package_root &&
+                !registered.value("main_result_usable", true).toBool()) {
+              statusBar()->showMessage(
+                  "Main Exodus failed package integrity checks and cannot be "
+                  "opened.",
+                  5000);
+              return;
+            }
+          }
+        }
+        const gmp::ResultPackage package =
+            gmp::inspect_result_package(package_root);
+        if (!gmp::result_file_is_usable(package, path)) {
+          statusBar()->showMessage(
+              "Main Exodus is missing or changed; verify or re-import the "
+              "result package before opening it.",
+              5000);
+          return;
+        }
+      }
       viewer_->set_exodus_file(path);
     } else {
       viewer_->set_mesh_file(path);
@@ -2554,8 +2805,59 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             open_result_as_text(item);
           });
   connect(results_list_, &QListWidget::itemDoubleClicked, this,
-          [this, open_result_in_viewer, open_result_as_text](QListWidgetItem* item) {
+          [this, plot_view, open_result_in_viewer,
+           open_result_as_text](QListWidgetItem* item) {
             if (!item) {
+              return;
+            }
+            if (item->data(Qt::UserRole + 2).toString() == "auxiliary") {
+              QDialog dialog(this);
+              dialog.setWindowTitle("Auxiliary Times Outputs");
+              dialog.resize(760, 520);
+              auto* layout = new QVBoxLayout(&dialog);
+              auto* files = new QListWidget(&dialog);
+              for (const QString& file :
+                   item->data(Qt::UserRole + 4).toStringList()) {
+                auto* row = new QListWidgetItem(QFileInfo(file).fileName(), files);
+                row->setData(Qt::UserRole, file);
+                row->setToolTip(file);
+              }
+              auto* hash = new QLabel("Select a file to inspect.", &dialog);
+              hash->setTextInteractionFlags(Qt::TextSelectableByMouse);
+              auto* preview = new QPlainTextEdit(&dialog);
+              preview->setReadOnly(true);
+              preview->setLineWrapMode(QPlainTextEdit::NoWrap);
+              auto inspect = [files, hash, preview]() {
+                const auto* selected = files->currentItem();
+                if (!selected) return;
+                const QString path = selected->data(Qt::UserRole).toString();
+                QFile file(path);
+                if (!file.open(QIODevice::ReadOnly)) {
+                  preview->setPlainText("Cannot open: " + path);
+                  return;
+                }
+                const QByteArray bytes = file.read(1024 * 1024 + 1);
+                preview->setPlainText(
+                    QString::fromUtf8(bytes.left(1024 * 1024)) +
+                    (bytes.size() > 1024 * 1024
+                         ? "\n\n... preview limited to 1 MiB ..."
+                         : QString()));
+                hash->setText("SHA-256: " + gmp::result_file_sha256(path));
+              };
+              connect(files, &QListWidget::currentItemChanged, &dialog,
+                      [inspect](QListWidgetItem*, QListWidgetItem*) {
+                        inspect();
+                      });
+              layout->addWidget(files, 1);
+              layout->addWidget(hash);
+              layout->addWidget(preview, 2);
+              auto* close = new QDialogButtonBox(QDialogButtonBox::Close,
+                                                  &dialog);
+              connect(close, &QDialogButtonBox::rejected, &dialog,
+                      &QDialog::reject);
+              layout->addWidget(close);
+              if (files->count() > 0) files->setCurrentRow(0);
+              dialog.exec();
               return;
             }
             const QString path = item->data(Qt::UserRole).toString();
@@ -2563,7 +2865,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
               return;
             }
             const QString ext = QFileInfo(path).suffix().toLower();
-            if (ext == "txt" || ext == "csv" || ext == "log" || ext == "yaml" ||
+            if (ext == "csv") {
+              if (plot_view->add_csv(path) && results_work_tabs_) {
+                results_work_tabs_->setCurrentIndex(1);
+              }
+            } else if (ext == "txt" || ext == "log" || ext == "yaml" ||
                 ext == "yml") {
               open_result_as_text(item);
             } else {
@@ -2571,7 +2877,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             }
           });
   connect(results_list_, &QListWidget::currentItemChanged, this,
-          [this](QListWidgetItem* current, QListWidgetItem*) {
+          [this, table_view](QListWidgetItem* current, QListWidgetItem*) {
             if (!results_preview_ || !current) {
               if (results_preview_) {
                 results_preview_->clear();
@@ -2582,14 +2888,32 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             // 可能刷新结果列表并销毁 current 指向的条目（崩溃栈确认）。
             const QString path = current->data(Qt::UserRole).toString();
             const QString job = current->data(Qt::UserRole + 1).toString();
+            const QString role =
+                current->data(Qt::UserRole + 2).toString();
+            const QString package_root =
+                current->data(Qt::UserRole + 3).toString();
             const QString text = current->text();
             sync_results_tree_selection(current);
+            if (role == "package") {
+              results_preview_->setPlainText(
+                  QString("Result package: %1\nJob: %2\nRoot: %3\n\n"
+                          "Double-click a Field Results or History Data file "
+                          "to open it. Double-click Auxiliary Outputs to audit "
+                          "the original files and SHA-256 values.")
+                      .arg(text, job.isEmpty() ? "unmanaged" : job,
+                           package_root));
+              return;
+            }
             if (path.isEmpty()) {
               results_preview_->setPlainText(
                   QString("No file attached for: %1").arg(text));
               return;
             }
             const QString ext = QFileInfo(path).suffix().toLower();
+            if (ext == "csv") {
+              const gmp::CsvData csv = gmp::read_csv_data(path);
+              if (csv.valid()) table_view->set_snapshot(csv.table_snapshot());
+            }
             const QFileInfo fi(path);
             QString details;
             details += QString("Result: %1").arg(text);
@@ -2655,7 +2979,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   mesh_work_window_->setWidget(mesh_page);
   job_work_window_->resize(820, 560);
   visualization_work_window_->resize(660, 540);
-  results_work_window_->resize(720, 400);
+  results_work_window_->resize(900, 600);
   mesh_work_window_->resize(760, 520);
   plot_open_btn->setText("Focus Viewport");
   table_open_btn->setText("Focus Viewport");
@@ -2749,7 +3073,29 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             action_stage_slice_->setChecked(enabled);
           });
   connect(viewer_, &VtkViewer::time_steps_changed, this,
-          [this]() { update_command_availability(); });
+          [this, table_time_step, table_latest_btn]() {
+            update_command_availability();
+            const int steps = viewer_ ? viewer_->time_step_count() : 0;
+            const QSignalBlocker blocker(table_time_step);
+            table_time_step->setRange(0, qMax(0, steps - 1));
+            table_time_step->setValue(
+                steps > 0 ? viewer_->current_time_step_index() : 0);
+            table_time_step->setEnabled(steps > 1);
+            table_latest_btn->setEnabled(steps > 1);
+          });
+  connect(table_time_step, QOverload<int>::of(&QSpinBox::valueChanged), this,
+          [this](int step) {
+            if (!viewer_ || step == viewer_->current_time_step_index()) return;
+            viewer_->set_time_step_index(step);
+            if (playback_slider_) {
+              const QSignalBlocker blocker(playback_slider_);
+              playback_slider_->setValue(viewer_->current_time_step_index());
+            }
+          });
+  connect(table_latest_btn, &QPushButton::clicked, table_time_step,
+          [table_time_step]() {
+            table_time_step->setValue(table_time_step->maximum());
+          });
   connect(viewer_, &VtkViewer::stage_command_feedback, this,
           [this](const QString& message) {
             statusBar()->showMessage(message, 4000);
@@ -3080,8 +3426,12 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     const QString ext = QFileInfo(path).suffix().toLower();
     if (ext == "e" || ext == "exo" || ext == "exodus") {
       viewer_->set_exodus_file(path);
-    } else {
+    } else if (ext == "msh") {
       viewer_->set_mesh_file(path);
+    } else {
+      statusBar()->showMessage(
+          "Only Exodus and mesh files can be opened in the viewport.", 2500);
+      return;
     }
     viewer_->setFocus();
     sync_results_tree_selection(row);
@@ -3453,26 +3803,25 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   property_stack_->setCurrentIndex(1);
   apply_toolbar_actions(module_tabs_->currentIndex());
 
-  const QString initial_plot = viewer_->plot_snapshot_text();
   const QString initial_plot_stats = viewer_->plot_stats_snapshot();
-  const QString initial_table = viewer_->table_snapshot_text();
   const QString initial_table_stats = viewer_->table_stats_snapshot();
-  plot_view->setPlainText(initial_plot);
+  plot_view->set_field_snapshot(viewer_->plot_snapshot());
   plot_status->setText(initial_plot_stats);
-  table_view->setPlainText(initial_table);
+  table_view->set_snapshot(viewer_->table_snapshot());
   table_status->setText(initial_table_stats);
 
   connect(gmsh_panel_, &GmshPanel::mesh_written, plot_refresh_btn,
           [plot_refresh_btn]() { plot_refresh_btn->click(); });
   connect(plot_refresh_btn, &QPushButton::clicked, this, [this, plot_view, plot_status]() {
     if (viewer_) {
-      plot_view->setPlainText(viewer_->plot_snapshot_text());
+      viewer_->set_result_history_enabled(true);
+      plot_view->set_field_snapshot(viewer_->plot_snapshot());
       plot_status->setText(viewer_->plot_stats_snapshot());
     }
   });
   connect(table_refresh_btn, &QPushButton::clicked, this, [this, table_view, table_status]() {
     if (viewer_) {
-      table_view->setPlainText(viewer_->table_snapshot_text());
+      table_view->set_snapshot(viewer_->table_snapshot());
       table_status->setText(viewer_->table_stats_snapshot());
     }
   });
@@ -3483,22 +3832,46 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   connect(gmsh_panel_, &GmshPanel::mesh_written, table_refresh_btn,
           [table_refresh_btn]() { table_refresh_btn->click(); });
   connect(results_work_tabs_, &QTabWidget::currentChanged, this,
-          [this, plot_view, plot_status, table_view, table_status]() {
+          [this, plot_view, plot_status, table_view, table_status](int index) {
             if (!viewer_) {
               return;
             }
-            if (plot_view) {
-              plot_view->setPlainText(viewer_->plot_snapshot_text());
-            }
+            viewer_->set_result_history_enabled(index == 1);
+            if (plot_view) plot_view->set_field_snapshot(viewer_->plot_snapshot());
             if (plot_status) {
               plot_status->setText(viewer_->plot_stats_snapshot());
             }
-            if (table_view) {
-              table_view->setPlainText(viewer_->table_snapshot_text());
-            }
+            if (table_view) table_view->set_snapshot(viewer_->table_snapshot());
             if (table_status) {
               table_status->setText(viewer_->table_stats_snapshot());
             }
+          });
+  connect(viewer_, &VtkViewer::result_data_changed, this,
+          [this, plot_view, plot_status, table_view, table_status,
+           table_time_step]() {
+            if (!viewer_) return;
+            plot_view->set_field_snapshot(viewer_->plot_snapshot());
+            plot_status->setText(viewer_->plot_stats_snapshot());
+            table_view->set_snapshot(viewer_->table_snapshot());
+            table_status->setText(viewer_->table_stats_snapshot());
+            const QSignalBlocker blocker(table_time_step);
+            table_time_step->setValue(viewer_->current_time_step_index());
+          });
+  connect(viewer_, &VtkViewer::result_history_progress, this,
+          [this](const QString& field, int completed, int total) {
+            if (total <= 0) return;
+            statusBar()->showMessage(
+                completed < total
+                    ? QString("%1 %2: %3/%4")
+                          .arg(l10n::tr("Building field history"), field)
+                          .arg(completed)
+                          .arg(total)
+                    : QString("%1 %2 (%3: %4)")
+                          .arg(field, l10n::tr("history ready"),
+                               l10n::tr("Steps"))
+                          .arg(total),
+                completed < total ? 0 : 3000);
+            QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
           });
   connect(plot_open_btn, &QPushButton::clicked, this,
           [this]() {
@@ -3794,6 +4167,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
               commit_object_edit(item, item->text(0), params);
             } else {
               add_child_item(root, job_id, "Jobs", params);
+            }
+            if (info.value("event").toString() == "submitted") {
+              selected_job_id_ = job_id;
+              if (job_table_) {
+                const QSignalBlocker blocker(job_table_);
+                job_table_->setCurrentCell(-1, -1);
+              }
             }
             refresh_job_table();
             refresh_tree_statuses();
@@ -5052,6 +5432,12 @@ void MainWindow::build_menu() {
   connect(lang_en, &QAction::triggered, this, [this]() {
     l10n::set_language(l10n::Language::English);
     l10n::apply(this);
+    if (viewer_) viewer_->retranslate_results();
+    if (results_table_time_step_)
+      results_table_time_step_->setPrefix(l10n::tr("Time step") + " ");
+    if (results_plot_widget_) results_plot_widget_->retranslate();
+    if (results_table_widget_) results_table_widget_->retranslate();
+    refresh_results_panel();
     refresh_tree_statuses();
     refresh_results_navigation();
     update_window_title();
@@ -5060,6 +5446,12 @@ void MainWindow::build_menu() {
   connect(lang_zh, &QAction::triggered, this, [this]() {
     l10n::set_language(l10n::Language::Chinese);
     l10n::apply(this);
+    if (viewer_) viewer_->retranslate_results();
+    if (results_table_time_step_)
+      results_table_time_step_->setPrefix(l10n::tr("Time step") + " ");
+    if (results_plot_widget_) results_plot_widget_->retranslate();
+    if (results_table_widget_) results_table_widget_->retranslate();
+    refresh_results_panel();
     refresh_tree_statuses();
     refresh_results_navigation();
     update_window_title();
@@ -6555,7 +6947,7 @@ void MainWindow::sync_active_ui_context() {
     job_work_window_->setWindowTitle("Job Workspace" + suffix);
   }
   if (results_work_window_ && active_ui_context_.module_index == 12) {
-    results_work_window_->setWindowTitle("Results Workspace" + suffix);
+    results_work_window_->setWindowTitle(l10n::tr("Results Workspace") + suffix);
   }
 }
 
@@ -8880,6 +9272,210 @@ void MainWindow::import_result_file(const QString& path) {
                            3000);
 }
 
+void MainWindow::import_result_package(const QString& selected_path,
+                                       const QString& replace_root) {
+  gmp::ResultPackage package = gmp::inspect_result_package(selected_path);
+  if (package.exodus_candidates.isEmpty() && package.csv_candidates.isEmpty()) {
+    QMessageBox::warning(this, "Import Task Directory",
+                         "No usable Exodus or history CSV result was found.");
+    return;
+  }
+
+  auto choose = [this](const QString& title, const QStringList& candidates,
+                       QString* selected) {
+    if (candidates.size() == 1) {
+      *selected = candidates.first();
+      return true;
+    }
+    bool ok = false;
+    const QString value = QInputDialog::getItem(
+        this, title, "Select the main result (no file is opened until you confirm):",
+        candidates, 0, false, &ok);
+    if (!ok || value.isEmpty()) return false;
+    *selected = value;
+    return true;
+  };
+  if (!choose("Main Exodus", package.exodus_candidates,
+              &package.main_exodus) ||
+      !choose("Main History CSV", package.csv_candidates,
+              &package.main_csv)) {
+    return;
+  }
+  if (package.case_name.isEmpty()) {
+    package.case_name = QFileInfo(package.main_exodus).completeBaseName();
+  }
+  if (!package.managed) {
+    bool ok = false;
+    const QString name = QInputDialog::getText(
+        this, "Unmanaged Result Package",
+        "No snapshot-manifest.json was found. Confirm a package name:",
+        QLineEdit::Normal, package.case_name, &ok);
+    if (!ok || name.trimmed().isEmpty()) return;
+    package.case_name = name.trimmed();
+    package.warnings << "Unmanaged result package: no task manifest.";
+  }
+
+  QString import_mode = "reference";
+  bool copy_verified = false;
+  bool open_main_after_import = true;
+  if (!project_path_.isEmpty()) {
+    QMessageBox storage(QMessageBox::Question, "Import storage",
+        "Reference the selected directory in place?\n\nChoose Yes to keep a "
+        "read-only reference, or No to copy a fixed snapshot into the project.",
+        QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel,
+        this);
+    storage.setDefaultButton(QMessageBox::Yes);
+    auto* open_main = new QCheckBox(
+        "Open the main field result after import", &storage);
+    open_main->setChecked(true);
+    storage.setCheckBox(open_main);
+    const auto copy = static_cast<QMessageBox::StandardButton>(storage.exec());
+    if (copy == QMessageBox::Cancel) return;
+    open_main_after_import = open_main->isChecked();
+    if (copy == QMessageBox::No) {
+      const QString original_root = package.root_path;
+      const QString main_exodus_relative =
+          QDir(original_root).relativeFilePath(package.main_exodus);
+      const QString main_csv_relative =
+          QDir(original_root).relativeFilePath(package.main_csv);
+      const QString folder = !package.job_id.isEmpty()
+                                 ? package.job_id
+                                 : package.case_name;
+      const QString destination =
+          QDir(QFileInfo(project_path_).absolutePath())
+              .absoluteFilePath(".work/results/" + folder);
+      std::error_code error;
+      std::filesystem::create_directories(
+          std::filesystem::path(destination.toStdString()), error);
+      std::filesystem::copy(
+          std::filesystem::path(package.root_path.toStdString()),
+          std::filesystem::path(destination.toStdString()),
+          std::filesystem::copy_options::recursive |
+              std::filesystem::copy_options::overwrite_existing,
+          error);
+      if (error) {
+        QMessageBox::critical(this, "Copy Result Package",
+                              QString::fromStdString(error.message()));
+        return;
+      }
+      package = gmp::inspect_result_package(destination);
+      package.main_exodus =
+          QDir(destination).absoluteFilePath(main_exodus_relative);
+      package.main_csv = QDir(destination).absoluteFilePath(main_csv_relative);
+      import_mode = "copy";
+      const QStringList integrity = gmp::verify_result_package(package);
+      if (!integrity.isEmpty()) {
+        QMessageBox::critical(this, "Copy Result Package",
+                              "Copied snapshot failed SHA-256 verification:\n" +
+                                  integrity.join("\n"));
+        return;
+      }
+      copy_verified = true;
+    }
+  }
+
+  auto* root = find_root_item("Results");
+  if (!root) return;
+  QTreeWidgetItem* existing = nullptr;
+  for (int i = 0; i < root->childCount(); ++i) {
+    auto* candidate = root->child(i);
+    const QVariantMap params =
+        candidate->data(0, PropertyEditor::kParamsRole).toMap();
+    if ((!replace_root.isEmpty() &&
+         params.value("package_root").toString() == replace_root) ||
+        (!package.job_id.isEmpty() &&
+         params.value("package_job_id").toString() == package.job_id)) {
+      existing = candidate;
+      break;
+    }
+  }
+  bool same_registered_content = false;
+  QString previous_integrity;
+  if (existing) {
+    const QVariantMap old =
+        existing->data(0, PropertyEditor::kParamsRole).toMap();
+    same_registered_content =
+        old.value("fingerprint").toString() == package.fingerprint &&
+        old.value("source_state").toString() == package.source_state;
+    previous_integrity = old.value("integrity_status").toString();
+    if (!same_registered_content) {
+      auto relative_set = [](const QStringList& paths, const QString& root) {
+        QSet<QString> values;
+        const QDir dir(root);
+        for (const QString& path : paths)
+          values.insert(QDir::cleanPath(dir.relativeFilePath(path)));
+        return values;
+      };
+      QStringList old_files = old.value("exodus_candidates").toStringList() +
+                              old.value("csv_candidates").toStringList() +
+                              old.value("auxiliary_times_csv").toStringList() +
+                              old.value("input_files").toStringList() +
+                              old.value("log_report_files").toStringList();
+      QStringList new_files = package.exodus_candidates +
+                              package.csv_candidates +
+                              package.auxiliary_times_csv +
+                              package.input_files + package.log_report_files;
+      const QSet<QString> before = relative_set(
+          old_files, old.value("package_root").toString());
+      const QSet<QString> after = relative_set(new_files, package.root_path);
+      QStringList summary;
+      const QStringList added = (after - before).values();
+      const QStringList removed = (before - after).values();
+      if (!added.isEmpty()) summary << "Added: " + added.join(", ");
+      if (!removed.isEmpty()) summary << "Removed: " + removed.join(", ");
+      summary << package.warnings;
+      if (summary.isEmpty())
+        summary << "File size or modification time changed.";
+      const auto answer = QMessageBox::question(
+          this, "Result Package Conflict",
+          "The same job id has changed content:\n\n" + summary.join("\n") +
+              "\n\nReplace the registered version? Choose No to keep both "
+              "versions.",
+          QMessageBox::Yes | QMessageBox::No | QMessageBox::Cancel);
+      if (answer == QMessageBox::Cancel) return;
+      if (answer == QMessageBox::No) existing = nullptr;
+    }
+  }
+  QString name = package.case_name;
+  if (!package.job_id.isEmpty()) name += " · " + package.job_id.right(6);
+  if (!package.managed) name += " · unmanaged";
+  QVariantMap params = package.to_params(import_mode);
+  params.insert("integrity_status",
+                copy_verified
+                    ? "verified"
+                    : (existing && same_registered_content &&
+                               !previous_integrity.isEmpty()
+                           ? previous_integrity
+                           : "unverified"));
+  params.insert("main_result_usable",
+                gmp::result_file_is_usable(package, package.main_exodus));
+  params.insert("status", package.warnings.isEmpty() ? "Ready" : "Warning");
+  if (existing) {
+    commit_object_edit(existing, existing->text(0), params);
+  } else {
+    existing = add_child_item(root, unique_child_name(root, name), "Results", params);
+  }
+  if (existing) set_object_status(existing, package.warnings.isEmpty() ? "Success" : "Warning");
+  set_project_dirty(true);
+  refresh_results_panel();
+  const bool main_usable =
+      gmp::result_file_is_usable(package, package.main_exodus);
+  if (viewer_ && main_usable && open_main_after_import) {
+    viewer_->set_exodus_file(package.main_exodus);
+  }
+  gmp::log_operation(
+      "results",
+      QString("Result package imported (%1): %2").arg(import_mode, package.root_path));
+  statusBar()->showMessage(
+      !package.main_exodus.isEmpty() && !main_usable
+          ? "Imported metadata, but the main Exodus is missing or changed; "
+            "field loading was blocked."
+          : QString("Imported %1 with %2 auxiliary Times files")
+                .arg(name)
+                .arg(package.auxiliary_times_csv.size()),
+      5000);
+}
+
 void MainWindow::refresh_results_panel() {
   if (!results_list_ || !results_preview_) {
     return;
@@ -8912,6 +9508,93 @@ void MainWindow::refresh_results_panel() {
     const QVariantMap params =
         item->data(0, PropertyEditor::kParamsRole).toMap();
     const QString path = params.value("path").toString();
+    if (params.value("role").toString() == "result_package") {
+      const QString job = params.value("package_job_id").toString();
+      const bool managed = params.value("managed").toBool();
+      const QString mode = params.value("import_mode").toString();
+      const QString integrity =
+          managed ? params.value("integrity_status", "unverified").toString()
+                  : QString("unverified");
+      const bool missing = !QFileInfo::exists(params.value("package_root").toString());
+      bool changed = false;
+      if (!missing && mode != "copy") {
+        const gmp::ResultPackage current = gmp::inspect_result_package(
+            params.value("package_root").toString());
+        changed = !current.warnings.isEmpty() ||
+                  (!current.fingerprint.isEmpty() &&
+                   current.fingerprint !=
+                       params.value("fingerprint").toString()) ||
+                  (!current.source_state.isEmpty() &&
+                   current.source_state !=
+                       params.value("source_state").toString());
+      }
+      QString display_name = name;
+      if (display_name.endsWith(" · unmanaged")) {
+        display_name.chop(QString("unmanaged").size());
+        display_name += l10n::tr("unmanaged");
+      }
+      QString title = QString("▾ %1  [%2 · %3 · %4 · %5]")
+                          .arg(display_name,
+                               l10n::tr(managed ? "managed" : "unmanaged"),
+                               l10n::tr(mode == "copy" ? "project copy"
+                                                       : "reference"),
+                               l10n::tr(integrity),
+                               l10n::tr(missing
+                                            ? "missing"
+                                            : (changed
+                                                   ? "content changed — re-import to rescan"
+                                                   : "available")));
+      auto* package_row = new QListWidgetItem(title, results_list_);
+      package_row->setData(Qt::UserRole, QString());
+      package_row->setData(Qt::UserRole + 1, job);
+      package_row->setData(Qt::UserRole + 2, "package");
+      package_row->setData(Qt::UserRole + 3,
+                           params.value("package_root").toString());
+      package_row->setToolTip(params.value("package_root").toString());
+      auto add_heading = [this](const QString& text) {
+        auto* row =
+            new QListWidgetItem("    " + l10n::tr(text), results_list_);
+        row->setFlags(row->flags() & ~Qt::ItemIsSelectable);
+        row->setData(Qt::UserRole + 2, "category");
+      };
+      const QString package_root = params.value("package_root").toString();
+      auto add_file = [this, &job, &package_root](const QString& label,
+                                                  const QString& file,
+                                                  const QString& role) {
+        if (file.isEmpty()) return;
+        auto* row = new QListWidgetItem("        " + label, results_list_);
+        row->setData(Qt::UserRole, file);
+        row->setData(Qt::UserRole + 1, job);
+        row->setData(Qt::UserRole + 2, role);
+        row->setData(Qt::UserRole + 3, package_root);
+        row->setToolTip(file);
+      };
+      add_heading("Field Results");
+      add_file(QFileInfo(params.value("main_exodus").toString()).fileName(),
+               params.value("main_exodus").toString(), "field");
+      add_heading("History Data");
+      add_file(QFileInfo(params.value("main_csv").toString()).fileName(),
+               params.value("main_csv").toString(), "history");
+      const QStringList auxiliary =
+          params.value("auxiliary_times_csv").toStringList();
+      auto* aux = new QListWidgetItem(
+          QString("    ▸ %1: %2 %3")
+              .arg(l10n::tr("Auxiliary Outputs"))
+              .arg(auxiliary.size())
+              .arg(l10n::tr("Times CSV files (collapsed)")),
+          results_list_);
+      aux->setData(Qt::UserRole + 2, "auxiliary");
+      aux->setData(Qt::UserRole + 3, package_root);
+      aux->setData(Qt::UserRole + 4, auxiliary);
+      aux->setToolTip(auxiliary.join("\n"));
+      add_heading("Input Snapshot");
+      for (const QString& file : params.value("input_files").toStringList())
+        add_file(QFileInfo(file).fileName(), file, "input");
+      add_heading("Logs and Reports");
+      for (const QString& file : params.value("log_report_files").toStringList())
+        add_file(QFileInfo(file).fileName(), file, "log");
+      continue;
+    }
     const QString ext = QFileInfo(path).suffix().toLower();
     bool should_include = true;
     if (filter_ext != "all" && !path.isEmpty()) {
@@ -8993,12 +9676,16 @@ void MainWindow::populate_results_compare_list(QListWidget* list) const {
     if (!job.isEmpty()) {
       text += QString(" [job:%1]").arg(job);
     }
+    const QString compare_path =
+        params.value("role").toString() == "result_package"
+            ? params.value("main_csv").toString()
+            : path;
     auto* row = new QListWidgetItem(text, list);
-    row->setData(Qt::UserRole, path);
+    row->setData(Qt::UserRole, compare_path);
     row->setData(Qt::UserRole + 1, job);
     row->setData(Qt::UserRole + 2, name);
-    if (!path.isEmpty()) {
-      row->setToolTip(path);
+    if (!compare_path.isEmpty()) {
+      row->setToolTip(compare_path);
     }
   }
   if (list->count() == 0) {
@@ -9020,7 +9707,7 @@ QDockWidget* MainWindow::create_results_compare_window() {
                       QDockWidget::DockWidgetMovable |
                       QDockWidget::DockWidgetFloatable);
   window->setMinimumSize(400, 260);
-  window->resize(560, 400);
+  window->resize(900, 620);
   addDockWidget(Qt::RightDockWidgetArea, window);
   window->setFloating(true);
   window->setAllowedAreas(Qt::NoDockWidgetArea);
@@ -9054,13 +9741,18 @@ QDockWidget* MainWindow::create_results_compare_window() {
   preview->setReadOnly(true);
   preview->setLineWrapMode(QPlainTextEdit::NoWrap);
   preview->setPlaceholderText("Select a result item for quick preview.");
-  layout->addWidget(preview, 1);
+  preview->setMaximumHeight(120);
+  layout->addWidget(preview);
+  auto* chart = new gmp::ResultsPlotWidget(content);
+  layout->addWidget(chart, 1);
 
   auto* actions = new QHBoxLayout();
   auto* refresh_btn = new QPushButton("Refresh List", content);
   auto* focus_btn = new QPushButton("Focus Viewport", content);
+  auto* add_curve_btn = new QPushButton("Add Selected CSV", content);
   actions->addWidget(refresh_btn);
   actions->addWidget(focus_btn);
+  actions->addWidget(add_curve_btn);
   actions->addStretch(1);
   auto* actions_row = new QWidget(content);
   actions_row->setLayout(actions);
@@ -9139,12 +9831,31 @@ QDockWidget* MainWindow::create_results_compare_window() {
     const QString ext = QFileInfo(path).suffix().toLower();
     if (ext == "e" || ext == "exo" || ext == "exodus") {
       viewer_->set_exodus_file(path);
-    } else {
+    } else if (ext == "msh") {
       viewer_->set_mesh_file(path);
+    } else {
+      statusBar()->showMessage(
+          "Use Add Selected CSV to plot history data.", 2500);
+      return;
     }
     viewer_->setFocus();
     statusBar()->showMessage("Opened result in viewer.", 1500);
   });
+  connect(add_curve_btn, &QPushButton::clicked, this, [list, chart]() {
+    const auto* row = list->currentItem();
+    if (!row) return;
+    const QString path = row->data(Qt::UserRole).toString();
+    if (QFileInfo(path).suffix().compare("csv", Qt::CaseInsensitive) == 0)
+      chart->add_csv(path);
+  });
+  connect(list, &QListWidget::itemDoubleClicked, this,
+          [chart](QListWidgetItem* row) {
+            const QString path = row ? row->data(Qt::UserRole).toString()
+                                     : QString();
+            if (QFileInfo(path).suffix().compare("csv",
+                                                Qt::CaseInsensitive) == 0)
+              chart->add_csv(path);
+          });
   connect(window, &QDockWidget::visibilityChanged, this,
           [window](bool visible) {
             if (!visible) {
@@ -9305,6 +10016,7 @@ QVariantMap MainWindow::default_params_for_kind(const QString& kind) const {
     // W-03e：默认值对齐 v01 验收基线（*Static 四参数语义 →
     // Executioner/TimeStepper/Preconditioning）。
     return {{"type", "Transient"},
+            {"scheme", "implicit-euler"},
             {"start_time", "0"},
             {"end_time", "1"},
             {"solve_type", "NEWTON"},
@@ -9414,6 +10126,15 @@ QVariantMap MainWindow::default_params_for_kind(const QString& kind) const {
 
 QVariantMap MainWindow::normalize_params_for_kind(
     const QString& kind, const QVariantMap& params) const {
+  if (kind == "Steps") {
+    QVariantMap normalized = params;
+    if (normalized.isEmpty()) {
+      normalized = default_params_for_kind(kind);
+    } else if (normalized.value("scheme").toString().trimmed().isEmpty()) {
+      normalized.insert("scheme", "implicit-euler");
+    }
+    return normalized;
+  }
   if (!params.isEmpty()) {
     return params;
   }
@@ -10418,8 +11139,22 @@ void MainWindow::refresh_job_table() {
   const QString filter = job_state_filter_
                              ? job_state_filter_->currentData().toString()
                              : QString("all");
+  QList<QTreeWidgetItem*> jobs;
   for (int i = 0; i < root->childCount(); ++i) {
-    auto* child = root->child(i);
+    if (root->child(i)) jobs << root->child(i);
+  }
+  std::stable_sort(jobs.begin(), jobs.end(), [](const auto* lhs, const auto* rhs) {
+    const auto key = [](const QTreeWidgetItem* item) {
+      const QVariantMap params =
+          item->data(0, PropertyEditor::kParamsRole).toMap();
+      const QString time = params.value("start_time").toString();
+      const QDateTime parsed = QDateTime::fromString(time, Qt::ISODate);
+      return qMakePair(parsed.isValid() ? parsed.toMSecsSinceEpoch() : 0LL,
+                       item->text(0));
+    };
+    return key(lhs) > key(rhs);
+  });
+  for (auto* child : jobs) {
     if (!child) {
       continue;
     }
@@ -10448,6 +11183,7 @@ void MainWindow::refresh_job_table() {
     {
       const QSignalBlocker blocker(job_table_);
       job_table_->setCurrentCell(row, 0);
+      job_table_->scrollToItem(cell, QAbstractItemView::PositionAtTop);
     }
     const QVariantMap params = cell->data(Qt::UserRole).toMap();
     selected_job_id_ = params.value("job_id").toString();
@@ -10706,7 +11442,35 @@ void MainWindow::update_remote_job_files(const QVariantMap& body) {
     return;
   }
   job_files_table_->setRowCount(0);
-  const QVariantList files = body.value("files").toList();
+  QVariantList files = body.value("files").toList();
+  auto priority = [](const QVariant& value) {
+    const QVariantMap file = value.toMap();
+    const QString path = file.value("path").toString().toLower();
+    const QString name = file.value("name").toString().toLower();
+    static const QRegularExpression auxiliary(
+        R"(_field_output_times_\d+\.csv$)");
+    const bool result_file = path.startsWith("results/") ||
+                             path.contains("/results/") ||
+                             path.startsWith("output/") ||
+                             path.contains("/output/");
+    if (result_file && path.endsWith(".csv") &&
+        !auxiliary.match(path).hasMatch()) return 0;
+    if (result_file && (path.endsWith(".e") || path.endsWith(".exo") ||
+                        path.endsWith(".exodus"))) return 1;
+    if (name == "task.md") return 2;
+    if (auxiliary.match(path).hasMatch()) return 3;
+    if (path.startsWith("input/") || path.contains("/input/")) return 4;
+    if (path.startsWith("logs/") || path.contains("/logs/")) return 5;
+    return 6;
+  };
+  std::stable_sort(files.begin(), files.end(), [&priority](const QVariant& lhs,
+                                                          const QVariant& rhs) {
+    const int left = priority(lhs);
+    const int right = priority(rhs);
+    if (left != right) return left < right;
+    return lhs.toMap().value("name").toString() <
+           rhs.toMap().value("name").toString();
+  });
   auto human_size = [](qint64 bytes) {
     if (bytes >= 1024 * 1024) {
       return QString("%1 MB").arg(bytes / 1048576.0, 0, 'f', 1);
@@ -10716,11 +11480,18 @@ void MainWindow::update_remote_job_files(const QVariantMap& body) {
     }
     return QString("%1 B").arg(bytes);
   };
+  QStringList auxiliary_paths;
+  int auxiliary_row = 0;
   for (const QVariant& value : files) {
     const QVariantMap file = value.toMap();
+    const QString path = file.value("path").toString();
+    if (priority(value) == 3) {
+      auxiliary_paths << path;
+      continue;
+    }
+    if (priority(value) < 3) ++auxiliary_row;
     const int row = job_files_table_->rowCount();
     job_files_table_->insertRow(row);
-    const QString path = file.value("path").toString();
     auto make_cell = [](const QString& text) {
       return new QTableWidgetItem(text);
     };
@@ -10736,6 +11507,18 @@ void MainWindow::update_remote_job_files(const QVariantMap& body) {
     job_files_table_->setItem(
         row, 4,
         make_cell(file.value("snapshot").toBool() ? QString("yes") : QString()));
+  }
+  if (!auxiliary_paths.isEmpty()) {
+    const int row = auxiliary_row;
+    job_files_table_->insertRow(row);
+    job_files_table_->setItem(row, 0, new QTableWidgetItem("auxiliary"));
+    auto* summary = new QTableWidgetItem(
+        QString("Auxiliary Times CSV (%1 files)").arg(auxiliary_paths.size()));
+    summary->setToolTip(auxiliary_paths.join("\n"));
+    job_files_table_->setItem(row, 1, summary);
+    job_files_table_->setItem(row, 2, new QTableWidgetItem("-"));
+    job_files_table_->setItem(row, 3, new QTableWidgetItem("collapsed"));
+    job_files_table_->setItem(row, 4, new QTableWidgetItem());
   }
 }
 
@@ -10832,7 +11615,11 @@ void MainWindow::migrate_project_mesh_paths(const QString& project_path) {
 }
 
 bool MainWindow::load_project(const QString& path) {
+  const bool resume_result_history =
+      results_work_tabs_ && results_work_tabs_->currentIndex() == 1;
   try {
+    statusBar()->showMessage("Opening project: " + QFileInfo(path).fileName());
+    QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
     suppress_dirty_ = true;
     // TASK-V02-020：YAML 解析、schema 版本闸门与模型条目装配下沉到
     // ProjectStore；此处只做 Tree/面板应用与 UI 联动。条目名已在
@@ -10843,6 +11630,7 @@ bool MainWindow::load_project(const QString& path) {
     if (!project_store_.load_file(path, &data, &load_error,
                                   &loaded_document)) {
       suppress_dirty_ = false;
+      statusBar()->showMessage("Project load failed", 3000);
       QMessageBox::warning(this, "Project Load", load_error);
       return false;
     }
@@ -10935,6 +11723,9 @@ bool MainWindow::load_project(const QString& path) {
     input_snapshots_.append(data.input_snapshots);
 
     if (viewer_) {
+      // 项目打开只恢复当前帧；完整时程留到曲线页在事件循环中构建，
+      // 避免大 Exodus 文件让“打开项目”看起来卡死。
+      viewer_->set_result_history_enabled(false);
       // 2026-09-19-027：打开的项目没有保存的舞台文件时清空舞台，避免
       // 旧项目网格/变量数组残留；有 current_file 时 apply 会加载新文件
       // 覆盖，无中间态闪存。
@@ -10945,6 +11736,10 @@ bool MainWindow::load_project(const QString& path) {
       }
       if (!data.viewer_settings.isEmpty()) {
         viewer_->apply_viewer_settings(data.viewer_settings);
+      }
+      if (results_plot_widget_) {
+        results_plot_widget_->restore_settings(
+            data.viewer_settings.value("results_plot_curves").toList());
       }
     }
     schema_version_ = data.schema_version;
@@ -11000,9 +11795,23 @@ bool MainWindow::load_project(const QString& path) {
     set_project_dirty(false);
     update_window_title();
     update_project_status();
+    statusBar()->showMessage("Project loaded: " + QFileInfo(path).fileName(),
+                             3000);
+    if (resume_result_history) {
+      QTimer::singleShot(0, this, [this]() {
+        if (viewer_ && results_work_tabs_ &&
+            results_work_tabs_->currentIndex() == 1) {
+          viewer_->set_result_history_enabled(true);
+        }
+      });
+    }
     return true;
   } catch (const std::exception& e) {
     suppress_dirty_ = false;
+    if (viewer_ && resume_result_history) {
+      viewer_->set_result_history_enabled(true);
+    }
+    statusBar()->showMessage("Project load failed", 3000);
     QMessageBox::warning(this, "Project Load",
                          QString("Failed to load: %1").arg(e.what()));
     return false;
@@ -11034,6 +11843,10 @@ bool MainWindow::save_project(const QString& path) {
     }
     if (viewer_) {
       data.viewer_settings = viewer_->viewer_settings();
+      if (results_plot_widget_) {
+        data.viewer_settings.insert("results_plot_curves",
+                                    results_plot_widget_->settings());
+      }
     }
     QString save_error;
     const core::ProjectDocument* document =
@@ -15042,6 +15855,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   const QString job_id = "tour_remote_job_2";
                   const QString mesh_before =
                       moose_panel_->moose_settings().value("mesh_path").toString();
+                  QVariantMap historical;
+                  historical.insert("event", "status");
+                  historical.insert("job_id", "tour_remote_history_old");
+                  historical.insert("state", "succeeded");
+                  historical.insert("created_at", "2026-01-01T00:00:00");
+                  emit moose_panel_->remote_job_event(historical);
                   QVariantMap submit;
                   submit.insert("event", "submitted");
                   submit.insert("job_id", job_id);
@@ -15049,6 +15868,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   submit.insert("server", "http://127.0.0.1:8200");
                   submit.insert("case_name", "tour-case");
                   submit.insert("snapshot", "/tmp/case-tour-snapshot");
+                  submit.insert("submit_time", "2099-01-01T00:00:00");
                   emit moose_panel_->remote_job_event(submit);
                   int target_row = -1;
                   for (int row = 0; row < job_table_->rowCount(); ++row) {
@@ -15058,7 +15878,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       break;
                     }
                   }
-                  if (target_row < 0) {
+                  if (target_row != 0 || job_table_->currentRow() != 0) {
                     throw std::runtime_error("Job monitor selection fixture failed");
                   }
                   job_table_->setCurrentCell(target_row, 0);
@@ -15129,15 +15949,37 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   f2.insert("size", 115000);
                   f2.insert("kind", "exodus");
                   f2.insert("snapshot", false);
-                  body.insert("files", QVariantList{f1, f2});
+                  QVariantMap f3;
+                  f3.insert("path", "results/result.csv");
+                  f3.insert("name", "result.csv");
+                  f3.insert("size", 4096);
+                  f3.insert("kind", "csv");
+                  QVariantMap f4;
+                  f4.insert("path", "results/result_field_output_times_0001.csv");
+                  f4.insert("name", "result_field_output_times_0001.csv");
+                  f4.insert("size", 496);
+                  f4.insert("kind", "csv");
+                  QVariantMap f5 = f4;
+                  f5.insert("path", "results/result_field_output_times_0002.csv");
+                  f5.insert("name", "result_field_output_times_0002.csv");
+                  QVariantMap input_csv;
+                  input_csv.insert("path", "input/material.csv");
+                  input_csv.insert("name", "material.csv");
+                  input_csv.insert("size", 128);
+                  input_csv.insert("kind", "input");
+                  body.insert("files",
+                              QVariantList{input_csv, f1, f4, f2, f5, f3});
                   emit moose_panel_->remote_files(body);
                   auto* kind_cell = job_files_table_->item(1, 0);
                   auto* name_cell = job_files_table_->item(1, 1);
-                  if (job_files_table_->rowCount() != 2 || !kind_cell ||
-                      kind_cell->text() != "exodus" || !name_cell ||
+                  if (job_files_table_->rowCount() != 5 ||
+                      job_files_table_->item(0, 1)->text() != "result.csv" ||
+                      !kind_cell || kind_cell->text() != "exodus" || !name_cell ||
                       name_cell->data(Qt::UserRole).toString() !=
                           "output/result.e" ||
-                      job_files_table_->item(0, 4)->text() != "yes") {
+                      job_files_table_->item(2, 4)->text() != "yes" ||
+                      !job_files_table_->item(3, 1)->text().contains("2 files") ||
+                      job_files_table_->item(4, 1)->text() != "material.csv") {
                     throw std::runtime_error("Job monitor artifacts contract failed");
                   }
                   // 列表刷新（手动/自动）不得丢失选中与右侧详情。
@@ -15223,6 +16065,231 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                             .arg(viewer_->stage_data_visible())
                             .toStdString());
                   }
+                },
+                results_work_window_});
+  steps.append({"results_workspace_contract",
+                [this]() {
+                  auto* root = find_root_item("Results");
+                  auto* table_panel = results_work_window_
+                                          ? static_cast<gmp::ResultsTableWidget*>(
+                                                results_work_window_->findChild<
+                                                    QWidget*>(
+                                                    "resultsDataTablePanel"))
+                                          : nullptr;
+                  auto* data_table = results_work_window_
+                                         ? results_work_window_->findChild<
+                                               QTableWidget*>("resultsDataTable")
+                                         : nullptr;
+                  auto* plot_canvas = results_work_window_
+                                          ? results_work_window_->findChild<
+                                                QWidget*>("resultsPlotCanvas")
+                                          : nullptr;
+                  auto* plot_panel = results_work_window_
+                                         ? static_cast<gmp::ResultsPlotWidget*>(
+                                               results_work_window_->findChild<
+                                                   QWidget*>(
+                                                   "resultsPlotPanel"))
+                                         : nullptr;
+                  auto* component = results_work_window_
+                                        ? results_work_window_->findChild<
+                                              QComboBox*>(
+                                              "resultsComponentSelector")
+                                        : nullptr;
+                  auto* probe_mode =
+                      findChild<QComboBox*>("resultProbeMode");
+                  auto* legend = results_work_window_
+                                     ? results_work_window_->findChild<
+                                           QTableWidget*>(
+                                           "resultsCurveLegend")
+                                     : nullptr;
+                  auto* page_size = results_work_window_
+                                        ? results_work_window_->findChild<
+                                              QComboBox*>(
+                                              "resultsTablePageSize")
+                                        : nullptr;
+                  auto* page = results_work_window_
+                                   ? results_work_window_->findChild<QSpinBox*>(
+                                         "resultsTablePage")
+                                   : nullptr;
+                  auto* entity_min = results_work_window_
+                                         ? results_work_window_->findChild<
+                                               QLineEdit*>(
+                                               "resultsTableEntityMin")
+                                         : nullptr;
+                  if (!root || !table_panel || !data_table || !plot_canvas ||
+                      !plot_panel || !component || !probe_mode ||
+                      probe_mode->findData(2) < 0 || !legend || !page_size ||
+                      !page || !entity_min) {
+                    throw std::runtime_error(
+                        "Results workspace widgets are missing");
+                  }
+                  QTemporaryDir temp;
+                  const QString task = temp.path() + "/job_contract";
+                  QDir().mkpath(task + "/results");
+                  QFile csv(task + "/results/case.csv");
+                  if (!csv.open(QIODevice::WriteOnly | QIODevice::Text)) {
+                    throw std::runtime_error("Results CSV fixture failed");
+                  }
+                  csv.write("time,value\n");
+                  for (int row = 0; row < 120; ++row)
+                    csv.write(QString("%1,%2\n").arg(row).arg(row * 2)
+                                  .toUtf8());
+                  csv.close();
+                  QFile exodus(task + "/results/case.e");
+                  if (!exodus.open(QIODevice::WriteOnly))
+                    throw std::runtime_error("Results Exodus fixture failed");
+                  exodus.write("fixture");
+                  exodus.close();
+                  QFile auxiliary(
+                      task + "/results/case_field_output_times_0001.csv");
+                  if (!auxiliary.open(QIODevice::WriteOnly | QIODevice::Text))
+                    throw std::runtime_error("Results auxiliary fixture failed");
+                  auxiliary.write("times\n0\n");
+                  auxiliary.close();
+                  const gmp::ResultPackage package =
+                      gmp::inspect_result_package(task);
+                  QVariantMap params = package.to_params("reference");
+                  // This contract validates package organization, not VTK I/O;
+                  // avoid feeding the tiny placeholder into the Exodus reader.
+                  params.insert("path", QString());
+                  params.insert("main_exodus", QString());
+                  params.insert("status", "Ready");
+                  auto* item = add_child_item(root, "tour_result_package",
+                                              "Results", params);
+                  refresh_results_panel();
+                  bool has_package = false, has_aux_summary = false;
+                  for (int row = 0; row < results_list_->count(); ++row) {
+                    const QString text = results_list_->item(row)->text();
+                    has_package = has_package || text.contains("tour_result_package");
+                    has_aux_summary =
+                        has_aux_summary ||
+                        text.contains(QString("1 %1").arg(
+                            l10n::tr("Times CSV files (collapsed)")));
+                  }
+                  const gmp::CsvData parsed =
+                      gmp::read_csv_data(task + "/results/case.csv");
+                  table_panel->set_snapshot(parsed.table_snapshot());
+                  if (!has_package || !has_aux_summary ||
+                      data_table->rowCount() != 100 ||
+                      !data_table->horizontalHeaderItem(0) ||
+                      data_table->horizontalHeaderItem(0)->text() != "Row") {
+                    throw std::runtime_error(
+                        "Results package hierarchy/table pagination contract failed");
+                  }
+                  page_size->setCurrentText("50");
+                  page->setValue(3);
+                  if (data_table->rowCount() != 20) {
+                    throw std::runtime_error(
+                        "Results full-dataset pagination contract failed");
+                  }
+                  entity_min->setText("110");
+                  if (data_table->rowCount() != 10) {
+                    throw std::runtime_error(
+                        "Results entity filter contract failed");
+                  }
+                  entity_min->clear();
+                  QVariantMap plot_snapshot{
+                      {"source", "fixture.e"},
+                      {"field", "stress"},
+                      {"association", "Cell"},
+                      {"x_label", "Time"},
+                      {"y_label", "stress magnitude"},
+                      {"mode", "field min/mean/max envelope"},
+                      {"components", QStringList{"Magnitude", "C0"}},
+                      {"series",
+                       QVariantList{
+                           QVariantMap{{"name", "stress magnitude"},
+                                       {"component", "Magnitude"},
+                                       {"points", QVariantList{
+                                                      QVariantList{0.0, 1.0},
+                                                      QVariantList{1.0, 2.0}}}},
+                           QVariantMap{{"name", "stress C0"},
+                                       {"component", "C0"},
+                                       {"points", QVariantList{
+                                                      QVariantList{0.0, 3.0},
+                                                      QVariantList{1.0, 4.0}}}}}}};
+                  plot_panel->set_field_snapshot(plot_snapshot);
+                  if (component->count() != 2 || legend->rowCount() != 1 ||
+                      legend->item(0, 1)->text() != "stress magnitude") {
+                    throw std::runtime_error(
+                        "Results plot component default contract failed");
+                  }
+                  component->setCurrentText("C0");
+                  if (legend->rowCount() != 1 ||
+                      legend->item(0, 1)->text() != "stress C0") {
+                    throw std::runtime_error(
+                        "Results plot component switch contract failed");
+                  }
+                  remove_item(item);
+                  if (!QFileInfo::exists(task + "/results/case.csv")) {
+                    throw std::runtime_error(
+                        "Removing a result reference deleted source files");
+                  }
+                },
+                results_work_window_});
+  steps.append({"result_history_time_contract",
+                [this]() {
+                  const QString fixture =
+                      QDir(QStringLiteral(GMP_TEMPLATE_DIR))
+                          .absoluteFilePath(
+                              "tpl-dam-2d-dyn-cdp/"
+                              "dam_2d_full_static_cdp.e");
+                  auto* arrays = findChild<QComboBox*>("resultArrayCombo");
+                  if (!viewer_ || !arrays || !QFileInfo::exists(fixture))
+                    throw std::runtime_error(
+                        "Result history fixture or controls are missing");
+                  viewer_->set_result_history_enabled(false);
+                  viewer_->set_exodus_file(fixture);
+                  if (viewer_->plot_snapshot().value("mode").toString() !=
+                          "history deferred until Plot is opened" ||
+                      !viewer_->plot_snapshot()
+                           .value("series")
+                           .toList()
+                           .isEmpty()) {
+                    throw std::runtime_error(
+                        "Project result load eagerly built field history");
+                  }
+                  viewer_->set_result_history_enabled(true);
+                  const int stress = arrays->findData("C:stress_x");
+                  if (stress < 0)
+                    throw std::runtime_error(
+                        "Transient result stress_x array is missing");
+                  arrays->setCurrentIndex(stress);
+                  const QVariantMap snapshot = viewer_->plot_snapshot();
+                  bool varying = false;
+                  for (const QVariant& value :
+                       snapshot.value("series").toList()) {
+                    const QVariantList points =
+                        value.toMap().value("points").toList();
+                    if (points.size() != 2) continue;
+                    const double first =
+                        points.first().toList().value(1).toDouble();
+                    const double last =
+                        points.last().toList().value(1).toDouble();
+                    varying = varying || std::abs(last - first) > 1e-12;
+                  }
+                  if (snapshot.value("mode").toString() !=
+                          "field min/mean/max envelope" ||
+                      !varying) {
+                    throw std::runtime_error(
+                        "Transient field history reused one VTK time step");
+                  }
+                  viewer_->set_time_step_index(1);
+                  const QVariantMap table = viewer_->table_snapshot();
+                  bool table_nonzero = false;
+                  for (const QVariant& value : table.value("rows").toList()) {
+                    const QVariantList row = value.toList();
+                    table_nonzero =
+                        table_nonzero || std::abs(row.value(1).toDouble()) > 1e-12;
+                  }
+                  auto* table_step =
+                      findChild<QSpinBox*>("resultTableTimeStep");
+                  if (!table_nonzero || table.value("time").toDouble() != 1.0 ||
+                      !table_step || table_step->maximum() != 1) {
+                    throw std::runtime_error(
+                        "Result table did not follow the selected VTK time step");
+                  }
+                  if (results_work_tabs_) results_work_tabs_->setCurrentIndex(2);
                 },
                 results_work_window_});
   steps.append({"results_navigation_context_menu",
@@ -15374,13 +16441,23 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   auto* file_menu = findChild<QMenu*>("fileMenu");
                   auto* import_btn =
                       findChild<QPushButton*>("resultsImportFile");
-                  if (!file_menu || !import_btn || !job_state_filter_) {
+                  auto* verify_btn =
+                      findChild<QPushButton*>("resultsVerifyPackage");
+                  auto* pin_btn =
+                      findChild<QPushButton*>("resultsPinPreview");
+                  auto* latest_btn =
+                      findChild<QPushButton*>("resultTableLatestStep");
+                  if (!file_menu || !import_btn || !verify_btn || !pin_btn ||
+                      !latest_btn || !job_state_filter_) {
                     throw std::runtime_error("V-02 l10n fixture is missing");
                   }
                   l10n::set_language(l10n::Language::Chinese);
                   l10n::apply(this);
                   if (!file_menu->title().contains("文件") ||
                       import_btn->text() != "导入结果文件..." ||
+                      verify_btn->text() != "验证结果包" ||
+                      pin_btn->text() != "固定预览曲线" ||
+                      latest_btn->text() != "末帧" ||
                       job_state_filter_->itemText(1) != "排队中" ||
                       job_state_filter_->itemText(2) != "运行中") {
                     throw std::runtime_error("V-02 zh translation contract failed");
@@ -15389,6 +16466,9 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   l10n::apply(this);
                   if (!file_menu->title().contains("File") ||
                       import_btn->text() != "Import Result File..." ||
+                      verify_btn->text() != "Verify Package" ||
+                      pin_btn->text() != "Pin preview" ||
+                      latest_btn->text() != "Latest" ||
                       job_state_filter_->itemText(1) != "Queued" ||
                       job_state_filter_->itemText(2) != "Running") {
                     throw std::runtime_error("V-02 en translation contract failed");
@@ -15587,9 +16667,15 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     if (!play->isEnabled()) {
                       throw std::runtime_error("Playback should be enabled with time steps");
                     }
+                    stop->trigger();
+                    qApp->processEvents();
                     const int before = viewer_->current_time_step_index();
+                    if (before >= steps - 1) {
+                      throw std::runtime_error(
+                          "Playback stop did not reset to an advanceable step");
+                    }
                     play->trigger();  // 开始播放
-                    QTimer::singleShot(400, this, [this, play, before]() {
+                    QTimer::singleShot(225, this, [this, play, before]() {
                       if (viewer_->current_time_step_index() == before) {
                         qCritical("[tour] FAILED: playback did not advance time step");
                         QApplication::exit(2);
@@ -15597,7 +16683,6 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       }
                       play->trigger();  // 暂停
                       qInfo("[tour] playback advanced and paused OK");
-                      QApplication::quit();
                     });
                     return;
                   }
@@ -16837,6 +17922,8 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       require_combo("stepLineSearch")->currentText() != "bt" ||
                       require_combo("stepAutomaticScaling")->currentText() !=
                           "true" ||
+                      require_combo("stepScheme")->currentText() !=
+                          "implicit-euler" ||
                       require_combo("stepTimeStepperType")->currentText() !=
                           "IterationAdaptiveDT" ||
                       require_combo("stepPreconditioningType")->currentText() !=
@@ -16851,6 +17938,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   const QStringList expected = {
                       "[Executioner]",
                       "type = Transient",
+                      "scheme = implicit-euler",
                       "start_time = 0",
                       "end_time = 1",
                       "solve_type = NEWTON",
@@ -19098,11 +20186,40 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       throw std::runtime_error(
                           "G1 projection-era input sync is not deterministic");
                     }
-                    if (!baseline_input.isEmpty() &&
-                        synced_a != baseline_input) {
+                    QString expected_baseline = baseline_input;
+                    if (!expected_baseline.isEmpty() &&
+                        !expected_baseline.contains("\n  scheme = ")) {
+                      expected_baseline.replace(
+                          "  type = Transient\n",
+                          "  type = Transient\n  scheme = implicit-euler\n");
+                    }
+                    expected_baseline.replace(
+                        "  [history_csv]\n"
+                        "    type = CSV\n"
+                        "    execute_on = 'initial timestep_end'\n"
+                        "    sync_times_object = field_output_times\n"
+                        "    sync_only = true\n",
+                        "  [history_csv]\n"
+                        "    type = CSV\n"
+                        "    execute_on = 'initial timestep_end'\n");
+                    if (!expected_baseline.isEmpty() &&
+                        synced_a != expected_baseline) {
+                      const QStringList expected_lines =
+                          expected_baseline.split('\n');
+                      const QStringList actual_lines = synced_a.split('\n');
+                      int mismatch = 0;
+                      while (mismatch < expected_lines.size() &&
+                             mismatch < actual_lines.size() &&
+                             expected_lines.at(mismatch) ==
+                                 actual_lines.at(mismatch))
+                        ++mismatch;
                       throw std::runtime_error(
-                          "G1 generated input diverged from the pre-Stage-3 "
-                          "baseline text");
+                          QString("G1 generated input diverged at line %1: "
+                                  "expected <%2>, actual <%3>")
+                              .arg(mismatch + 1)
+                              .arg(expected_lines.value(mismatch),
+                                   actual_lines.value(mismatch))
+                              .toStdString());
                     }
                     // 注：.work 下的 .i 磁盘文件是 demo 期残留（内容与
                     // 项目保存的 input_text 不一致），不能当基线；基线以

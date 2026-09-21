@@ -16,6 +16,7 @@
 #include <unordered_set>
 
 #include "gmp/ComboPopupFix.h"
+#include "gmp/L10n.h"
 
 #ifdef GMP_ENABLE_VTK_VIEWER
 #include <vtkCellArray.h>
@@ -332,14 +333,19 @@ QString ArrayValueSample(vtkDataArray* arr, vtkIdType idx) {
 
 QString FormatVectorStatsText(const VectorStats& stats) {
   if (!stats.has_data) {
-    return "No compatible vector data";
+    return l10n::tr("No compatible vector data");
   }
   return QString(
-             "components=%1, tuples=%2, |v| min=%3, max=%4, mean=%5, rms=%6")
+             "%1=%2, %3=%4, |v| %5=%6, %7=%8, %9=%10, RMS=%11")
+      .arg(l10n::tr("Components"))
       .arg(stats.components)
+      .arg(l10n::tr("Tuples"))
       .arg(stats.tuples)
+      .arg(l10n::tr("Minimum"))
       .arg(stats.min_mag, 0, 'g', 6)
+      .arg(l10n::tr("Maximum"))
       .arg(stats.max_mag, 0, 'g', 6)
+      .arg(l10n::tr("Mean"))
       .arg(stats.mean_mag, 0, 'g', 6)
       .arg(stats.rms_mag, 0, 'g', 6);
 }

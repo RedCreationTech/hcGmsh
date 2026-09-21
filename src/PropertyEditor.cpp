@@ -2149,7 +2149,7 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
              "stepPetscOptionsIname");
     add_line("petsc_options_value", "petsc_options_value",
              "stepPetscOptionsValue");
-    add_combo("scheme", "scheme", {"bdf2", "implicit-euler"}, "stepScheme");
+    add_combo("scheme", "scheme", {"implicit-euler", "bdf2"}, "stepScheme");
     add_line("l_max_its", "l_max_its", "stepLMaxIts");
     add_line("l_tol", "l_tol", "stepLTol");
     add_section("Time Stepping");

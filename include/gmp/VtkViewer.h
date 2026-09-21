@@ -158,6 +158,10 @@ class VtkViewer : public QWidget {
   QString plot_stats_snapshot() const;
   QString table_snapshot_text() const;
   QString table_stats_snapshot() const;
+  QVariantMap plot_snapshot() const;
+  QVariantMap table_snapshot() const;
+  void set_result_history_enabled(bool enabled);
+  void retranslate_results();
   // 舞台左侧工具栏复用的轻量命令入口。
   void set_stage_interaction_mode(int mode);  // 0=旋转 1=平移 2=缩放
   void apply_stage_view(int preset);          // 0=适配 1=前 2=右 3=顶 4=轴测
@@ -181,6 +185,9 @@ signals:
   void stage_slice_changed(bool enabled);
   // 时间步集合或文件数据状态变化（加载/卸载/刷新后），供命令可用性刷新
   void time_steps_changed();
+  void result_data_changed();
+  void result_history_progress(const QString& field, int completed,
+                               int total);
   void stage_command_feedback(const QString& message);
 
  private slots:
@@ -321,6 +328,9 @@ signals:
   QComboBox* probe_mode_ = nullptr;
   QPushButton* probe_clear_ = nullptr;
   QLabel* probe_info_ = nullptr;
+  qlonglong result_probe_id_ = -1;
+  bool result_probe_point_ = true;
+  QList<qlonglong> result_path_point_ids_;
   QCheckBox* deform_enable_ = nullptr;
   QComboBox* deform_vector_ = nullptr;
   QDoubleSpinBox* deform_scale_ = nullptr;
@@ -332,6 +342,9 @@ signals:
   QString cached_plot_stats_;
   QString cached_table_text_;
   QString cached_table_stats_;
+  QVariantMap cached_plot_data_;
+  QVariantMap cached_table_data_;
+  bool result_history_enabled_ = false;
   int table_rows_ = 100;  // 表格预览行数(10~5000), 随 viewer_settings 持久化
 
 #ifdef GMP_ENABLE_VTK_VIEWER

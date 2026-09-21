@@ -21,6 +21,7 @@
 #include "gmp/ProjectSchema.h"
 #include "gmp/ProjectStore.h"
 #include "gmp/PropertyBag.h"
+#include "gmp/ResultData.h"
 #include "gmp/SimClient.h"
 #include "gmp/SketchDocument.h"
 #include "gmp/SnapshotService.h"
@@ -1618,7 +1619,8 @@ void test_project_store_contract(TestContext& test) {
   // 手工构造重名 YAML：save 不会去重（调用方保证唯一），load 去重。
   const QString dup_file = workspace.filePath("dup.gmp.yaml");
   QFile dup_out(dup_file);
-  dup_out.open(QIODevice::WriteOnly | QIODevice::Text);
+  test.expect(dup_out.open(QIODevice::WriteOnly | QIODevice::Text),
+              "duplicate-name YAML fixture is opened");
   dup_out.write("schema_version: 2\nmodel:\n  Parts:\n"
                 "    - {name: part, kind: Parts, params: {type: Part}}\n"
                 "    - {name: part, kind: Parts, params: {type: Part}}\n");
@@ -1878,11 +1880,22 @@ void test_moose_input_generator_contract(TestContext& test) {
               "contact block uses primary/secondary syntax");
   test.expect(out.executioner.contains("[Executioner]") &&
                   out.executioner.contains("type = Transient") &&
+                  out.executioner.contains("scheme = implicit-euler") &&
                   out.executioner.contains("[TimeStepper]") &&
                   out.executioner.contains("type = IterationAdaptiveDT") &&
                   out.executioner.contains("[Preconditioning/smp]") &&
                   out.executioner.contains("full = true"),
               "executioner carries TimeStepper sub-block and Preconditioning");
+
+  auto bdf2_input = input;
+  for (auto& item : bdf2_input.entries) {
+    if (item.kind == "Steps") {
+      item.params.insert("scheme", "bdf2");
+    }
+  }
+  test.expect(gmp::MooseInputGenerator::generate(bdf2_input)
+                  .executioner.contains("scheme = bdf2"),
+              "executioner preserves an explicit bdf2 scheme");
   test.expect(out.global_params ==
                   "[GlobalParams]\n  displacements = 'disp_x disp_y disp_z'\n[]\n",
               "global params carry the injected displacements");
@@ -1895,9 +1908,10 @@ void test_moose_input_generator_contract(TestContext& test) {
               "physics action block quotes multi-value block and save_in");
   test.expect(out.outputs.contains("[field_exodus]") &&
                   out.outputs.contains("[history_csv]") &&
+                  out.outputs.count("sync_times_object") == 1 &&
                   out.times_header == "Times/field_output_times" &&
                   out.times.contains("time_interval = 0.01"),
-              "outputs package emits exodus/csv and the Times object");
+              "outputs package syncs Exodus only and avoids numbered CSV copies");
   test.expect(out.aux_variables.contains("[resid_x]") &&
                   out.aux_kernels.contains("type = MaterialRealAux") &&
                   out.aux_kernels.contains("block = 'instance_plate'") &&
@@ -2455,6 +2469,88 @@ void test_submission_manifest(TestContext& test) {
               "solver program with path components is rejected");
 }
 
+void test_result_data_contract(TestContext& test) {
+  QTemporaryDir temp;
+  const QString root = temp.path() + "/job_demo";
+  const QString csv = root + "/results/case.csv";
+  const QString exodus = root + "/results/case.e";
+  test.expect(write_file(csv, "\xEF\xBB\xBFtime [s];force (N);note\n"
+                              "0;1.25;ok\n1;NaN;end\n"),
+              "result CSV fixture is written");
+  test.expect(write_file(exodus, "exodus"),
+              "result Exodus fixture is written");
+  test.expect(write_file(root + "/results/case_field_output_times_0001.csv",
+                         "times\n0\n1\n"),
+              "auxiliary Times fixture is written");
+  test.expect(write_file(root + "/input/case.i", "[Mesh]\n[]\n") &&
+                  write_file(root + "/task.md", "# task\n"),
+              "result package metadata fixtures are written");
+
+  const gmp::CsvData parsed = gmp::read_csv_data(csv);
+  test.expect(parsed.valid() && parsed.encoding == "UTF-8 BOM" &&
+                  parsed.delimiter == ";" && parsed.rows.size() == 2 &&
+                  parsed.units.value(0) == "s" &&
+                  parsed.units.value(1) == "N" &&
+                  parsed.numeric_headers() ==
+                      QStringList({"time [s]", "force (N)"}),
+              "CSV parser preserves numeric values, NaN, units and delimiter");
+  const QVariantMap csv_table = parsed.table_snapshot();
+  test.expect(csv_table.value("columns").toStringList().value(0) == "Row" &&
+                  csv_table.value("rows").toList().value(1).toList().value(0)
+                          .toInt() == 1,
+              "CSV table prepends a stable row entity column");
+
+  QJsonObject manifest;
+  manifest.insert("job_id", "job_demo");
+  QJsonArray files;
+  for (const QString& relative : {QString("results/case.csv"),
+                                  QString("results/case.e"),
+                                  QString("results/case_field_output_times_0001.csv"),
+                                  QString("input/case.i"), QString("task.md")}) {
+    QJsonObject entry;
+    entry.insert("path", relative);
+    entry.insert("size", static_cast<double>(QFileInfo(root + "/" + relative).size()));
+    files.append(entry);
+  }
+  manifest.insert("files", files);
+  test.expect(write_file(root + "/snapshot-manifest.json",
+                         QJsonDocument(manifest).toJson()),
+              "result package manifest fixture is written");
+
+  const gmp::ResultPackage package = gmp::inspect_result_package(root + "/results");
+  test.expect(package.managed && package.job_id == "job_demo" &&
+                  package.main_exodus == exodus && package.main_csv == csv &&
+                  package.auxiliary_times_csv.size() == 1 &&
+                  package.input_files.size() == 1 &&
+                  package.log_report_files.size() >= 1,
+              "task root and results directory resolve to one classified package");
+  test.expect(gmp::result_file_is_usable(package, package.main_exodus),
+              "unchanged main Exodus is usable");
+
+  test.expect(write_file(exodus, "changed size"),
+              "changed main Exodus fixture is written");
+  const gmp::ResultPackage changed = gmp::inspect_result_package(root);
+  test.expect(!gmp::result_file_is_usable(changed, changed.main_exodus) &&
+                  changed.warnings.contains("Size changed: results/case.e"),
+              "changed main Exodus is blocked before VTK loading");
+  test.expect(QFile::remove(exodus), "missing main Exodus fixture is removed");
+  const gmp::ResultPackage missing = gmp::inspect_result_package(root);
+  test.expect(missing.main_exodus == exodus && missing.main_csv == csv &&
+                  !gmp::result_file_is_usable(missing, missing.main_exodus),
+              "missing main Exodus keeps package metadata and history usable");
+
+  test.expect(write_file(root + "/results/bad.csv", "time,value\n0,1\n1\n"),
+              "bad CSV fixture is written");
+  const gmp::CsvData blocked =
+      gmp::read_csv_data(root + "/results/bad.csv");
+  const gmp::CsvData ignored =
+      gmp::read_csv_data(root + "/results/bad.csv", true);
+  test.expect(!blocked.valid() && ignored.valid() &&
+                  ignored.ignored_bad_rows == 1 && ignored.rows.size() == 1 &&
+                  ignored.ignored_row_errors.value(0).contains("Line 3"),
+              "bad CSV rows block by default and are ignored only explicitly");
+}
+
 }  // namespace
 
 int main(int argc, char* argv[]) {
@@ -2481,6 +2577,7 @@ int main(int argc, char* argv[]) {
   test_assembly_mesher_service_contract(test);
   test_viewport_foundation_contract(test);
   test_submission_manifest(test);
+  test_result_data_contract(test);
   if (test.failures == 0) {
     qInfo("Phase 0 contract tests PASSED");
   } else {

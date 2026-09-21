@@ -261,6 +261,7 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   auto* scalar_layout = make_tab("Scalar");
 
   array_combo_ = new QComboBox();
+  array_combo_->setObjectName("resultArrayCombo");
   AttachComboPopupFix(array_combo_);
   connect(array_combo_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, &VtkViewer::on_array_changed);
@@ -433,8 +434,10 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   mesh_layout->addWidget(probe_header);
   probe_enable_ = new QCheckBox("Enable Probe");
   probe_mode_ = new QComboBox();
+  probe_mode_->setObjectName("resultProbeMode");
   probe_mode_->addItem("Point", 0);
   probe_mode_->addItem("Cell", 1);
+  probe_mode_->addItem("Path points", 2);
   AttachComboPopupFix(probe_mode_);
   probe_clear_ = new QPushButton("Clear");
   hrow(mesh_layout, {probe_enable_, new QLabel("Mode"), probe_mode_,
@@ -463,11 +466,21 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
             }
           });
   connect(probe_mode_, QOverload<int>::of(&QComboBox::currentIndexChanged),
-          this, [update_probe_status](int) { update_probe_status(); });
+          this, [this, update_probe_status](int) {
+            if (probe_mode_->currentData().toInt() != 2)
+              result_path_point_ids_.clear();
+            update_probe_status();
+            update_plot_view();
+            update_table_view();
+          });
   connect(probe_clear_, &QPushButton::clicked, this, [this]() {
+    result_probe_id_ = -1;
+    result_path_point_ids_.clear();
     if (probe_info_) {
       probe_info_->setText("Probe: cleared");
     }
+    update_plot_view();
+    update_table_view();
   });
 
   auto* view_layout = make_tab("View");
@@ -739,6 +752,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
 
 void VtkViewer::clear_stage_data() {
   current_file_.clear();
+  result_probe_id_ = -1;
+  result_path_point_ids_.clear();
   pending_reload_ = false;
   setup_watcher(QString());
   if (debounce_timer_) {
@@ -1306,19 +1321,15 @@ void VtkViewer::update_pipeline() {
   }
   if (mode_ == DataMode::Exodus && reader_ && geom_) {
     if (!time_steps_.empty()) {
-      vtkInformation* info = reader_->GetOutputInformation(0);
+      vtkInformation* info = geom_->GetOutputInformation(0);
       if (info) {
         const int idx = time_slider_->value();
         const double t = time_steps_[idx];
         info->Set(vtkStreamingDemandDrivenPipeline::UPDATE_TIME_STEP(), t);
       }
     }
-    reader_->Update();
-    // reader 输出对象被原地复用，下游执行器检测不到时间步变化；
-    // 显式标脏中间过滤器，强制整条链路按新时间步重新执行。
-    if (block_pad_) {
-      block_pad_->Modified();
-    }
+    // 时间请求必须从最终消费者向上游传播；直接设置 reader 会在
+    // geom_->Update() 时被下游的当前请求覆盖，表现为所有时间步同一帧。
     geom_->Update();
     update_deformation_pipeline();
   } else if (mode_ == DataMode::Mesh) {
@@ -1806,6 +1817,25 @@ QString VtkViewer::table_snapshot_text() const {
 }
 QString VtkViewer::table_stats_snapshot() const {
   return result_viewport_->table_stats_snapshot();
+}
+QVariantMap VtkViewer::plot_snapshot() const {
+  return result_viewport_->plot_snapshot();
+}
+QVariantMap VtkViewer::table_snapshot() const {
+  return result_viewport_->table_snapshot();
+}
+
+void VtkViewer::set_result_history_enabled(bool enabled) {
+  if (result_history_enabled_ == enabled) return;
+  result_history_enabled_ = enabled;
+  if (enabled) {
+    update_plot_view();
+    emit result_data_changed();
+  }
+}
+void VtkViewer::retranslate_results() {
+  update_plot_view();
+  update_table_view();
 }
 void VtkViewer::on_reload() {
   result_viewport_->on_reload();

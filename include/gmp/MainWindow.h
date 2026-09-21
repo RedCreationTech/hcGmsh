@@ -43,6 +43,7 @@ class QProgressBar;
 class QCheckBox;
 class QTimer;
 class QSlider;
+class QSpinBox;
 
 namespace gmp {
 
@@ -56,6 +57,8 @@ class SketchDocument;
 class StageLeftToolbar;
 class FloatingPropertyForm;
 class ModelTreeAdapter;
+class ResultsPlotWidget;
+class ResultsTableWidget;
 
 class MainWindow : public QMainWindow {
   Q_OBJECT
@@ -126,6 +129,8 @@ class MainWindow : public QMainWindow {
   // 导入外部结果文件（.e/.exo/.msh/.csv/.txt/.log）为 Results 节点；
   // Exodus/网格同时载入中央舞台。
   void import_result_file(const QString& path);
+  void import_result_package(const QString& path,
+                             const QString& replace_root = QString());
   QVariantMap default_params_for_kind(const QString& kind) const;
   QVariantMap normalize_params_for_kind(const QString& kind,
                                         const QVariantMap& params) const;
@@ -319,6 +324,9 @@ class MainWindow : public QMainWindow {
   bool selected_job_remote_ = false;
   bool selected_job_running_ = false;
   QListWidget* results_list_ = nullptr;
+  ResultsPlotWidget* results_plot_widget_ = nullptr;
+  ResultsTableWidget* results_table_widget_ = nullptr;
+  QSpinBox* results_table_time_step_ = nullptr;
   QPlainTextEdit* results_preview_ = nullptr;
   QComboBox* results_type_filter_ = nullptr;
   QListWidget* module_part_list_ = nullptr;

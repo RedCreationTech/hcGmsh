@@ -472,6 +472,7 @@ QString build_executioner_block(const EntryView& items, bool chinese_ui,
 
   QStringList consumed = QStringList{"type", "status", "state"} +
                          timestepper_keys + preconditioning_keys + ordered_keys;
+  consumed << "scheme";
   if (has_timestepper) {
     // dt 在 v01 中位于 [TimeStepper] 子块；无 timestepper_type 时（demo
     // 旧数据）dt 保持 Executioner 级平铺。
@@ -481,6 +482,13 @@ QString build_executioner_block(const EntryView& items, bool chinese_ui,
   QString out;
   out += "[Executioner]\n";
   out += QString("  type = %1\n").arg(type);
+  if (type.compare("Transient", Qt::CaseInsensitive) == 0) {
+    QString scheme = params.value("scheme").toString().trimmed();
+    if (scheme.isEmpty()) {
+      scheme = "implicit-euler";
+    }
+    out += QString("  scheme = %1\n").arg(scheme);
+  }
   for (const auto& key : ordered_keys) {
     const QString value = params.value(key).toString().trimmed();
     if (!value.isEmpty()) {
@@ -824,11 +832,12 @@ QString build_outputs_block(const EntryView& items,
   if (!exodus_on && !csv_on) {
     exodus_on = true;  // 兜底：勾选套餐后至少保留一路落盘。
   }
-  auto emit_output_subblock = [&](const QString& name, const QString& type) {
+  auto emit_output_subblock = [&](const QString& name, const QString& type,
+                                  bool sync_to_times) {
     out += QString("  [%1]\n").arg(name);
     out += QString("    type = %1\n").arg(type);
     out += "    execute_on = 'initial timestep_end'\n";
-    if (times) {
+    if (times && sync_to_times) {
       out += QString("    sync_times_object = %1\n").arg(times_name);
       out += "    sync_only = true\n";
     }
@@ -838,10 +847,12 @@ QString build_outputs_block(const EntryView& items,
     out += "  []\n";
   };
   if (exodus_on) {
-    emit_output_subblock("field_exodus", "Exodus");
+    emit_output_subblock("field_exodus", "Exodus", true);
   }
   if (csv_on) {
-    emit_output_subblock("history_csv", "CSV");
+    // CSV is already a time history. Syncing it to a Times object makes MOOSE
+    // emit one numbered copy per output time, flooding the result directory.
+    emit_output_subblock("history_csv", "CSV", false);
   }
   out += "[]\n";
   return out;

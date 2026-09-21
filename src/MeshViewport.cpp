@@ -1246,7 +1246,8 @@ void MeshViewport::handle_pick(int x, int y) {
   }
 
   const int probe_mode = host_->probe_mode_ ? host_->probe_mode_->currentData().toInt() : 0;
-  const bool want_point = (probe_mode == 0);
+  const bool path_mode = (probe_mode == 2);
+  const bool want_point = (probe_mode == 0 || path_mode);
   vtkIdType cell_id = host_->picker_->GetCellId();
   vtkIdType point_id = host_->picker_->GetPointId();
   double pos[3] = {0.0, 0.0, 0.0};
@@ -1321,19 +1322,34 @@ void MeshViewport::handle_pick(int x, int y) {
   };
 
   const vtkIdType id = want_point ? point_id : cell_id;
+  host_->result_probe_id_ = static_cast<qlonglong>(id);
+  host_->result_probe_point_ = want_point;
+  if (path_mode &&
+      (host_->result_path_point_ids_.isEmpty() ||
+       host_->result_path_point_ids_.last() != id)) {
+    host_->result_path_point_ids_ << static_cast<qlonglong>(id);
+  } else if (!path_mode) {
+    host_->result_path_point_ids_.clear();
+  }
   const QString value = format_value(array, id);
-  const QString mode_label = want_point ? "Point" : "Cell";
+  const QString mode_label = path_mode ? "Path" : (want_point ? "Point" : "Cell");
   const QString label = array_name.isEmpty() ? "value" : array_name;
   if (host_->probe_info_) {
-    host_->probe_info_->setText(QString("Probe (%1): id=%2 pos=(%3, %4, %5) %6=%7")
+    host_->probe_info_->setText(QString("Probe (%1): id=%2 pos=(%3, %4, %5) %6=%7%8")
                              .arg(mode_label)
                              .arg(id)
                              .arg(pos[0], 0, 'g', 6)
                              .arg(pos[1], 0, 'g', 6)
                              .arg(pos[2], 0, 'g', 6)
                              .arg(label)
-                             .arg(value));
+                             .arg(value)
+                             .arg(path_mode
+                                      ? QString(" · %1 path points")
+                                            .arg(host_->result_path_point_ids_.size())
+                                      : QString()));
   }
+  host_->update_plot_view();
+  host_->update_table_view();
 #endif
 }
 
