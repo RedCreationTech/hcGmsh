@@ -64,6 +64,7 @@ class MainWindow : public QMainWindow {
   Q_OBJECT
  public:
  explicit MainWindow(QWidget* parent = nullptr);
+ ~MainWindow() override;
 
  // 文档截图巡览：依次切换各模块页与中栏页签，抓取窗口截图保存到 dir 后退出。
  // 由 main.cpp 在设置 GMP_SCREENSHOT_DIR 环境变量时触发。
@@ -77,6 +78,7 @@ class MainWindow : public QMainWindow {
  private:
   void build_menu();
   void build_toolbar();
+  void apply_language_to_windows();
   // 创建并接线一个工具组（顶部停靠、紧凑尺寸、浮动恢复）；复位时
   // 也用同一入口重建被拖出的工具组。
   QToolBar* make_tool_group(const QString& title, const QString& object_name);
@@ -254,8 +256,7 @@ class MainWindow : public QMainWindow {
   // 工作窗公共越界恢复：按窗口中心定位屏幕，尺寸与位置夹取到可用区域。
   // 所有独立工作窗（Mesh/Job/Visualization/Results/对比窗）复用同一规则。
   void clamp_window_to_screen(QWidget* window);
-  // macOS 自愈：浮动窗口真实拖拽（OS 级拖拽会话）后，工具条区域可能
-  // 不再重排/重绘。用 1px 抖动触发整窗原生重排，恢复工具条渲染。
+  // macOS 自愈：浮动窗口拖拽后延迟重排/重绘。
   void force_native_relayout();
   void remember_active_object_for_module(int module_index);
   void restore_active_object_for_module(int module_index);

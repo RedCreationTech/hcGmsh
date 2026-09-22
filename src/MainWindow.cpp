@@ -1135,24 +1135,19 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   stage_layout->addWidget(center_scroll, 1);
   center_layout->addWidget(stage_host, 1);
 
-  module_work_window_ = new QDockWidget("Module Workspace", this);
+  // 这些工作窗只借用 QDockWidget 的标题栏/内容容器能力，不参与
+  // QMainWindow 的 dock 状态机。macOS 上即便不调用 addDockWidget，
+  // 只要 QWidget 父对象仍是 QMainWindow，首次显示后也可能让主窗口
+  // 的原生 contentView 停留在旧尺寸。
+  module_work_window_ =
+      new QDockWidget("Module Workspace", nullptr, Qt::Tool);
   module_work_window_->setObjectName("moduleWorkspaceWindow");
   module_work_window_->setFeatures(QDockWidget::DockWidgetClosable |
                                    QDockWidget::DockWidgetMovable |
                                    QDockWidget::DockWidgetFloatable);
   module_work_window_->setMinimumSize(620, 400);
   module_work_window_->resize(680, 560);
-  addDockWidget(Qt::RightDockWidgetArea, module_work_window_);
-  module_work_window_->setFloating(true);
   module_work_window_->setAllowedAreas(Qt::NoDockWidgetArea);
-  // 双击标题栏会切换 floating；工作窗不允许停靠（NoDockWidgetArea），
-  // 直接进入非法吸附态（贴边小窗）。统一守卫：一律保持浮动。
-  connect(module_work_window_, &QDockWidget::topLevelChanged, this,
-          [this](bool floating) {
-            if (!floating && module_work_window_) {
-              module_work_window_->setFloating(true);
-            }
-          });
 
   auto* property_panel = new QFrame(module_work_window_);
   property_panel->setObjectName("propertyPanel");
@@ -1178,28 +1173,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto make_floating_workspace = [this](const QString& title,
                                         const QString& object_name,
                                         const QSize& initial_size) {
-    auto* workspace = new QDockWidget(title, this);
+    auto* workspace = new QDockWidget(title, nullptr, Qt::Tool);
     workspace->setObjectName(object_name);
     workspace->setFeatures(QDockWidget::DockWidgetClosable |
                            QDockWidget::DockWidgetMovable |
                            QDockWidget::DockWidgetFloatable);
     workspace->setMinimumSize(400, 240);
     workspace->resize(initial_size);
-    addDockWidget(Qt::RightDockWidgetArea, workspace);
-    workspace->setFloating(true);
     workspace->setAllowedAreas(Qt::NoDockWidgetArea);
-    // 双击标题栏守卫：无停靠区工作窗一律保持浮动，避免非法吸附态。
-    connect(workspace, &QDockWidget::topLevelChanged, workspace,
-            [this, workspace](bool floating) {
-              if (!floating) {
-                workspace->setFloating(true);
-              }
-              // 拖出/拖回后向窗口系统显式请求重绘，避免工具条区域
-              // 原生合成层滞留空白。
-              if (windowHandle()) {
-                windowHandle()->requestUpdate();
-              }
-            });
     workspace->hide();
     if (view_menu_) {
       auto* toggle = workspace->toggleViewAction();
@@ -3723,7 +3704,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
             }
             // 模块页与命令条是动态重建的, 中文模式下需重新翻译新控件
             if (l10n::current_language() == l10n::Language::Chinese) {
-              QTimer::singleShot(0, this, [this]() { l10n::apply(this); });
+              QTimer::singleShot(0, this,
+                                 [this]() { apply_language_to_windows(); });
             }
           });
   connect(module_selector_, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -4649,7 +4631,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     update_command_availability();
     // PropertyEditor 表单是动态重建的, 中文模式下需重新翻译
     if (l10n::current_language() == l10n::Language::Chinese) {
-      QTimer::singleShot(0, this, [this]() { l10n::apply(this); });
+      QTimer::singleShot(0, this,
+                         [this]() { apply_language_to_windows(); });
     }
   });
   connect(model_tree_, &QTreeWidget::itemDoubleClicked, this,
@@ -4791,16 +4774,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   const bool tool_layout_restored =
       tool_layout_version == 3 && !tool_layout_state.isEmpty() &&
       restoreState(tool_layout_state, 3);
-  // 防御：恢复历史布局状态可能把工作窗放回 docked 位置（旧版本或损坏
-  // 的 saveState blob），QMainWindow 会据此保留右/底部停靠区并在窗口
-  // 放大时形成空白。工作窗合同为浮动专用，恢复后强制全部浮动。
-  for (QDockWidget* workspace : {module_work_window_, mesh_work_window_,
-                                 job_work_window_, visualization_work_window_,
-                                 results_work_window_}) {
-    if (workspace) {
-      workspace->setFloating(true);
-    }
-  }
   if (!tool_layout_restored) {
     reset_tool_group_layout(false);
   }
@@ -4861,8 +4834,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   // 启动时恢复语言偏好 (动态重建的页面在模块切换时已另行处理)
   if (l10n::current_language() == l10n::Language::Chinese) {
-    QTimer::singleShot(0, this, [this]() { l10n::apply(this); });
+    QTimer::singleShot(0, this,
+                       [this]() { apply_language_to_windows(); });
   }
+}
+
+MainWindow::~MainWindow() {
+  // 独立顶层工作窗没有 QWidget 父对象，显式释放；否则 QApplication
+  // 退出前仍会保留这些窗口及其内容树。
+  qDeleteAll(results_compare_windows_);
+  delete results_work_window_;
+  delete visualization_work_window_;
+  delete job_work_window_;
+  delete mesh_work_window_;
+  delete module_work_window_;
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
@@ -5268,17 +5253,18 @@ void MainWindow::reset_tool_group_layout(bool show_feedback) {
 
 void MainWindow::force_native_relayout() {
   QTimer::singleShot(80, this, [this]() {
-    const QSize current = size();
-    resize(current.width(), current.height() + 1);
-    resize(current);
+    if (layout()) {
+      layout()->invalidate();
+      QCoreApplication::postEvent(this, new QEvent(QEvent::LayoutRequest));
+    }
+    update();
   });
 }
 
 void MainWindow::resizeEvent(QResizeEvent* event) {
   QMainWindow::resizeEvent(event);
-  // 防御：小窗 → 最大化/跨屏缩放时，个别平台（含 VTK 原生 GL 子控件、
-  // 多屏 DPI 切换）可能出现中央区域未跟随窗口的几何滞留。
-  // 显式触发一次布局重算与重绘，保证舞台与控制台充满新尺寸。
+  // QMainWindowLayout 自己管理菜单栏、工具栏和中央区几何；这里只需
+  // 上报中央控件的 sizeHint 变化，不能手工覆盖根布局 geometry。
   if (centralWidget()) {
     centralWidget()->updateGeometry();
   }
@@ -5331,6 +5317,14 @@ void MainWindow::closeEvent(QCloseEvent* event) {
     if (compare_window) {
       settings.setValue(compare_window->property("gmpGeometryKey").toString(),
                         compare_window->saveGeometry());
+      compare_window->hide();
+    }
+  }
+  for (QDockWidget* workspace : {module_work_window_, mesh_work_window_,
+                                 job_work_window_, visualization_work_window_,
+                                 results_work_window_}) {
+    if (workspace) {
+      workspace->hide();
     }
   }
   settings.sync();
@@ -5431,7 +5425,7 @@ void MainWindow::build_menu() {
   lang_en->setChecked(!is_zh);
   connect(lang_en, &QAction::triggered, this, [this]() {
     l10n::set_language(l10n::Language::English);
-    l10n::apply(this);
+    apply_language_to_windows();
     if (viewer_) viewer_->retranslate_results();
     if (results_table_time_step_)
       results_table_time_step_->setPrefix(l10n::tr("Time step") + " ");
@@ -5445,7 +5439,7 @@ void MainWindow::build_menu() {
   });
   connect(lang_zh, &QAction::triggered, this, [this]() {
     l10n::set_language(l10n::Language::Chinese);
-    l10n::apply(this);
+    apply_language_to_windows();
     if (viewer_) viewer_->retranslate_results();
     if (results_table_time_step_)
       results_table_time_step_->setPrefix(l10n::tr("Time step") + " ");
@@ -5769,6 +5763,22 @@ void MainWindow::build_menu() {
           [this]() { load_demo_nonlinear_heat(true); });
 
   update_recent_menu();
+}
+
+void MainWindow::apply_language_to_windows() {
+  l10n::apply(this);
+  for (QDockWidget* workspace : {module_work_window_, mesh_work_window_,
+                                 job_work_window_, visualization_work_window_,
+                                 results_work_window_}) {
+    if (workspace) {
+      l10n::apply(workspace);
+    }
+  }
+  for (QDockWidget* compare_window : results_compare_windows_) {
+    if (compare_window) {
+      l10n::apply(compare_window);
+    }
+  }
 }
 
 QToolBar* MainWindow::make_tool_group(const QString& title,
@@ -9700,7 +9710,7 @@ QDockWidget* MainWindow::create_results_compare_window() {
   const QString geometry_key =
       QString("ui/layout/v1/results_compare_%1_geometry").arg(index);
 
-  auto* window = new QDockWidget(base_title, this);
+  auto* window = new QDockWidget(base_title, nullptr, Qt::Tool);
   window->setObjectName(QString("resultsCompareWindow%1").arg(index));
   window->setProperty("gmpGeometryKey", geometry_key);
   window->setFeatures(QDockWidget::DockWidgetClosable |
@@ -9708,15 +9718,7 @@ QDockWidget* MainWindow::create_results_compare_window() {
                       QDockWidget::DockWidgetFloatable);
   window->setMinimumSize(400, 260);
   window->resize(900, 620);
-  addDockWidget(Qt::RightDockWidgetArea, window);
-  window->setFloating(true);
   window->setAllowedAreas(Qt::NoDockWidgetArea);
-  connect(window, &QDockWidget::topLevelChanged, window,
-          [window](bool floating) {
-            if (!floating) {
-              window->setFloating(true);
-            }
-          });
 
   auto* content = new QWidget(window);
   auto* layout = new QVBoxLayout(content);
@@ -13791,8 +13793,9 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   if (viewer_->stage_data_visible() != stage_before) {
                     throw std::runtime_error("I-04 results close semantics contract failed");
                   }
-                  // 单实例 + 越界恢复：四个独立工作窗同名唯一，
-                  // 移出屏幕后通过真实模块入口激活必须回到可视区。
+                  // 单实例 + 越界恢复：四个独立工作窗必须彻底脱离
+                  // QMainWindow 的 QWidget 层级；移出屏幕后通过真实模块
+                  // 入口激活必须回到可视区。
                   const QList<QPair<QString, QDockWidget*>> workspaces = {
                       {"meshWorkspaceWindow", mesh_work_window_},
                       {"jobWorkspaceWindow", job_work_window_},
@@ -13805,9 +13808,10 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     if (!workspace) {
                       throw std::runtime_error("I-04 workspace fixture is missing");
                     }
-                    if (findChildren<QDockWidget*>(workspaces.at(i).first)
-                            .size() != 1) {
-                      throw std::runtime_error("I-04 workspace single-instance contract failed");
+                    if (workspace->objectName() != workspaces.at(i).first ||
+                        workspace->parentWidget() || !workspace->isWindow()) {
+                      throw std::runtime_error(
+                          "I-04 standalone workspace contract failed");
                     }
                     workspace->move(-10000, -10000);
                     module_tabs_->setCurrentIndex(module_indices.at(i));
@@ -13823,13 +13827,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       throw std::runtime_error("I-04 workspace out-of-bounds recovery contract failed");
                     }
                   }
-                  // Module Workspace 同样适用浮动守卫。
-                  if (module_work_window_) {
-                    module_work_window_->setFloating(false);
-                    qApp->processEvents();
-                    if (!module_work_window_->isFloating()) {
-                      throw std::runtime_error("I-04 module workspace floating guard failed");
-                    }
+                  // Module Workspace 也必须是无 QWidget 父对象的独立窗口。
+                  if (!module_work_window_ ||
+                      module_work_window_->parentWidget() ||
+                      !module_work_window_->isWindow()) {
+                    throw std::runtime_error(
+                        "I-04 module standalone workspace contract failed");
                   }
                 },
                 results_work_window_});
@@ -13863,10 +13866,14 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       !second->windowTitle().contains("Compare")) {
                     throw std::runtime_error("I-04 compare title contract failed");
                   }
-                  // 默认 Results 工作窗仍为单实例。
-                  if (findChildren<QDockWidget*>("resultsWorkspaceWindow")
-                          .size() != 1) {
-                    throw std::runtime_error("I-04 results single-instance contract failed");
+                  // 默认 Results 工作窗仍为独立单实例；对比窗也不得进入
+                  // 主窗口 QWidget 层级。
+                  if (results_work_window_->parentWidget() ||
+                      first->parentWidget() || second->parentWidget() ||
+                      !results_work_window_->isWindow() ||
+                      !first->isWindow() || !second->isWindow()) {
+                    throw std::runtime_error(
+                        "I-04 results standalone window contract failed");
                   }
                   // 独立几何记忆：两个实例可拥有不同位置。
                   first->move(120, 120);
@@ -16302,8 +16309,11 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     table_nonzero =
                         table_nonzero || std::abs(row.value(1).toDouble()) > 1e-12;
                   }
-                  auto* table_step =
-                      findChild<QSpinBox*>("resultTableTimeStep");
+                  auto* table_step = results_work_window_
+                                         ? results_work_window_->findChild<
+                                               QSpinBox*>(
+                                               "resultTableTimeStep")
+                                         : nullptr;
                   if (!table_nonzero || table.value("time").toDouble() != 1.0 ||
                       !table_step || table_step->maximum() != 1) {
                     throw std::runtime_error(
@@ -16459,20 +16469,31 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   // V-02 国际化：中/英往返切换，既有菜单与本轮新增字符串
                   // 都必须完整跟随，且不破坏数据内容。
                   auto* file_menu = findChild<QMenu*>("fileMenu");
-                  auto* import_btn =
-                      findChild<QPushButton*>("resultsImportFile");
-                  auto* verify_btn =
-                      findChild<QPushButton*>("resultsVerifyPackage");
-                  auto* pin_btn =
-                      findChild<QPushButton*>("resultsPinPreview");
-                  auto* latest_btn =
-                      findChild<QPushButton*>("resultTableLatestStep");
+                  auto* import_btn = results_work_window_
+                                         ? results_work_window_->findChild<
+                                               QPushButton*>(
+                                               "resultsImportFile")
+                                         : nullptr;
+                  auto* verify_btn = results_work_window_
+                                         ? results_work_window_->findChild<
+                                               QPushButton*>(
+                                               "resultsVerifyPackage")
+                                         : nullptr;
+                  auto* pin_btn = results_work_window_
+                                      ? results_work_window_->findChild<
+                                            QPushButton*>("resultsPinPreview")
+                                      : nullptr;
+                  auto* latest_btn = results_work_window_
+                                         ? results_work_window_->findChild<
+                                               QPushButton*>(
+                                               "resultTableLatestStep")
+                                         : nullptr;
                   if (!file_menu || !import_btn || !verify_btn || !pin_btn ||
                       !latest_btn || !job_state_filter_) {
                     throw std::runtime_error("V-02 l10n fixture is missing");
                   }
                   l10n::set_language(l10n::Language::Chinese);
-                  l10n::apply(this);
+                  apply_language_to_windows();
                   if (!file_menu->title().contains("文件") ||
                       import_btn->text() != "导入结果文件..." ||
                       verify_btn->text() != "验证结果包" ||
@@ -16483,7 +16504,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     throw std::runtime_error("V-02 zh translation contract failed");
                   }
                   l10n::set_language(l10n::Language::English);
-                  l10n::apply(this);
+                  apply_language_to_windows();
                   if (!file_menu->title().contains("File") ||
                       import_btn->text() != "Import Result File..." ||
                       verify_btn->text() != "Verify Package" ||
@@ -16494,7 +16515,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     throw std::runtime_error("V-02 en translation contract failed");
                   }
                   l10n::set_language(l10n::Language::Chinese);
-                  l10n::apply(this);
+                  apply_language_to_windows();
                   if (!file_menu->title().contains("文件") ||
                       import_btn->text() != "导入结果文件...") {
                     throw std::runtime_error("V-02 restore translation contract failed");
@@ -16549,8 +16570,11 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   if (!console_->toPlainText().contains("[op] gmsh |")) {
                     throw std::runtime_error("Gmsh log forwarding contract failed");
                   }
-                  auto* toggle =
-                      findChild<QPushButton*>("resultsPreviewToggle");
+                  auto* toggle = results_work_window_
+                                     ? results_work_window_->findChild<
+                                           QPushButton*>(
+                                           "resultsPreviewToggle")
+                                     : nullptr;
                   if (!toggle) {
                     throw std::runtime_error("Results preview toggle is missing");
                   }
@@ -20258,25 +20282,57 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                 this});
   steps.append({"main_window_maximize_expands",
                 [this]() {
-                  // 主窗口最大化后中央区域必须充满：小窗 → 最大化，
-                  // 中央控件尺寸应跟随窗口。
+                  // 最大化和浮动窗交互后的普通缩放都必须让中央区域充满。
+                  auto fills_window = [this](const char* tag) {
+                    const QSize cs = centralWidget()->size();
+                    const QSize ws = size();
+                    const QRect lg = layout() ? layout()->geometry() : QRect();
+                    const QRect cr = contentsRect();
+                    qInfo("[tour] %s: window=%dx%d central=%dx%d layout=%dx%d contents=%dx%d state=%d",
+                          tag,
+                          ws.width(), ws.height(), cs.width(), cs.height(),
+                          lg.width(), lg.height(), cr.width(), cr.height(),
+                          int(windowState()));
+                    return cs.width() >= ws.width() - 40 &&
+                           cs.height() >= ws.height() - 120;
+                  };
                   resize(800, 600);
                   qApp->processEvents();
                   showMaximized();
                   qApp->processEvents();
-                  QTimer::singleShot(600, this, [this]() {
+                  QTimer::singleShot(600, this, [this, fills_window]() {
                     qApp->processEvents();
-                    const QSize cs = centralWidget()->size();
-                    const QSize ws = size();
-                    qInfo("[tour] maximize check: window=%dx%d central=%dx%d",
-                          ws.width(), ws.height(), cs.width(), cs.height());
-                    if (cs.width() < ws.width() - 40 ||
-                        cs.height() < ws.height() - 120) {
+                    if (!fills_window("maximize check")) {
                       qCritical("[tour] FAILED: central does not expand after maximize");
                       QApplication::exit(2);
                       return;
                     }
-                    qInfo("[tour] maximize check OK");
+                    auto wait_for_window_system = [](int milliseconds) {
+                      QEventLoop loop;
+                      QTimer::singleShot(milliseconds, &loop,
+                                         &QEventLoop::quit);
+                      loop.exec();
+                    };
+                    showNormal();
+                    wait_for_window_system(250);
+                    results_work_window_->show();
+                    results_work_window_->raise();
+                    qApp->processEvents();
+                    wait_for_window_system(100);
+                    resize(900, 650);
+                    qApp->processEvents();
+                    force_native_relayout();
+                    wait_for_window_system(160);
+                    resize(1400, 900);
+                    qApp->processEvents();
+                    wait_for_window_system(600);
+                    if (!fills_window("post-workspace resize check")) {
+                      qCritical("[tour] FAILED: central does not follow repeated resize");
+                      QApplication::exit(2);
+                      return;
+                    }
+                    results_work_window_->hide();
+                    qInfo("[tour] maximize/repeated resize checks OK");
                     QApplication::quit();
                   });
                 },
@@ -20690,6 +20746,9 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
             }
             qInfo("[tour] step %d -> %s", *state,
                   qPrintable(steps[*state].name));
+            if (steps[*state].name == "main_window_maximize_expands") {
+              timer->stop();
+            }
             try {
               steps[*state].activate();
             } catch (const std::exception& error) {
