@@ -16090,6 +16090,11 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                                    QWidget*>(
                                                    "resultsPlotPanel"))
                                          : nullptr;
+                  auto* pin_preview = results_work_window_
+                                          ? results_work_window_->findChild<
+                                                QPushButton*>(
+                                                "resultsPinPreview")
+                                          : nullptr;
                   auto* component = results_work_window_
                                         ? results_work_window_->findChild<
                                               QComboBox*>(
@@ -16118,8 +16123,8 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                          : nullptr;
                   if (!root || !table_panel || !data_table || !plot_canvas ||
                       !plot_panel || !component || !probe_mode ||
-                      probe_mode->findData(2) < 0 || !legend || !page_size ||
-                      !page || !entity_min) {
+                      probe_mode->findData(2) < 0 || !pin_preview || !legend ||
+                      !page_size || !page || !entity_min) {
                     throw std::runtime_error(
                         "Results workspace widgets are missing");
                   }
@@ -16209,14 +16214,29 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                                       QVariantList{0.0, 3.0},
                                                       QVariantList{1.0, 4.0}}}}}}};
                   plot_panel->set_field_snapshot(plot_snapshot);
-                  if (component->count() != 2 || legend->rowCount() != 1 ||
-                      legend->item(0, 1)->text() != "stress magnitude") {
+                  if (component->count() != 2 || legend->columnCount() != 4 ||
+                      legend->rowCount() != 1 ||
+                      legend->item(0, 1)->checkState() != Qt::Unchecked ||
+                      legend->item(0, 2)->text() != "stress magnitude") {
                     throw std::runtime_error(
                         "Results plot component default contract failed");
                   }
+                  pin_preview->click();
+                  if (legend->item(0, 1)->checkState() != Qt::Checked ||
+                      plot_panel->settings().size() != 1) {
+                    throw std::runtime_error(
+                        "Results pinned curve state contract failed");
+                  }
+                  legend->item(0, 1)->setCheckState(Qt::Unchecked);
+                  if (legend->rowCount() != 1 ||
+                      legend->item(0, 1)->checkState() != Qt::Unchecked ||
+                      !plot_panel->settings().isEmpty()) {
+                    throw std::runtime_error(
+                        "Results unpin curve contract failed");
+                  }
                   component->setCurrentText("C0");
                   if (legend->rowCount() != 1 ||
-                      legend->item(0, 1)->text() != "stress C0") {
+                      legend->item(0, 2)->text() != "stress C0") {
                     throw std::runtime_error(
                         "Results plot component switch contract failed");
                   }

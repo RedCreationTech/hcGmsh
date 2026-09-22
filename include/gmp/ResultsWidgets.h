@@ -72,6 +72,7 @@ class ResultsPlotWidget final : public QWidget {
     int line_style = 1;
     int marker = 0;
     bool preview = false;
+    bool pinned = false;
     bool visible = true;
   };
 

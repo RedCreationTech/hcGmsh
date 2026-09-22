@@ -523,15 +523,19 @@ ResultsPlotWidget::ResultsPlotWidget(QWidget* parent) : QWidget(parent) {
   canvas_->setObjectName("resultsPlotCanvas");
   legend_ = new QTableWidget(this);
   legend_->setObjectName("resultsCurveLegend");
-  legend_->setColumnCount(3);
-  legend_->setHorizontalHeaderLabels({"Visible", "Curve", "Source"});
+  legend_->setColumnCount(4);
+  legend_->setHorizontalHeaderLabels({"Visible", "Pinned", "Curve", "Source"});
   legend_->setSelectionBehavior(QAbstractItemView::SelectRows);
   legend_->setMaximumWidth(360);
   body->addWidget(canvas_, 1);
   body->addWidget(legend_);
   layout->addLayout(body, 1);
   connect(pin, &QPushButton::clicked, this, [this]() {
-    for (Series& item : series_) item.preview = false;
+    for (Series& item : series_) {
+      if (!item.preview) continue;
+      item.preview = false;
+      item.pinned = true;
+    }
     refresh();
   });
   connect(import, &QPushButton::clicked, this, [this]() {
@@ -557,11 +561,24 @@ ResultsPlotWidget::ResultsPlotWidget(QWidget* parent) : QWidget(parent) {
   });
   connect(legend_, &QTableWidget::itemChanged, this,
           [this](QTableWidgetItem* item) {
-            if (item && item->column() == 0 && item->row() < series_.size()) {
+            if (!item || item->row() >= series_.size()) return;
+            if (item->column() == 0) {
               series_[item->row()].visible =
                   item->checkState() == Qt::Checked;
               canvas_->series = series_;
               canvas_->update();
+            } else if (item->column() == 1 &&
+                       (series_[item->row()].preview ||
+                        series_[item->row()].pinned)) {
+              const int row = item->row();
+              if (item->checkState() == Qt::Checked) {
+                series_[row].preview = false;
+                series_[row].pinned = true;
+                refresh();
+              } else if (series_[row].pinned) {
+                series_.removeAt(row);
+                set_field_snapshot(field_snapshot_);
+              }
             }
           });
   connect(component_, &QComboBox::currentTextChanged, this,
@@ -774,6 +791,7 @@ QVariantList ResultsPlotWidget::settings() const {
                       {"line_style", item.line_style},
                       {"marker", item.marker},
                       {"note", item.note},
+                      {"pinned", item.pinned},
                       {"visible", item.visible}};
     if (QFileInfo(item.source).suffix().compare("csv", Qt::CaseInsensitive) !=
         0) {
@@ -808,6 +826,9 @@ void ResultsPlotWidget::restore_settings(const QVariantList& settings) {
     item.line_style = saved.value("line_style", 1).toInt();
     item.marker = saved.value("marker", 0).toInt();
     item.note = saved.value("note").toString();
+    item.pinned = saved.contains("pinned")
+                      ? saved.value("pinned").toBool()
+                      : !saved.value("points").toList().isEmpty();
     item.visible = saved.value("visible", true).toBool();
     for (const QVariant& point : saved.value("points").toList()) {
       const QVariantList xy = point.toList();
@@ -848,14 +869,25 @@ void ResultsPlotWidget::restore_settings(const QVariantList& settings) {
 void ResultsPlotWidget::refresh() {
   const QSignalBlocker blocker(legend_);
   legend_->setHorizontalHeaderLabels(
-      {l10n::tr("Visible"), l10n::tr("Curve"), l10n::tr("Source")});
+      {l10n::tr("Visible"), l10n::tr("Pinned"), l10n::tr("Curve"),
+       l10n::tr("Source")});
   legend_->setRowCount(series_.size());
   for (int row = 0; row < series_.size(); ++row) {
     auto* visible = new QTableWidgetItem();
     visible->setCheckState(series_.at(row).visible ? Qt::Checked : Qt::Unchecked);
     legend_->setItem(row, 0, visible);
-    legend_->setItem(row, 1, new QTableWidgetItem(series_.at(row).name));
-    legend_->setItem(row, 2, new QTableWidgetItem(QFileInfo(series_.at(row).source).fileName()));
+    auto* pinned = new QTableWidgetItem();
+    if (series_.at(row).preview || series_.at(row).pinned) {
+      pinned->setCheckState(series_.at(row).pinned ? Qt::Checked
+                                                   : Qt::Unchecked);
+    } else {
+      pinned->setText(QString::fromUtf8("—"));
+      pinned->setFlags(pinned->flags() & ~Qt::ItemIsUserCheckable);
+    }
+    legend_->setItem(row, 1, pinned);
+    legend_->setItem(row, 2, new QTableWidgetItem(series_.at(row).name));
+    legend_->setItem(row, 3, new QTableWidgetItem(
+                                  QFileInfo(series_.at(row).source).fileName()));
   }
   canvas_->series = series_;
   const Series* first = nullptr;

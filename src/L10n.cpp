@@ -870,6 +870,7 @@ const QHash<QString, QString>& zh_dict() {
       {"Copy image", "复制图像"},
       {"Follow viewport: no field selected", "跟随视口：未选择场"},
       {"Follow viewport", "跟随视口"},
+      {"Pinned", "固定"},
       {"Curve", "曲线"},
       {"Source", "来源"},
       {"Column", "列"},
