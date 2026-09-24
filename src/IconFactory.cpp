@@ -195,8 +195,9 @@ void init(QWidget* paletteAnchor) {
       palette.color(QPalette::Normal, QPalette::Text);
   const QColor iconColor =
       text.lightness() > 128 ? QColor(0x44, 0x44, 0x44) : text;
-  const QColor highlight =
-      palette.color(QPalette::Normal, QPalette::Highlight);
+  // 强调色与全局 QSS 一致（播放进度条滑块 #2f6fed，MainWindow 样式表），
+  // 保证选中/激活图标与既有高亮元素同色。
+  const QColor highlight(0x2f, 0x6f, 0xed);
   g_awesome->setDefaultOption("color", iconColor);
   g_awesome->setDefaultOption("color-disabled",
                               palette.color(QPalette::Disabled, QPalette::Text));
