@@ -10,4 +10,4 @@ bug/logs_*/
 /build-ws0/
 /.env
 # UI 样式采集的过程截图，可用 GMP_UI_AUDIT=1 重新生成（见 doc/ref/模块弹窗样式现状摸底与统一优化建议.md 附录）
-doc/ref/images/ui-audit/
+doc/ref/images/ui-audit
