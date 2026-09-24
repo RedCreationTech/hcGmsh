@@ -16109,6 +16109,13 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                         : nullptr;
                   auto* probe_mode =
                       findChild<QComboBox*>("resultProbeMode");
+                  if (!probe_mode && viewer_) {
+                    probe_mode = viewer_->findChild<QComboBox*>("resultProbeMode");
+                  }
+                  if (!probe_mode && visualization_work_window_) {
+                    probe_mode = visualization_work_window_->findChild<
+                        QComboBox*>("resultProbeMode");
+                  }
                   auto* legend = results_work_window_
                                      ? results_work_window_->findChild<
                                            QTableWidget*>(
@@ -16128,12 +16135,29 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                                                QLineEdit*>(
                                                "resultsTableEntityMin")
                                          : nullptr;
-                  if (!root || !table_panel || !data_table || !plot_canvas ||
-                      !plot_panel || !component || !probe_mode ||
-                      probe_mode->findData(2) < 0 || !pin_preview || !legend ||
-                      !page_size || !page || !entity_min) {
+                  QStringList missing;
+                  auto need = [&missing](bool ok, const char* name) {
+                    if (!ok) missing << name;
+                  };
+                  need(root != nullptr, "Results tree root");
+                  need(table_panel != nullptr, "resultsDataTablePanel");
+                  need(data_table != nullptr, "resultsDataTable");
+                  need(plot_canvas != nullptr, "resultsPlotCanvas");
+                  need(plot_panel != nullptr, "resultsPlotPanel");
+                  need(component != nullptr, "resultsComponentSelector");
+                  need(probe_mode != nullptr, "resultProbeMode");
+                  need(probe_mode && probe_mode->findData(2) >= 0,
+                       "resultProbeMode path-points entry");
+                  need(pin_preview != nullptr, "resultsPinPreview");
+                  need(legend != nullptr, "resultsCurveLegend");
+                  need(page_size != nullptr, "resultsTablePageSize");
+                  need(page != nullptr, "resultsTablePage");
+                  need(entity_min != nullptr, "resultsTableEntityMin");
+                  if (!missing.isEmpty()) {
                     throw std::runtime_error(
-                        "Results workspace widgets are missing");
+                        QString("Results workspace widgets are missing: %1")
+                            .arg(missing.join(", "))
+                            .toStdString());
                   }
                   QTemporaryDir temp;
                   const QString task = temp.path() + "/job_contract";
@@ -16262,6 +16286,10 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                               "tpl-dam-2d-dyn-cdp/"
                               "dam_2d_full_static_cdp.e");
                   auto* arrays = findChild<QComboBox*>("resultArrayCombo");
+                  if (!arrays && visualization_work_window_) {
+                    arrays = visualization_work_window_->findChild<QComboBox*>(
+                        "resultArrayCombo");
+                  }
                   if (!viewer_ || !arrays || !QFileInfo::exists(fixture))
                     throw std::runtime_error(
                         "Result history fixture or controls are missing");
