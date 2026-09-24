@@ -37,6 +37,7 @@
 #include <QProgressBar>
 #include <QDoubleSpinBox>
 #include <QGroupBox>
+#include <QScrollBar>
 #include <QTabBar>
 #include <QTabWidget>
 #include <QToolBar>
@@ -875,7 +876,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   stage_toolbar_scroll->setFrameShape(QFrame::NoFrame);
   stage_toolbar_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   stage_toolbar_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-  stage_toolbar_scroll->setStyleSheet("QScrollBar:vertical { width: 4px; }");
   stage_toolbar_scroll->setFixedWidth(48);
   stage_left_toolbar_ = new StageLeftToolbar();
   // 滚动区 48px 而工具条列 42px：包一层零边距容器让按钮列在视口内水平居中。
@@ -4634,6 +4634,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 }
 
 MainWindow::~MainWindow() {
+  teardown_ = true;
   // 独立顶层工作窗没有 QWidget 父对象，显式释放；否则 QApplication
   // 退出前仍会保留这些窗口及其内容树。
   qDeleteAll(results_compare_windows_);
@@ -6104,39 +6105,6 @@ QSplitter::handle:hover { background: #b9c6d6; }
 QSplitter::handle:horizontal { width: 4px; }
 QSplitter::handle:vertical { height: 4px; }
 
-QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
-QScrollBar::handle:vertical {
-  background: #c3cbd5; border-radius: 4px; min-height: 24px;
-}
-QScrollBar::handle:vertical:hover { background: #9fabb9; }
-QScrollBar:horizontal { background: transparent; height: 10px; margin: 2px; }
-QScrollBar::handle:horizontal {
-  background: #c3cbd5; border-radius: 4px; min-width: 24px;
-}
-QScrollBar::handle:horizontal:hover { background: #9fabb9; }
-QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; border: none; }
-QScrollBar::add-page, QScrollBar::sub-page { background: none; }
-
-QCheckBox, QRadioButton { spacing: 6px; }
-QCheckBox::indicator, QRadioButton::indicator {
-  width: 14px; height: 14px;
-  border: 1px solid #aab4c0;
-  border-radius: 3px;
-  background: #ffffff;
-}
-QRadioButton::indicator { border-radius: 7px; }
-QCheckBox::indicator:checked {
-  background: #2f6fed;
-  border: 1px solid #2f6fed;
-  image: url(":/icons/check.png");
-}
-QRadioButton::indicator:checked {
-  background: #2f6fed;
-  border: 1px solid #2f6fed;
-  image: url(":/icons/dot.png");
-}
-QCheckBox::indicator:hover, QRadioButton::indicator:hover { border-color: #2f6fed; }
-
 QSlider::groove:horizontal {
   height: 4px; background: #d5dbe3; border-radius: 2px;
 }
@@ -6146,8 +6114,8 @@ QSlider::handle:horizontal {
 }
 QSlider::handle:horizontal:hover { background: #1d4ed8; }
 )";
-  // 注：QToolTip 统一样式已上移至 QApplication 级（src/main.cpp），
-  // 覆盖独立顶级工作窗的浮动提示。
+  // 注：QToolTip/滚动条/勾选框/单选/滑块的统一样式已上移至 QApplication 级
+  // （src/main.cpp），覆盖独立顶级工作窗与浮动表单。
   setStyleSheet(style);
 }
 
@@ -6391,6 +6359,9 @@ void MainWindow::open_property_form(QTreeWidgetItem* item,
   connect(form, &QObject::destroyed, this,
           [this]() {
             floating_property_form_ = nullptr;
+            if (teardown_) {
+              return;
+            }
             sync_active_ui_context();
             update_command_availability();
           });
@@ -6709,6 +6680,9 @@ void MainWindow::restore_active_object_for_module(int module_index) {
 }
 
 void MainWindow::sync_active_ui_context() {
+  if (teardown_) {
+    return;
+  }
   if (module_tabs_) {
     active_ui_context_.module_index = module_tabs_->currentIndex();
   }
@@ -12298,22 +12272,36 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         !name || !cancel) {
                       throw std::runtime_error("I-01 floating property form contract failed");
                     }
-                    // I-01 合同：禁止“外层整窗滚动 + 内层页滚动”的双层滚动；
-                    // 参数页内部的单层滚动区（paramsTabScroll）是允许的。
-                    bool outer_scroll = false;
+                    // I-01 合同（2026-09-24 滚动结构重构）：弹窗改为"最外层
+                    // 一条垂直滚动条"——外层滚动区承载整窗超高内容，内部
+                    // 各区块按内容展开。外层滚动区必须存在且承载
+                    // propertyEditorTabs；paramsTabScroll 保留为按内容展开
+                    // 的容器，窗口按内容适配后它不得处于可滚动状态（否则
+                    // 就是双滚动条回潮）。
+                    QScrollArea* outer_sa = nullptr;
                     for (auto* sa : form->findChildren<QScrollArea*>()) {
-                      if (sa->findChild<QTabWidget*>(
-                              "propertyEditorTabs")) {
-                        outer_scroll = true;
+                      if (sa->findChild<QTabWidget*>("propertyEditorTabs")) {
+                        outer_sa = sa;
                         break;
                       }
                     }
-                    if (outer_scroll) {
-                      throw std::runtime_error("I-01 property form contains an outer scroll area");
+                    auto* params_scroll =
+                        form->findChild<QScrollArea*>("paramsTabScroll");
+                    if (!outer_sa || !params_scroll) {
+                      throw std::runtime_error(
+                          "I-01 property form scroll carrier contract failed");
                     }
-                    if (auto* editor_tabs = form->findChild<QTabWidget*>(
-                            "propertyEditorTabs");
-                        !editor_tabs || editor_tabs->count() != 4) {
+                    auto* editor_tabs =
+                        form->findChild<QTabWidget*>("propertyEditorTabs");
+                    editor_tabs->setCurrentIndex(1);
+                    qApp->processEvents();
+                    if (params_scroll->verticalScrollBar()->maximum() > 0) {
+                      throw std::runtime_error(
+                          "I-01 property form shows a double vertical scrollbar");
+                    }
+                    editor_tabs->setCurrentIndex(0);
+                    qApp->processEvents();
+                    if (editor_tabs->count() != 4) {
                       throw std::runtime_error("I-01 property form tab layout contract failed");
                     }
                     *i01_form_size = form->size();

@@ -287,6 +287,9 @@ class MainWindow : public QMainWindow {
   StageLeftToolbar* stage_left_toolbar_ = nullptr;
   bool layout_ready_ = false;
   bool module_workspace_sketch_profile_ = false;
+  // 析构开始后置位：阻止 form destroyed 等信号在子对象半销毁状态
+  // 触发 sync_active_ui_context 等刷新（崩溃根因修复 2026-09-24）。
+  bool teardown_ = false;
   QTabWidget* navigation_tabs_ = nullptr;
   QTreeWidget* model_tree_ = nullptr;
   QTreeWidget* results_navigation_tree_ = nullptr;

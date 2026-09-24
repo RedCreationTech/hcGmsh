@@ -4,6 +4,7 @@
 #include "gmp/PropertyEditor.h"
 
 #include <QDialogButtonBox>
+#include <QEvent>
 #include <QGuiApplication>
 #include <QLabel>
 #include <QLayout>
@@ -115,7 +116,24 @@ FloatingPropertyForm::FloatingPropertyForm(
   editor_->set_boundary_groups(boundary_groups);
   editor_->set_volume_groups(volume_groups);
   editor_->set_item(buffer_item_);
-  layout->addWidget(editor_, 1);
+
+  // 弹窗唯一的外层滚动承载：内容按当前 TAB 自然展开（wrap_content），
+  // 高度不超上限时滚动条隐藏；内容超高时窗口按上限定高、由这里滚动。
+  // 内部（如参数页的 paramsTabScroll）因此永远拿到足够高度，不再出现
+  // 第二条滚动条。
+  outer_scroll_ = new QScrollArea(this);
+  outer_scroll_->setObjectName("floatingPropertyFormScroll");
+  outer_scroll_->setWidgetResizable(true);
+  outer_scroll_->setFrameShape(QFrame::NoFrame);
+  outer_scroll_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+  outer_scroll_->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  scroll_host_ = new QWidget(outer_scroll_);
+  auto* scroll_host_layout = new QVBoxLayout(scroll_host_);
+  scroll_host_layout->setContentsMargins(0, 0, 0, 0);
+  scroll_host_layout->addWidget(editor_, 1);
+  outer_scroll_->setWidget(scroll_host_);
+  scroll_host_->installEventFilter(this);
+  layout->addWidget(outer_scroll_, 1);
 
   buttons_ = new QDialogButtonBox(QDialogButtonBox::Ok |
                                       QDialogButtonBox::Cancel,
@@ -138,6 +156,9 @@ FloatingPropertyForm::FloatingPropertyForm(
 
   if (auto* tabs = editor_->findChild<QTabWidget*>("propertyEditorTabs")) {
     connect(tabs, &QTabWidget::currentChanged, this, [this]() {
+      // 立即同步宿主最小尺寸（eventFilter 的 LayoutRequest 路径延迟一帧，
+      // 断言/检查在切换后立刻发生时内部滚动区尚未被撑开）。
+      sync_scroll_host_minimum();
       QTimer::singleShot(0, this,
                          [this]() { fit_to_current_tab(); });
     });
@@ -182,46 +203,79 @@ void FloatingPropertyForm::place_over_stage(QWidget* stage) {
   move(candidate);
 }
 
-QSize FloatingPropertyForm::preferred_size_for_current_tab() const {
-  auto* tabs = editor_
-                   ? editor_->findChild<QTabWidget*>("propertyEditorTabs")
-                   : nullptr;
-  QWidget* page = tabs ? tabs->currentWidget() : nullptr;
-  if (!editor_ || !tabs || !page) {
-    return QSize(760, 560);
+QSize FloatingPropertyForm::content_aware_editor_hint() {
+  // QTabWidget/QScrollArea 的 sizeHint 会低估当前页内容高度（实测参数页
+  // 内容 580px 而 editor sizeHint 仅 414px），导致内部 paramsTabScroll
+  // 被压出第二条滚动条。这里以编辑器 sizeHint 为基准，再按当前页内滚动区
+  // 内容 widget 的真实 sizeHint 补足差额。
+  if (auto* editor_layout = editor_->layout()) {
+    editor_layout->activate();
   }
-
-  QSize page_hint = page->layout() ? page->layout()->totalSizeHint()
-                                   : page->sizeHint();
-  if (auto* scroll =
-          page->findChild<QScrollArea*>("paramsTabScroll")) {
-    QWidget* content = scroll->widget();
-    if (content && content->layout()) {
-      content->layout()->activate();
-      page_hint = content->layout()->totalSizeHint();
+  QSize hint = editor_->sizeHint();
+  if (auto* tabs = editor_->findChild<QTabWidget*>("propertyEditorTabs")) {
+    if (QWidget* page = tabs->currentWidget()) {
+      if (auto* page_layout = page->layout()) {
+        page_layout->activate();
+      }
+      const int page_hint_h = page->sizeHint().height();
+      int extra = 0;
+      for (auto* scroll : page->findChildren<QScrollArea*>()) {
+        if (!scroll->widget()) {
+          continue;
+        }
+        if (auto* content_layout = scroll->widget()->layout()) {
+          content_layout->activate();
+        }
+        extra = qMax(extra,
+                     scroll->widget()->sizeHint().height() - page_hint_h);
+      }
+      if (extra > 0) {
+        hint.rheight() += extra;
+      }
     }
   }
+  return hint;
+}
 
-  const QMargins editor_margins = editor_->layout()->contentsMargins();
-  const int editor_spacing = editor_->layout()->spacing();
-  const auto* editor_header = editor_->findChild<QLabel*>();
-  const int header_height =
-      editor_header ? editor_header->sizeHint().height() : 0;
-  const int tabs_chrome = tabs->tabBar()->sizeHint().height() + 12;
-  const int editor_height = editor_margins.top() + header_height +
-                            editor_spacing + tabs_chrome + page_hint.height() +
-                            editor_margins.bottom();
-  const int editor_width = editor_margins.left() + page_hint.width() +
-                           editor_margins.right() + 12;
+QSize FloatingPropertyForm::preferred_size_for_current_tab() {
+  if (!editor_ || !outer_scroll_) {
+    return QSize(760, 560);
+  }
+  const QSize editor_hint = content_aware_editor_hint();
 
   const QMargins dialog_margins = layout()->contentsMargins();
   const int dialog_spacing = layout()->spacing();
   const QSize buttons_hint = buttons_ ? buttons_->sizeHint() : QSize();
-  return QSize(qMax(760, qMax(editor_width, buttons_hint.width()) +
-                             dialog_margins.left() + dialog_margins.right()),
-               qMax(560, editor_height + buttons_hint.height() +
+  return QSize(qMax(760, editor_hint.width() + dialog_margins.left() +
+                             dialog_margins.right()),
+               qMax(560, editor_hint.height() + buttons_hint.height() +
                              dialog_spacing + dialog_margins.top() +
                              dialog_margins.bottom()));
+}
+
+void FloatingPropertyForm::sync_scroll_host_minimum() {
+  if (!scroll_host_ || !editor_ || !outer_scroll_) {
+    return;
+  }
+  // 宿主最小尺寸 = 编辑器按内容展开的真实高度；窗口被上限压住时
+  // QScrollArea 据 minimumSize 出外层滚动条，内部 paramsTabScroll
+  // 始终拿到全高，不会退化成第二条滚动条。
+  const QSize hint = content_aware_editor_hint();
+  // 最小尺寸设在编辑器自身：编辑器随宿主拉伸填满，内部滚动区拿到全高；
+  // 仅设宿主最小尺寸时编辑器按 AlignTop 保持原高，内部仍会退化出滚动条。
+  if (editor_->minimumSize() != hint) {
+    editor_->setMinimumSize(hint);
+  }
+}
+
+bool FloatingPropertyForm::eventFilter(QObject* watched, QEvent* event) {
+  if (watched == scroll_host_ && event->type() == QEvent::LayoutRequest) {
+    // 内容高度动态变化（高级参数展开/收起、校验行变化等）后，延迟一帧
+    // 同步宿主最小尺寸，避免内部滚动区退化成第二条滚动条。
+    QTimer::singleShot(0, this,
+                       [this]() { sync_scroll_host_minimum(); });
+  }
+  return QDialog::eventFilter(watched, event);
 }
 
 void FloatingPropertyForm::fit_to_current_tab() {
@@ -234,8 +288,14 @@ void FloatingPropertyForm::fit_to_current_tab() {
   const QRect safe = screen ? screen->availableGeometry().adjusted(
                                  12, 12, -12, -12)
                             : QRect(QPoint(0, 0), preferred_size_for_current_tab());
-  const QSize target = preferred_size_for_current_tab().boundedTo(safe.size());
+  // 内容超高时窗口只给到屏幕可用高度的 70%，由外层滚动区滚动，
+  // 而不是把弹窗撑到接近全屏。
+  const int height_cap = qMax(420, safe.height() * 7 / 10);
+  QSize target = preferred_size_for_current_tab();
+  target.setWidth(qMin(target.width(), safe.width()));
+  target.setHeight(qMin(target.height(), height_cap));
   resize(target.expandedTo(minimumSize().boundedTo(safe.size())));
+  sync_scroll_host_minimum();
 
   if (isVisible()) {
     QPoint position(center.x() - width() / 2, center.y() - height() / 2);

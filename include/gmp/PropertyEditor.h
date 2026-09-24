@@ -94,6 +94,10 @@ class PropertyEditor : public QWidget {
   void update_group_summary();
   void update_advanced_visibility();
   void refresh_validation_summary();
+  // 校验汇总表格高度 = 内容高度（上限 400），超高时表格自己滚动。
+  void update_validation_table_height();
+  // 预览等宽文本区高度 = 内容行数高度（上限 400），内容短时不裁切。
+  void update_preview_text_height();
   void select_validation_row(int row);
   QVariantMap build_type_template(const QString& kind,
                                   const QString& type) const;

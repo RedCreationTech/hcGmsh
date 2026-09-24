@@ -87,8 +87,10 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   tabs_->addTab(general_tab_, "General");
 
   params_tab_ = new QWidget(this);
-  // 参数页内容包一层滚动区：弹窗高度固定（记忆尺寸），内容超出时页内
-  // 滚动，不再撑高窗口；滚动只此一层（I-01 禁止外层整窗滚动）。
+  // 参数页内容包一层滚动区（widgetResizable + NoFrame）：高度不设上限时
+  // 它按内容自然展开、不会出现自己的滚动条。浮动弹窗由外层
+  // FloatingPropertyForm 的整体滚动区承载超高内容；模块窗里本页仍以
+  // 这一层为唯一滚动层。整个链条只保留最外层一条垂直滚动条。
   auto* params_page_layout = new QVBoxLayout(params_tab_);
   params_page_layout->setContentsMargins(0, 0, 0, 0);
   auto* params_scroll = new QScrollArea(params_tab_);
@@ -207,7 +209,7 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   validation_table_->verticalHeader()->setVisible(false);
   validation_table_->setSelectionBehavior(QAbstractItemView::SelectRows);
   validation_table_->setSelectionMode(QAbstractItemView::SingleSelection);
-  validation_layout->addWidget(validation_table_, 1);
+  validation_layout->addWidget(validation_table_);
   auto* validation_filters = new QHBoxLayout();
   validation_filter_current_ = new QCheckBox("Current Type Only", validation_box_);
   validation_only_with_issues_ = new QCheckBox("Only With Issues", validation_box_);
@@ -228,7 +230,11 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   validation_actions->addStretch(1);
   validation_layout->addLayout(validation_actions);
   tabs_->addTab(params_tab_, "Parameters");
-  validation_page_layout->addWidget(validation_box_, 1);
+  // 校验汇总框按内容高度自适应：框不再拉伸占满整页，底部的筛选复选框
+  // 与按钮紧随内容；只有表格自身超高（上限见 update_validation_table_height）
+  // 时才在框内滚动。
+  validation_page_layout->addWidget(validation_box_);
+  validation_page_layout->addStretch(1);
   tabs_->addTab(validation_tab, "Validation");
 
   preview_tab_ = new QWidget(this);
@@ -244,7 +250,7 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   mono_font.setFamilies({"SFMono-Regular", "Monaco", "Consolas", "Menlo"});
   mono_font.setStyleHint(QFont::Monospace);
   preview_text_->setFont(mono_font);
-  preview_layout->addWidget(preview_text_, 1);
+  preview_layout->addWidget(preview_text_);
   preview_layout->addStretch(1);
   tabs_->addTab(preview_tab_, "Preview");
 
@@ -947,6 +953,20 @@ void PropertyEditor::update_validation() {
   refresh_validation_summary();
 }
 
+void PropertyEditor::update_validation_table_height() {
+  if (!validation_table_) {
+    return;
+  }
+  // 表格高度 = 内容高度（表头 + 各行），超过上限后表格自己滚动；
+  // 这样校验汇总框整体按内容自适应，无问题时只剩摘要一行 + 筛选/按钮。
+  int height = validation_table_->horizontalHeader()->height();
+  for (int row = 0; row < validation_table_->rowCount(); ++row) {
+    height += validation_table_->rowHeight(row);
+  }
+  height += validation_table_->frameWidth() * 2;
+  validation_table_->setFixedHeight(qMin(height, 400));
+}
+
 void PropertyEditor::refresh_validation_summary() {
   if (!validation_table_ || !validation_summary_label_ || !current_item_) {
     return;
@@ -1015,6 +1035,7 @@ void PropertyEditor::refresh_validation_summary() {
     validation_table_->setItem(i, 0, node_item);
     validation_table_->setItem(i, 1, new QTableWidgetItem(row.issues));
   }
+  update_validation_table_height();
   if (validation_goto_btn_) {
     validation_goto_btn_->setEnabled(true);
   }
@@ -1655,6 +1676,19 @@ void PropertyEditor::on_apply_template() {
   refresh_preview();
 }
 
+void PropertyEditor::update_preview_text_height() {
+  if (!preview_text_ || !preview_text_->document()) {
+    return;
+  }
+  // 等宽预览区按内容行数给高（上限 400），内容短时不再被拉伸/裁掉末行；
+  // 超高部分由外层滚动承载。NoWrap 下每个文本块即一行，blockCount 同步
+  // 可得，不依赖文档异步重排。
+  const int line_count = qMax(1, preview_text_->document()->blockCount());
+  const int height = line_count * preview_text_->fontMetrics().lineSpacing() +
+                     preview_text_->frameWidth() * 2 + 4;
+  preview_text_->setFixedHeight(qMin(height, 400));
+}
+
 void PropertyEditor::refresh_preview() {
   if (!preview_text_ || !preview_summary_label_) {
     return;
@@ -1662,6 +1696,7 @@ void PropertyEditor::refresh_preview() {
   if (!current_item_) {
     preview_summary_label_->setText("Selected item preview:");
     preview_text_->setPlainText("Select a node in the model tree.");
+    update_preview_text_height();
     return;
   }
 
@@ -1687,6 +1722,7 @@ void PropertyEditor::refresh_preview() {
     lines << "  Child nodes are configured in the corresponding module tab.";
     preview_summary_label_->setText(QString("Preview: %1 root").arg(kind));
     preview_text_->setPlainText(lines.join("\n"));
+    update_preview_text_height();
     return;
   }
 
@@ -1726,6 +1762,7 @@ void PropertyEditor::refresh_preview() {
       QString("Preview: %1 (%2) — node data, not MOOSE input")
           .arg(current_item_->text(0), kind));
   preview_text_->setPlainText(lines.join("\n"));
+  update_preview_text_height();
 }
 
 QString PropertyEditor::build_node_summary(const QString& kind,

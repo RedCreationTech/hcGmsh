@@ -5,6 +5,8 @@
 #include <QStringList>
 
 class QDialogButtonBox;
+class QEvent;
+class QScrollArea;
 class QTreeWidget;
 class QTreeWidgetItem;
 class QWidget;
@@ -41,12 +43,20 @@ class FloatingPropertyForm : public QDialog {
 
  protected:
   void done(int result) override;
+  bool eventFilter(QObject* watched, QEvent* event) override;
 
  private:
   void commit_if_valid();
   QString settings_key() const;
   void fit_to_current_tab();
-  QSize preferred_size_for_current_tab() const;
+  QSize preferred_size_for_current_tab();
+  // 按内容展开的真实编辑器高度（补足 QTabWidget/QScrollArea sizeHint
+  // 低估当前页内容高度的差额）。
+  QSize content_aware_editor_hint();
+  // 滚动宿主的最小尺寸 = 编辑器按内容计算的 sizeHint：窗口被上限压住或
+  // 用户手动改小时编辑器不收缩，内部各滚动区永远拿到完整内容高度，
+  // 只有外层这一条垂直滚动条会滚动。
+  void sync_scroll_host_minimum();
 
   QTreeWidgetItem* target_item_ = nullptr;
   std::function<bool(QTreeWidgetItem*, const QString&, const QVariantMap&)>
@@ -54,6 +64,10 @@ class FloatingPropertyForm : public QDialog {
   QTreeWidget* buffer_tree_ = nullptr;
   QTreeWidgetItem* buffer_item_ = nullptr;
   PropertyEditor* editor_ = nullptr;
+  // 弹窗唯一的外层滚动承载：内容超高时只有这一条垂直滚动条，
+  // 内部各 TAB/区块全部按自身内容展开（wrap_content）。
+  QScrollArea* outer_scroll_ = nullptr;
+  QWidget* scroll_host_ = nullptr;
   QDialogButtonBox* buttons_ = nullptr;
   QWidget* stage_ = nullptr;
 };
