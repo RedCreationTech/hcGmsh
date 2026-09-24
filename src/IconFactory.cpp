@@ -175,6 +175,15 @@ const QHash<QString, QString>& mapping() {
       {"focus_viewport", "bullseye"},
       {"show_plot_preview", "chart-line"},
       {"show_table_preview", "table"},
+      // ---- 舞台左侧工具条（StageLeftToolbar） ----
+      {"collapse", "angles-left"},
+      {"expand", "angles-right"},
+      {"zoom", "magnifying-glass-plus"},
+      {"fit", "expand"},
+      {"front", "arrow-down"},
+      {"right", "arrow-right"},
+      {"top", "arrow-up"},
+      {"iso", "cube"},
   };
   return kMap;
 }

@@ -2,153 +2,50 @@
 
 #include <QButtonGroup>
 #include <QFrame>
+#include <QHash>
 #include <QIcon>
-#include <QPainter>
-#include <QPainterPath>
-#include <QPixmap>
+#include <QPair>
 #include <QSignalBlocker>
 #include <QToolButton>
 #include <QVBoxLayout>
 
+#include "gmp/IconFactory.h"
 #include "gmp/VtkViewer.h"
 
 namespace gmp {
 
 namespace {
 
-QIcon stage_icon(const QString& key) {
-  QPixmap pixmap(40, 40);
-  pixmap.setDevicePixelRatio(2.0);
-  pixmap.fill(Qt::transparent);
-
-  QPainter p(&pixmap);
-  p.setRenderHint(QPainter::Antialiasing, true);
-  QPen pen(QColor("#17263a"), 1.7, Qt::SolidLine, Qt::RoundCap,
-           Qt::RoundJoin);
-  p.setPen(pen);
-  p.setBrush(Qt::NoBrush);
-
-  const auto arrow_head = [&p](const QPointF& tip, const QPointF& a,
-                                const QPointF& b) {
-    QPainterPath path(tip);
-    path.lineTo(a);
-    path.moveTo(tip);
-    path.lineTo(b);
-    p.drawPath(path);
+// 舞台工具条键（kebab-case）→ gmp::icons 映射键（snake_case）。
+// 映射值表见 src/IconFactory.cpp 的 mapping()。
+const QHash<QString, QString>& icon_key_map() {
+  static const QHash<QString, QString> kMap = {
+      {"collapse", "collapse"},
+      {"expand", "expand"},
+      {"rotate", "rotate"},
+      {"pan", "sketch_move"},
+      {"zoom", "zoom"},
+      {"pick", "pick"},
+      {"clear", "clear_x"},
+      {"fit", "fit"},
+      {"front", "front"},
+      {"right", "right"},
+      {"top", "top"},
+      {"iso", "iso"},
+      {"display", "cycle_display"},
+      {"slice", "slice"},
+      {"sketch-select", "sketch_select"},
+      {"sketch-line", "sketch_line"},
+      {"sketch-circle", "sketch_circle"},
+      {"sketch-arc", "sketch_arc"},
+      {"sketch-rect", "sketch_rectangle"},
+      {"sketch-delete", "sketch_delete"},
+      {"mesh", "open_gmsh_panel"},
+      {"mesh-generate", "generate_mesh"},
+      {"visualization", "open_in_viewer"},
+      {"results", "open_result"},
   };
-  const auto cube = [&p]() {
-    const QPolygonF front{{6, 7}, {13, 7}, {13, 14}, {6, 14}};
-    const QPolygonF back{{9, 4}, {16, 4}, {16, 11}, {13, 14}, {13, 7},
-                          {6, 7}, {9, 4}};
-    p.drawPolygon(front);
-    p.drawPolyline(back);
-    p.drawLine(QPointF(13, 7), QPointF(16, 4));
-  };
-
-  if (key == "collapse" || key == "expand") {
-    const qreal x = key == "collapse" ? 12 : 8;
-    const qreal dir = key == "collapse" ? -1 : 1;
-    p.drawPolyline(QPolygonF{{x - dir * 3, 5}, {x + dir * 2, 10},
-                             {x - dir * 3, 15}});
-  } else if (key == "rotate") {
-    p.drawArc(QRectF(4, 4, 12, 12), 35 * 16, 285 * 16);
-    arrow_head({15.5, 6.2}, {12.1, 5.7}, {14.6, 9.0});
-    p.drawEllipse(QRectF(8.5, 8.5, 3, 3));
-  } else if (key == "pan") {
-    p.drawLine(10, 3, 10, 17);
-    p.drawLine(3, 10, 17, 10);
-    arrow_head({10, 3}, {8, 6}, {12, 6});
-    arrow_head({10, 17}, {8, 14}, {12, 14});
-    arrow_head({3, 10}, {6, 8}, {6, 12});
-    arrow_head({17, 10}, {14, 8}, {14, 12});
-  } else if (key == "zoom") {
-    p.drawEllipse(QRectF(3.5, 3.5, 10, 10));
-    p.drawLine(QLineF(12.2, 12.2, 17, 17));
-    p.drawLine(QLineF(6, 8.5, 11, 8.5));
-    p.drawLine(QLineF(8.5, 6, 8.5, 11));
-  } else if (key == "pick" || key == "sketch-select") {
-    QPainterPath cursor;
-    cursor.moveTo(4, 3);
-    cursor.lineTo(5.2, 16);
-    cursor.lineTo(8.2, 12.5);
-    cursor.lineTo(11, 17);
-    cursor.lineTo(13.2, 15.7);
-    cursor.lineTo(10.5, 11.3);
-    cursor.lineTo(15, 10.8);
-    cursor.closeSubpath();
-    p.drawPath(cursor);
-  } else if (key == "clear" || key == "sketch-delete") {
-    p.drawLine(5, 5, 15, 15);
-    p.drawLine(15, 5, 5, 15);
-  } else if (key == "fit") {
-    p.drawLine(4, 8, 4, 4);
-    p.drawLine(4, 4, 8, 4);
-    p.drawLine(12, 4, 16, 4);
-    p.drawLine(16, 4, 16, 8);
-    p.drawLine(16, 12, 16, 16);
-    p.drawLine(16, 16, 12, 16);
-    p.drawLine(8, 16, 4, 16);
-    p.drawLine(4, 16, 4, 12);
-  } else if (key == "front" || key == "right" || key == "top") {
-    p.drawRect(QRectF(4, 4, 12, 12));
-    QPen accent(QColor("#2f6fed"), 2.4, Qt::SolidLine, Qt::RoundCap);
-    p.setPen(accent);
-    if (key == "front") {
-      p.drawRect(QRectF(7, 7, 6, 6));
-    } else if (key == "right") {
-      p.drawLine(15, 5, 15, 15);
-    } else {
-      p.drawLine(5, 5, 15, 5);
-    }
-  } else if (key == "iso") {
-    cube();
-  } else if (key == "display") {
-    cube();
-    p.setBrush(QColor(47, 111, 237, 60));
-    p.drawPolygon(QPolygonF{{6, 7}, {13, 7}, {13, 14}, {6, 14}});
-  } else if (key == "slice") {
-    cube();
-    QPen accent(QColor("#2f6fed"), 2.0, Qt::SolidLine, Qt::RoundCap);
-    p.setPen(accent);
-    p.drawLine(3, 10, 17, 10);
-  } else if (key == "sketch-line") {
-    p.drawLine(4, 15, 16, 5);
-    p.drawEllipse(QRectF(2.8, 13.8, 2.4, 2.4));
-    p.drawEllipse(QRectF(14.8, 3.8, 2.4, 2.4));
-  } else if (key == "sketch-circle") {
-    p.drawEllipse(QRectF(4, 4, 12, 12));
-    p.drawEllipse(QRectF(9, 9, 2, 2));
-  } else if (key == "sketch-arc") {
-    p.drawArc(QRectF(3, 5, 14, 12), 15 * 16, 150 * 16);
-    p.drawEllipse(QRectF(15, 8, 2, 2));
-    p.drawEllipse(QRectF(3, 8, 2, 2));
-  } else if (key == "sketch-rect") {
-    p.drawRect(QRectF(4, 5, 12, 10));
-  } else if (key == "mesh" || key == "mesh-generate") {
-    for (int v = 5; v <= 15; v += 5) {
-      p.drawLine(v, 4, v, 16);
-      p.drawLine(4, v, 16, v);
-    }
-    if (key == "mesh-generate") {
-      p.setPen(QPen(QColor("#2f6fed"), 2.0, Qt::SolidLine,
-                    Qt::RoundCap, Qt::RoundJoin));
-      p.drawPolyline(QPolygonF{{12, 2}, {9, 9}, {13, 9}, {10, 18}});
-    }
-  } else if (key == "visualization") {
-    p.setPen(QPen(QColor("#2f6fed"), 2.2));
-    p.drawLine(5, 15, 5, 10);
-    p.setPen(QPen(QColor("#31a36b"), 2.2));
-    p.drawLine(10, 15, 10, 6);
-    p.setPen(QPen(QColor("#d9782d"), 2.2));
-    p.drawLine(15, 15, 15, 3);
-  } else if (key == "results") {
-    p.drawRect(QRectF(4, 4, 12, 12));
-    p.setPen(QPen(QColor("#2f6fed"), 1.8, Qt::SolidLine,
-                  Qt::RoundCap, Qt::RoundJoin));
-    p.drawPolyline(QPolygonF{{5, 13}, {8, 10}, {11, 12}, {15, 6}});
-  }
-  p.end();
-  return QIcon(pixmap);
+  return kMap;
 }
 
 QWidget* make_group(QWidget* parent) {
@@ -323,7 +220,8 @@ QToolButton* StageLeftToolbar::add_button(QWidget* host, const QString& icon_key
                                           bool checkable) {
   auto* button = new QToolButton(host);
   button->setObjectName("stageTool_" + icon_key);
-  button->setIcon(stage_icon(icon_key));
+  button->setIcon(
+      icons::toolbar(icon_key_map().value(icon_key, icon_key)));
   button->setIconSize(QSize(20, 20));
   button->setAccessibleName(tooltip);
   button->setToolTip(tooltip.contains("键") ? tooltip
@@ -461,7 +359,8 @@ void StageLeftToolbar::set_collapsed(bool collapsed) {
     visualization_group_->setVisible(false);
   }
   if (collapse_button_) {
-    collapse_button_->setIcon(stage_icon(collapsed ? "expand" : "collapse"));
+    const QString key = collapsed ? "expand" : "collapse";
+    collapse_button_->setIcon(icons::toolbar(key));
     collapse_button_->setToolTip(collapsed ? "展开舞台工具栏"
                                            : "折叠舞台工具栏");
   }

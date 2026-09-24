@@ -70,6 +70,12 @@ const QHash<QString, QString>& zh_dict() {
       {"Display Group", "显示工具组"},
       {"Cycle Display Mode", "切换显示方式"},
       {"Clear Selection", "清除选择"},
+      {"Play the time-step animation.", "播放时间步动画"},
+      {"Pause the time-step animation.", "暂停时间步动画"},
+      {"Stop playback and return to the first time step.",
+       "停止播放并回到第一个时间步"},
+      {"Step backward one time step.", "后退一个时间步"},
+      {"Step forward one time step.", "前进一个时间步"},
       {"Reset Tool Layout", "恢复默认工具布局"},
       {"Tool layout reset to default.", "已恢复默认工具布局。"},
       // ===== 模块页签 =====

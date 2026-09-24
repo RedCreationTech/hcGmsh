@@ -5467,6 +5467,7 @@ void MainWindow::build_menu() {
   job_menu->setObjectName("jobMenu");
   auto* validate_workflow_action = job_menu->addAction("Validate Workflow");
   validate_workflow_action->setObjectName("validateWorkflowAction");
+  validate_workflow_action->setIcon(gmp::icons::get("validate_workflow"));
   connect(validate_workflow_action, &QAction::triggered, this,
           [this]() { validate_workflow_for_submit(true); });
   job_menu->addSeparator();
@@ -5879,7 +5880,8 @@ void MainWindow::apply_language_to_windows() {
 }
 
 QToolBar* MainWindow::make_tool_group(const QString& title,
-                                      const QString& object_name) {
+                                      const QString& object_name,
+                                      bool text_under_icon) {
   auto* toolbar = new QToolBar(title, this);
   addToolBar(Qt::TopToolBarArea, toolbar);
   toolbar->setObjectName(object_name);
@@ -5890,19 +5892,22 @@ QToolBar* MainWindow::make_tool_group(const QString& title,
   // 在停靠区间拖动、经 View 菜单显隐；工作窗浮动（QDockWidget）不受影响。
   toolbar->setFloatable(false);
   toolbar->setAllowedAreas(Qt::AllToolBarAreas);
-  toolbar->setIconSize(QSize(18, 18));
-  toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  toolbar->setIconSize(QSize(20, 20));
+  toolbar->setToolButtonStyle(text_under_icon ? Qt::ToolButtonTextUnderIcon
+                                              : Qt::ToolButtonIconOnly);
   // 受控拖拽（浮出/磁吸）由应用级事件过滤实现。
   toolbar->installEventFilter(this);
-  auto update_compact_extent = [toolbar](Qt::Orientation orientation) {
+  auto update_compact_extent = [toolbar, text_under_icon](Qt::Orientation orientation) {
+    // 图标+文字上下排布需要约 50px 容纳 20px 图标+文字行；纯图标组保持 30px。
+    const int extent = text_under_icon ? 50 : 30;
     if (orientation == Qt::Horizontal) {
       toolbar->setMinimumWidth(0);
       toolbar->setMaximumWidth(QWIDGETSIZE_MAX);
-      toolbar->setFixedHeight(30);
+      toolbar->setFixedHeight(extent);
     } else {
       toolbar->setMinimumHeight(0);
       toolbar->setMaximumHeight(QWIDGETSIZE_MAX);
-      toolbar->setFixedWidth(30);
+      toolbar->setFixedWidth(extent);
     }
   };
   update_compact_extent(Qt::Horizontal);
@@ -5935,78 +5940,80 @@ void MainWindow::build_toolbar() {
   auto* job_toolbar = make_tool_group("Job", "jobToolGroup");
 
   if (action_new_) {
-    action_new_->setIcon(MakeIcon(IconGlyph::NewFile));
+    action_new_->setIcon(gmp::icons::get("new_project"));
     project_toolbar->addAction(action_new_);
   }
   if (action_open_) {
-    action_open_->setIcon(MakeIcon(IconGlyph::OpenFolder));
+    action_open_->setIcon(gmp::icons::get("open_project"));
     project_toolbar->addAction(action_open_);
   }
   if (action_save_) {
-    action_save_->setIcon(MakeIcon(IconGlyph::SaveDisk));
+    action_save_->setIcon(gmp::icons::get("save"));
     project_toolbar->addAction(action_save_);
   }
   if (action_save_as_) {
-    action_save_as_->setIcon(MakeIcon(IconGlyph::SaveAsDisk));
+    action_save_as_->setIcon(gmp::icons::get("save_as"));
     project_toolbar->addAction(action_save_as_);
   }
   if (action_screenshot_) {
-    action_screenshot_->setIcon(MakeIcon(IconGlyph::Output));
+    action_screenshot_->setIcon(gmp::icons::get("screenshot"));
     project_toolbar->addAction(action_screenshot_);
   }
   if (action_undo_) {
-    action_undo_->setIcon(MakeIcon(IconGlyph::Undo));
+    action_undo_->setIcon(gmp::icons::get("undo"));
     edit_toolbar->addAction(action_undo_);
   }
   if (action_redo_) {
-    action_redo_->setIcon(MakeIcon(IconGlyph::Redo));
+    action_redo_->setIcon(gmp::icons::get("redo"));
     edit_toolbar->addAction(action_redo_);
   }
   if (action_sync_) {
-    action_sync_->setIcon(MakeIcon(IconGlyph::Sync));
+    action_sync_->setIcon(gmp::icons::get("sync_model"));
     model_toolbar->addAction(action_sync_);
   }
   if (action_mesh_) {
-    action_mesh_->setIcon(MakeIcon(IconGlyph::Mesh));
+    action_mesh_->setIcon(gmp::icons::get("generate_mesh"));
     mesh_toolbar->addAction(action_mesh_);
   }
   if (action_preview_mesh_) {
-    action_preview_mesh_->setIcon(MakeIcon(IconGlyph::OpenFolder));
+    action_preview_mesh_->setIcon(gmp::icons::get("preview_mesh"));
     mesh_toolbar->addAction(action_preview_mesh_);
   }
   if (action_import_exodus_) {
-    action_import_exodus_->setIcon(MakeIcon(IconGlyph::OpenFolder));
+    action_import_exodus_->setIcon(gmp::icons::get("import_exodus"));
     mesh_toolbar->addAction(action_import_exodus_);
   }
   if (action_run_) {
-    action_run_->setIcon(MakeIcon(IconGlyph::Run));
+    action_run_->setIcon(gmp::icons::get("run"));
     job_toolbar->addAction(action_run_);
   }
   if (action_check_) {
-    action_check_->setIcon(MakeIcon(IconGlyph::Check));
+    action_check_->setIcon(gmp::icons::get("check_input"));
     job_toolbar->addAction(action_check_);
   }
   if (action_stop_) {
-    action_stop_->setIcon(MakeIcon(IconGlyph::Stop));
+    action_stop_->setIcon(gmp::icons::get("stop"));
     job_toolbar->addAction(action_stop_);
   }
 
   // Abaqus 风格的紧凑显示组：默认悬浮于舞台右上角，同时保留 Qt
   // 原生的四向停靠预览和整组拖拽行为。
   display_tool_group_ = make_tool_group("Display Group", "displayToolGroup");
-  auto* playback_tool_group = make_tool_group("Playback", "playbackToolGroup");
+  auto* playback_tool_group = make_tool_group("Playback", "playbackToolGroup", false);
+  // 白名单纯图标：文字经 tooltip 承载（l10n 运行时翻译），按钮下不排文字。
+  playback_tool_group->setToolButtonStyle(Qt::ToolButtonIconOnly);
   // 时间步动画回放：播放 / 暂停 / 进度条（可拖动定位）。
   action_playback_play_ = playback_tool_group->addAction("Play");
   action_playback_play_->setObjectName("playbackPlayAction");
-  action_playback_play_->setIcon(MakeIcon(IconGlyph::Run));
+  action_playback_play_->setIcon(gmp::icons::get("play"));
   action_playback_play_->setToolTip("Play the time-step animation.");
   action_playback_pause_ = playback_tool_group->addAction("Pause");
   action_playback_pause_->setObjectName("playbackPauseAction");
-  action_playback_pause_->setIcon(MakeIcon(IconGlyph::Pause));
+  action_playback_pause_->setIcon(gmp::icons::get("pause"));
   action_playback_pause_->setToolTip("Pause the time-step animation.");
   action_playback_stop_ = playback_tool_group->addAction("Stop");
   action_playback_stop_->setObjectName("playbackStopAction");
-  action_playback_stop_->setIcon(MakeIcon(IconGlyph::Stop));
+  action_playback_stop_->setIcon(gmp::icons::get("stop"));
   action_playback_stop_->setToolTip(
       "Stop playback and return to the first time step.");
   playback_slider_ = new QSlider(Qt::Horizontal, playback_tool_group);
@@ -6021,11 +6028,11 @@ void MainWindow::build_toolbar() {
   // 进度条右侧：单步后退/前进（停止状态下单步定位，两端钳位不循环）。
   action_playback_prev_ = playback_tool_group->addAction("Prev");
   action_playback_prev_->setObjectName("playbackPrevAction");
-  action_playback_prev_->setIcon(MakeIcon(IconGlyph::StepPrev));
+  action_playback_prev_->setIcon(gmp::icons::get("step_prev"));
   action_playback_prev_->setToolTip("Step backward one time step.");
   action_playback_next_ = playback_tool_group->addAction("Next");
   action_playback_next_->setObjectName("playbackNextAction");
-  action_playback_next_->setIcon(MakeIcon(IconGlyph::StepNext));
+  action_playback_next_->setIcon(gmp::icons::get("step_next"));
   action_playback_next_->setToolTip("Step forward one time step.");
   auto playback_step = [this](int delta) {
     if (!viewer_ || viewer_->time_step_count() <= 1) {
@@ -6088,14 +6095,14 @@ void MainWindow::build_toolbar() {
     }
   });
   action_display_mode_ = display_tool_group_->addAction(
-      MakeIcon(IconGlyph::Display), "Cycle Display Mode");
+      gmp::icons::get("cycle_display"), "Cycle Display Mode");
   action_stage_pick_ = display_tool_group_->addAction(
-      MakeIcon(IconGlyph::Pick), "Pick");
+      gmp::icons::get("pick"), "Pick");
   action_stage_pick_->setCheckable(true);
   action_stage_clear_ = display_tool_group_->addAction(
-      MakeIcon(IconGlyph::ClearSelection), "Clear Selection");
+      gmp::icons::get("clear_selection"), "Clear Selection");
   action_stage_slice_ = display_tool_group_->addAction(
-      MakeIcon(IconGlyph::Slice), "Slice");
+      gmp::icons::get("slice"), "Slice");
   action_stage_slice_->setCheckable(true);
   action_display_mode_->setToolTip("Cycle Display Mode");
   action_stage_pick_->setToolTip("Pick");
