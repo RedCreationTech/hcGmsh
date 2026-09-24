@@ -16,7 +16,7 @@ option(GMP_ENABLE_GMSH_GUI "Enable embedded Gmsh GUI" OFF)
 option(GMP_ENABLE_WSL_RUNNER "Enable WSL runner (Windows only)" OFF)
 option(GMP_ENABLE_VTK_VIEWER "Enable VTK viewer" OFF)
 
-find_package(Qt6 REQUIRED COMPONENTS Widgets Network Concurrent)
+find_package(Qt6 REQUIRED COMPONENTS Widgets Network Concurrent Svg)
 
 if(GMP_ENABLE_MPI)
   find_package(MPI)
@@ -158,6 +158,10 @@ endif()
 add_executable(gmp_ise
   src/main.cpp
   resources/icons.qrc
+  # QtAwesome (vendored, external/QtAwesome/GMP_VENDORED.md): FA7 Free 字体 qrc + 源
+  external/QtAwesome/QtAwesome/QtAwesomeFree.qrc
+  external/QtAwesome/QtAwesome/QtAwesome.cpp
+  external/QtAwesome/QtAwesome/QtAwesomeAnim.cpp
   src/MainWindow.cpp
   src/ModelTreeAdapter.cpp
   include/gmp/ModelTreeAdapter.h
@@ -194,6 +198,8 @@ add_executable(gmp_ise
   src/RunnerFactory.cpp
   src/WslRunner.cpp
   src/ProcessRunner.h
+  src/IconFactory.cpp
+  include/gmp/IconFactory.h
   include/gmp/Runner.h
   include/gmp/L10n.h
   include/gmp/MainWindow.h
@@ -203,8 +209,9 @@ add_executable(gmp_ise
   include/gmp/PropertyEditor.h
 )
 
-target_include_directories(gmp_ise PRIVATE include)
-target_link_libraries(gmp_ise PRIVATE hc_simulation hc_mesh Qt6::Widgets Qt6::Network Qt6::Concurrent)
+target_include_directories(gmp_ise PRIVATE include
+  external/QtAwesome/QtAwesome)
+target_link_libraries(gmp_ise PRIVATE hc_simulation hc_mesh Qt6::Widgets Qt6::Network Qt6::Concurrent Qt6::Svg)
 
 # TASK-E2E-10: MOOSE 模板库根目录（templates/moose/），运行期可被
 # GMP_MOOSE_TEMPLATES 环境变量覆盖

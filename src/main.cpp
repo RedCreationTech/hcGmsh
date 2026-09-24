@@ -16,6 +16,7 @@
 #include "gmp/Env.h"
 #include "gmp/ComboPopupFix.h"
 #include "gmp/OperationLog.h"
+#include "gmp/IconFactory.h"
 
 int main(int argc, char** argv) {
 #ifdef GMP_ENABLE_VTK_VIEWER
@@ -47,6 +48,9 @@ int main(int argc, char** argv) {
 #endif
 
   gmp::MainWindow window;
+
+  // 图标体系初始化（QtAwesome / FA7 Free，须在 QApplication 之后、UI 构造前）
+  gmp::icons::init(&window);
   window.show();
 
   // 文档截图巡览：GMP_SCREENSHOT_DIR=<目录> 时自动切换页面截图并退出

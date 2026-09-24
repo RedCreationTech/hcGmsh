@@ -1,5 +1,6 @@
 #include "gmp/PropertyEditor.h"
 
+#include "gmp/IconFactory.h"
 #include "gmp/L10n.h"
 #include "gmp/SketchDocument.h"
 #include "gmp/UnitDisplay.h"
@@ -122,6 +123,7 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   groups_chips_layout_->setContentsMargins(0, 0, 0, 0);
   groups_chips_layout_->setSpacing(6);
   apply_groups_btn_ = new QPushButton("Apply Groups", groups_box_);
+  apply_groups_btn_->setIcon(gmp::icons::get("apply_groups"));
   apply_groups_btn_->setObjectName("applyGroupsBtn");
   groups_layout->addWidget(groups_hint_);
   groups_layout->addWidget(groups_list_, 1);
@@ -167,7 +169,11 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   params_buttons_container_ = new QWidget(params_container_);
   params_buttons_container_->setLayout(buttons);
   add_param_btn_ = new QPushButton("Add Param", params_container_);
+  add_param_btn_->setIcon(gmp::icons::get("add_param"));
+  add_param_btn_->setObjectName("gmpIcon_add_param");
   remove_param_btn_ = new QPushButton("Remove Param", params_container_);
+  remove_param_btn_->setIcon(gmp::icons::get("remove_param"));
+  remove_param_btn_->setObjectName("gmpIcon_remove_param");
   buttons->addWidget(add_param_btn_);
   buttons->addWidget(remove_param_btn_);
   buttons->addStretch(1);
@@ -212,7 +218,11 @@ PropertyEditor::PropertyEditor(QWidget* parent) : QWidget(parent) {
   validation_layout->addLayout(validation_filters);
   auto* validation_actions = new QHBoxLayout();
   validation_refresh_btn_ = new QPushButton("Refresh", validation_box_);
+  validation_refresh_btn_->setIcon(gmp::icons::get("refresh"));
+  validation_refresh_btn_->setObjectName("gmpIcon_refresh");
   validation_goto_btn_ = new QPushButton("Go To Node", validation_box_);
+  validation_goto_btn_->setIcon(gmp::icons::get("go_to_node"));
+  validation_goto_btn_->setObjectName("gmpIcon_go_to_node");
   validation_actions->addWidget(validation_refresh_btn_);
   validation_actions->addWidget(validation_goto_btn_);
   validation_actions->addStretch(1);
@@ -1859,6 +1869,7 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
         new QPushButton(has_named_templates ? "Apply Template"
                                             : "Restore Type Defaults",
                         template_row);
+    apply_template_btn_->setIcon(gmp::icons::get("apply_template"));
     apply_template_btn_->setObjectName("propertyApplyTemplateButton");
     apply_template_btn_->setToolTip(
         l10n::tr("Overwrite template-controlled fields with their default "

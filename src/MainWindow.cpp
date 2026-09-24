@@ -58,6 +58,7 @@
 #include <QScreen>
 #include <QImage>
 #include <QVariantMap>
+#include <QHash>
 #include <QMetaType>
 #include <QSet>
 #include <QSettings>
@@ -104,6 +105,7 @@
 #include "gmp/StageLeftToolbar.h"
 #include "gmp/SketchPanel.h"
 #include "gmp/VtkViewer.h"
+#include "gmp/IconFactory.h"
 
 #ifdef GMP_ENABLE_GMSH_GUI
 #include <gmsh.h>
@@ -721,8 +723,43 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       auto* actions_layout = new QHBoxLayout(actions);
       actions_layout->setContentsMargins(0, 2, 0, 2);
       actions_layout->setSpacing(8);
+      // 顶部按钮行统一挂图标：键按按钮文字映射（见 IconFactory 键表）。
+      const QHash<QString, QString> icon_keys = {
+          {"Open Parts Root", "open_root"},
+          {"New Part", "new_part"},
+          {"Open Gmsh Panel", "open_gmsh_panel"},
+          {"Open Materials Root", "open_root"},
+          {"New Material", "new_material"},
+          {"New CDP Material", "new_cdp_material"},
+          {"Open Property Editor", "open_property_editor"},
+          {"Open Sections Root", "open_root"},
+          {"New Solid Section", "new_section"},
+          {"Open Assembly Root", "open_root"},
+          {"Create Instance", "create_instance"},
+          {"Build Assembly", "build_assembly"},
+          {"Open Steps Root", "open_root"},
+          {"Add Static Step", "add_static_step"},
+          {"Add Transient Step", "add_transient_step"},
+          {"Add Step Preset: steady", "add_step_preset"},
+          {"Open Interactions Root", "open_root"},
+          {"Add Interaction", "add_interaction"},
+          {"Add Surface Contact", "add_surface_contact"},
+          {"Open Loads Root", "open_root"},
+          {"Add Generic Load", "add_generic_load"},
+          {"Add Surface Pressure", "add_surface_pressure"},
+          {"Open BC Root", "open_bc_root"},
+          {"Add Thermal Source", "add_thermal_source"},
+          {"Focus Viewport", "focus_viewport"},
+          {"Show Plot Preview", "show_plot_preview"},
+          {"Show Table Preview", "show_table_preview"},
+      };
       for (const auto& button : buttons) {
         auto* btn = new QPushButton(button.first, actions);
+        if (icon_keys.contains(button.first)) {
+          const QString icon_key = icon_keys.value(button.first);
+          btn->setIcon(gmp::icons::get(icon_key));
+          btn->setObjectName(QStringLiteral("gmpIcon_%1").arg(icon_key));
+        }
         btn->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
         const auto action = button.second;
         connect(btn, &QPushButton::clicked, container,
@@ -759,6 +796,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     list_out = list;
 
     auto* refresh_btn = new QPushButton("Refresh", panel);
+    refresh_btn->setIcon(gmp::icons::get("refresh"));
+    refresh_btn->setObjectName("gmpIcon_refresh");
     auto* list_action_row = new QHBoxLayout();
     list_action_row->addStretch(1);
     list_action_row->addWidget(refresh_btn);
@@ -798,9 +837,17 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
     auto* open_selected_btn =
         new QPushButton(QString("Open Selected %1").arg(selected_label), panel);
+    open_selected_btn->setIcon(gmp::icons::get("open_selected"));
+    open_selected_btn->setObjectName("gmpIcon_open_selected");
     auto* rename_btn = new QPushButton("Rename", panel);
+    rename_btn->setIcon(gmp::icons::get("rename"));
+    rename_btn->setObjectName("gmpIcon_rename");
     auto* duplicate_btn = new QPushButton("Duplicate", panel);
+    duplicate_btn->setIcon(gmp::icons::get("duplicate"));
+    duplicate_btn->setObjectName("gmpIcon_duplicate");
     auto* remove_btn = new QPushButton("Remove", panel);
+    remove_btn->setIcon(gmp::icons::get("remove"));
+    remove_btn->setObjectName("gmpIcon_remove");
     connect(open_selected_btn, &QPushButton::clicked, this,
             [this, resolve_selected_item, module_tab_index]() {
       auto* target = resolve_selected_item();
@@ -1063,7 +1110,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   plot_layout->setSpacing(6);
   auto* plot_open_row = new QHBoxLayout();
   auto* plot_open_btn = new QPushButton("Open Visualization", plot_page);
+  plot_open_btn->setIcon(gmp::icons::get("focus_viewport"));
+  plot_open_btn->setObjectName("gmpIcon_focus_viewport");
   auto* plot_refresh_btn = new QPushButton("Refresh", plot_page);
+  plot_refresh_btn->setIcon(gmp::icons::get("refresh"));
+  plot_refresh_btn->setObjectName("gmpIcon_refresh");
   auto* plot_status = new QLabel("No data", plot_page);
   plot_open_row->addWidget(plot_open_btn);
   plot_open_row->addWidget(plot_refresh_btn);
@@ -1082,7 +1133,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   table_layout->setSpacing(6);
   auto* table_open_row = new QHBoxLayout();
   auto* table_open_btn = new QPushButton("Open Visualization", table_page);
+  table_open_btn->setIcon(gmp::icons::get("focus_viewport"));
+  table_open_btn->setObjectName("gmpIcon_focus_viewport");
   auto* table_refresh_btn = new QPushButton("Refresh", table_page);
+  table_refresh_btn->setIcon(gmp::icons::get("refresh"));
+  table_refresh_btn->setObjectName("gmpIcon_refresh");
   auto* table_time_step = new QSpinBox(table_page);
   results_table_time_step_ = table_time_step;
   table_time_step->setObjectName("resultTableTimeStep");
@@ -1092,6 +1147,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   table_time_step->setToolTip(
       "The table shows entity values at this viewport time step.");
   auto* table_latest_btn = new QPushButton("Latest", table_page);
+  table_latest_btn->setIcon(gmp::icons::get("latest"));
   table_latest_btn->setObjectName("resultTableLatestStep");
   table_latest_btn->setEnabled(false);
   table_latest_btn->setToolTip("Show the last available result time step.");
@@ -1244,13 +1300,23 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   auto* job_actions = new QHBoxLayout();
   auto* job_run_btn = new QPushButton("Run");
+  job_run_btn->setIcon(gmp::icons::get("run"));
+  job_run_btn->setObjectName("gmpIcon_run");
   auto* job_stop_btn = new QPushButton("Stop");
+  job_stop_btn->setIcon(gmp::icons::get("stop"));
+  job_stop_btn->setObjectName("gmpIcon_stop");
   auto* job_retry_btn = new QPushButton("Retry");
+  job_retry_btn->setIcon(gmp::icons::get("retry"));
+  job_retry_btn->setObjectName("gmpIcon_retry");
   job_run_button_ = job_run_btn;
   job_stop_button_ = job_stop_btn;
   job_retry_button_ = job_retry_btn;
   auto* job_log_btn = new QPushButton("Open Log");
+  job_log_btn->setIcon(gmp::icons::get("open_log"));
+  job_log_btn->setObjectName("gmpIcon_open_log");
   auto* job_result_btn = new QPushButton("Open Result");
+  job_result_btn->setIcon(gmp::icons::get("open_result"));
+  job_result_btn->setObjectName("gmpIcon_open_result");
   job_actions->addWidget(job_run_btn);
   job_actions->addWidget(job_stop_btn);
   job_actions->addWidget(job_retry_btn);
@@ -1267,6 +1333,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   job_state_filter_->addItem("Failed", "Failed");
   job_state_filter_->addItem("Canceled", "Canceled");
   auto* job_refresh_btn = new QPushButton("Refresh", job_manager_page);
+  job_refresh_btn->setIcon(gmp::icons::get("refresh"));
   job_refresh_btn->setObjectName("jobMonitorRefresh");
   job_auto_refresh_ = new QCheckBox("Auto (5s)", job_manager_page);
   job_auto_refresh_->setObjectName("jobAutoRefresh");
@@ -1321,11 +1388,20 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
 
   auto* detail_btns = new QHBoxLayout();
   auto* detail_refresh_btn = new QPushButton("Refresh", detail_content);
+  detail_refresh_btn->setIcon(gmp::icons::get("refresh"));
+  detail_refresh_btn->setObjectName("gmpIcon_refresh");
   job_cancel_button_ = new QPushButton("Cancel", detail_content);
+  job_cancel_button_->setIcon(gmp::icons::get("cancel"));
   job_cancel_button_->setObjectName("jobRemoteCancel");
   auto* detail_taskmd_btn = new QPushButton("task.md", detail_content);
+  detail_taskmd_btn->setIcon(gmp::icons::get("open_log"));
+  detail_taskmd_btn->setObjectName("gmpIcon_open_log");
   auto* detail_log_btn = new QPushButton("Log", detail_content);
+  detail_log_btn->setIcon(gmp::icons::get("open_log"));
+  detail_log_btn->setObjectName("gmpIcon_open_log");
   auto* detail_result_btn = new QPushButton("Result", detail_content);
+  detail_result_btn->setIcon(gmp::icons::get("result_folder"));
+  detail_result_btn->setObjectName("gmpIcon_result_folder");
   detail_btns->addWidget(detail_refresh_btn);
   detail_btns->addWidget(job_cancel_button_);
   detail_btns->addWidget(detail_taskmd_btn);
@@ -1382,7 +1458,10 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* files_layout = new QVBoxLayout(files_box);
   auto* files_btn_row = new QHBoxLayout();
   auto* files_refresh_btn = new QPushButton("Refresh Files", files_box);
+  files_refresh_btn->setIcon(gmp::icons::get("refresh_files"));
+  files_refresh_btn->setObjectName("gmpIcon_refresh_files");
   auto* files_download_btn = new QPushButton("Download Selected", files_box);
+  files_download_btn->setIcon(gmp::icons::get("download"));
   files_download_btn->setObjectName("jobFileDownload");
   files_btn_row->addWidget(files_refresh_btn);
   files_btn_row->addWidget(files_download_btn);
@@ -2388,35 +2467,51 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   // 页内标题/描述已删除（P0 审计 C1）：dock 窗口标题即模块名。
   auto* results_file_actions = new QHBoxLayout();
   auto* results_open_root = new QPushButton("Open Results Root", results_page);
+  results_open_root->setIcon(gmp::icons::get("open_root"));
+  results_open_root->setObjectName("gmpIcon_open_root");
   auto* results_refresh = new QPushButton("Refresh List", results_page);
+  results_refresh->setIcon(gmp::icons::get("refresh"));
+  results_refresh->setObjectName("gmpIcon_refresh");
   auto* results_import = new QPushButton("Import Result File...", results_page);
+  results_import->setIcon(gmp::icons::get("import_result_file"));
   results_import->setObjectName("resultsImportFile");
   results_import->setToolTip(
       "Import an external result file (.e/.exo/.msh/.csv/.txt/.log) into "
       "the results list.");
   auto* results_import_package =
       new QPushButton("Import Task Directory...", results_page);
+  results_import_package->setIcon(gmp::icons::get("import_task_dir"));
   results_import_package->setObjectName("resultsImportPackage");
   results_import_package->setToolTip(
       "Import a task root or its results directory and classify all artifacts.");
   auto* results_verify_package = new QPushButton("Verify Package", results_page);
+  results_verify_package->setIcon(gmp::icons::get("verify_package"));
   results_verify_package->setObjectName("resultsVerifyPackage");
   auto* results_trash_copy =
       new QPushButton("Trash Project Copy...", results_page);
+  results_trash_copy->setIcon(gmp::icons::get("trash"));
   results_trash_copy->setObjectName("resultsTrashProjectCopy");
   auto* results_relocate = new QPushButton("Relocate...", results_page);
+  results_relocate->setIcon(gmp::icons::get("relocate"));
   results_relocate->setObjectName("resultsRelocatePackage");
   auto* results_rescan = new QPushButton("Rescan...", results_page);
+  results_rescan->setIcon(gmp::icons::get("rescan"));
   results_rescan->setObjectName("resultsRescanPackage");
   auto* results_open_view = new QPushButton("Open in Viewer", results_page);
+  results_open_view->setIcon(gmp::icons::get("open_in_viewer"));
+  results_open_view->setObjectName("gmpIcon_open_in_viewer");
   auto* results_open_text = new QPushButton("Open as Text", results_page);
+  results_open_text->setIcon(gmp::icons::get("open_as_text"));
+  results_open_text->setObjectName("gmpIcon_open_as_text");
   auto* results_preview_toggle = new QPushButton("Preview", results_page);
+  results_preview_toggle->setIcon(gmp::icons::get("preview"));
   results_preview_toggle->setObjectName("resultsPreviewToggle");
   results_preview_toggle->setCheckable(true);
   results_preview_toggle->setChecked(false);
   results_preview_toggle->setToolTip(
       "Show or hide the result preview pane.");
   auto* results_new_compare = new QPushButton("New Comparison Window", results_page);
+  results_new_compare->setIcon(gmp::icons::get("new_compare"));
   results_new_compare->setObjectName("resultsNewCompareButton");
   results_new_compare->setToolTip(
       "Open an additional results window for side-by-side comparison.");
@@ -5458,7 +5553,9 @@ void MainWindow::build_menu() {
   connect(about_action, &QAction::triggered, this, [this]() {
     QMessageBox::about(
         this, "About GMP-ISE",
-        "GMP-ISE finite-element preprocessing and job submission workspace.");
+        "GMP-ISE finite-element preprocessing and job submission workspace.\n"
+        "Icons: Font Awesome by Dave Gandy (CC BY 4.0 / SIL OFL 1.1) via "
+        "QtAwesome (MIT).");
   });
 
   connect(action_new_, &QAction::triggered, this, [this]() {
@@ -9750,8 +9847,14 @@ QDockWidget* MainWindow::create_results_compare_window() {
 
   auto* actions = new QHBoxLayout();
   auto* refresh_btn = new QPushButton("Refresh List", content);
+  refresh_btn->setIcon(gmp::icons::get("refresh"));
+  refresh_btn->setObjectName("gmpIcon_refresh");
   auto* focus_btn = new QPushButton("Focus Viewport", content);
+  focus_btn->setIcon(gmp::icons::get("focus_viewport"));
+  focus_btn->setObjectName("gmpIcon_focus_viewport");
   auto* add_curve_btn = new QPushButton("Add Selected CSV", content);
+  add_curve_btn->setIcon(gmp::icons::get("add_csv"));
+  add_curve_btn->setObjectName("gmpIcon_add_csv");
   actions->addWidget(refresh_btn);
   actions->addWidget(focus_btn);
   actions->addWidget(add_curve_btn);

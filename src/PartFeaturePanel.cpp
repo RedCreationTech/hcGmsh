@@ -8,6 +8,8 @@
 #include <QTabWidget>
 #include <QVBoxLayout>
 
+#include "gmp/IconFactory.h"
+
 // WS3 实装: 部件特征面板 (拉伸/旋转/放样/扫掠)。
 // 面板不直接调 OccBridge, 只发信号, 由 MainWindow 统一接线。
 
@@ -58,6 +60,8 @@ PartFeaturePanel::PartFeaturePanel(QWidget* parent) : QWidget(parent) {
   sketch_combo_->setToolTip("Profile sketch (also used by Revolve).");
   extrude_distance_ = make_spin(10.0, -1e6, 1e6, " mm", extrude_group);
   auto* extrude_btn = new QPushButton("Extrude along +Z", extrude_group);
+  extrude_btn->setObjectName("gmpIcon_feat_extrude");
+  extrude_btn->setIcon(gmp::icons::get("feat_extrude"));
   extrude_btn->setToolTip(
       "Extrude the closed profile along +Z; a negative distance reverses "
       "the direction.");
@@ -73,6 +77,8 @@ PartFeaturePanel::PartFeaturePanel(QWidget* parent) : QWidget(parent) {
   revolve_form->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
   revolve_angle_ = make_spin(90.0, -360.0, 360.0, " deg", revolve_group);
   auto* revolve_btn = new QPushButton("Revolve about Y axis", revolve_group);
+  revolve_btn->setObjectName("gmpIcon_feat_revolve");
+  revolve_btn->setIcon(gmp::icons::get("feat_revolve"));
   revolve_btn->setToolTip(
       "Revolve the profile about the Y axis through the origin. The profile "
       "must not intersect the axis.");
@@ -90,6 +96,8 @@ PartFeaturePanel::PartFeaturePanel(QWidget* parent) : QWidget(parent) {
   loft_z_ = make_spin(10.0, -1e6, 1e6, " mm", loft_group);
   loft_z_->setToolTip("Z lift applied to the second section.");
   auto* loft_btn = new QPushButton("Loft (solid)", loft_group);
+  loft_btn->setObjectName("gmpIcon_feat_loft");
+  loft_btn->setIcon(gmp::icons::get("feat_loft"));
   loft_btn->setToolTip(
       "Loft a solid between two sections; the second section is lifted by "
       "the Z offset.");
@@ -109,6 +117,8 @@ PartFeaturePanel::PartFeaturePanel(QWidget* parent) : QWidget(parent) {
   sweep_path_->setToolTip(
       "Path sketch must be a single connected chain of lines/arcs.");
   auto* sweep_btn = new QPushButton("Sweep profile along path", sweep_group);
+  sweep_btn->setObjectName("gmpIcon_feat_sweep");
+  sweep_btn->setIcon(gmp::icons::get("feat_sweep"));
   sweep_form->addRow("Profile sketch:", sweep_profile_);
   sweep_form->addRow("Path sketch:", sweep_path_);
   sweep_form->addRow(sweep_btn);

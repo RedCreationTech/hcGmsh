@@ -3,6 +3,7 @@
 #include "gmp/GmshMesher.h"
 #include "gmp/AssemblyGeometryService.h"
 #include "gmp/OperationLog.h"
+#include "gmp/IconFactory.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -173,8 +174,12 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
             activate_model(index);
           });
   auto* open_geo = new QPushButton("Open Geometry");
+  open_geo->setObjectName("gmpIcon_open_geometry");
+  open_geo->setIcon(gmp::icons::get("open_geometry"));
   connect(open_geo, &QPushButton::clicked, this, &GmshPanel::on_open_geometry);
   auto* clear_geo = new QPushButton("Clear Model");
+  clear_geo->setObjectName("gmpIcon_clear_model");
+  clear_geo->setIcon(gmp::icons::get("clear_model"));
   connect(clear_geo, &QPushButton::clicked, this, &GmshPanel::on_clear_model);
   model_form->addRow("Geometry", model_selector_);
   auto* model_actions = new QHBoxLayout();
@@ -206,6 +211,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   connect(entity_dim_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, &GmshPanel::on_entity_dim_changed);
   auto* refresh_btn = new QPushButton("Refresh");
+  refresh_btn->setObjectName("gmpIcon_refresh");
+  refresh_btn->setIcon(gmp::icons::get("refresh"));
   connect(refresh_btn, &QPushButton::clicked, this, [this]() {
     update_entity_list();
   });
@@ -286,6 +293,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   prim_form->addRow("Radius", prim_radius_);
 
   prim_add_btn_ = new QPushButton("Add Primitive");
+  prim_add_btn_->setObjectName("gmpIcon_add_primitive");
+  prim_add_btn_->setIcon(gmp::icons::get("add_primitive"));
   connect(prim_add_btn_, &QPushButton::clicked, this,
           &GmshPanel::on_add_primitive);
   prim_form->addRow("", prim_add_btn_);
@@ -305,6 +314,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   transform_ids_ = new QLineEdit();
   transform_ids_->setPlaceholderText("IDs or dim:tag (e.g. 1,2 or 2:5). Empty = all.");
   auto* transform_pick = new QPushButton("Pick");
+  transform_pick->setObjectName("gmpIcon_pick");
+  transform_pick->setIcon(gmp::icons::get("pick"));
   connect(transform_pick, &QPushButton::clicked, this, [this]() {
     const int dim = transform_dim_ ? transform_dim_->currentData().toInt() : -1;
     active_entity_input_ = transform_ids_;
@@ -345,6 +356,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   trans_dy_->setRange(-1e6, 1e6);
   trans_dz_->setRange(-1e6, 1e6);
   auto* trans_btn = new QPushButton("Translate");
+  trans_btn->setObjectName("gmpIcon_translate");
+  trans_btn->setIcon(gmp::icons::get("translate"));
   connect(trans_btn, &QPushButton::clicked, this,
           &GmshPanel::on_apply_translate);
   xform_form->addRow("dx", trans_dx_);
@@ -375,6 +388,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   rot_angle_->setRange(-360.0, 360.0);
   rot_angle_->setValue(0.0);
   auto* rot_btn = new QPushButton("Rotate");
+  rot_btn->setObjectName("gmpIcon_rotate");
+  rot_btn->setIcon(gmp::icons::get("rotate"));
   connect(rot_btn, &QPushButton::clicked, this,
           &GmshPanel::on_apply_rotate);
   xform_form->addRow("Rotate Axis ax", rot_ax_);
@@ -403,6 +418,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   scale_y_->setValue(1.0);
   scale_z_->setValue(1.0);
   auto* scale_btn = new QPushButton("Scale");
+  scale_btn->setObjectName("gmpIcon_scale");
+  scale_btn->setIcon(gmp::icons::get("scale"));
   connect(scale_btn, &QPushButton::clicked, this,
           &GmshPanel::on_apply_scale);
   xform_form->addRow("sx", scale_x_);
@@ -426,6 +443,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   boolean_tool_ids_ = new QLineEdit();
   boolean_tool_ids_->setPlaceholderText("Tool IDs or dim:tag (e.g. 3 or 3:5)");
   auto* boolean_obj_pick = new QPushButton("Pick");
+  boolean_obj_pick->setObjectName("gmpIcon_pick");
+  boolean_obj_pick->setIcon(gmp::icons::get("pick"));
   connect(boolean_obj_pick, &QPushButton::clicked, this, [this]() {
     const int dim = boolean_dim_ ? boolean_dim_->currentData().toInt() : -1;
     active_entity_input_ = boolean_obj_ids_;
@@ -434,6 +453,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
                              boolean_obj_ids_->text()));
   });
   auto* boolean_tool_pick = new QPushButton("Pick");
+  boolean_tool_pick->setObjectName("gmpIcon_pick");
+  boolean_tool_pick->setIcon(gmp::icons::get("pick"));
   connect(boolean_tool_pick, &QPushButton::clicked, this, [this]() {
     const int dim = boolean_dim_ ? boolean_dim_->currentData().toInt() : -1;
     active_entity_input_ = boolean_tool_ids_;
@@ -494,8 +515,14 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   bool_form->addRow(boolean_remove_tool_);
 
   auto* fuse_btn = new QPushButton("Fuse");
+  fuse_btn->setObjectName("gmpIcon_bool_fuse");
+  fuse_btn->setIcon(gmp::icons::get("bool_fuse"));
   auto* cut_btn = new QPushButton("Cut");
+  cut_btn->setObjectName("gmpIcon_bool_cut");
+  cut_btn->setIcon(gmp::icons::get("bool_cut"));
   auto* intersect_btn = new QPushButton("Intersect");
+  intersect_btn->setObjectName("gmpIcon_bool_intersect");
+  intersect_btn->setIcon(gmp::icons::get("bool_intersect"));
   connect(fuse_btn, &QPushButton::clicked, this,
           &GmshPanel::on_apply_boolean_fuse);
   connect(cut_btn, &QPushButton::clicked, this,
@@ -522,10 +549,12 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
           this, &GmshPanel::on_physical_group_selected);
   auto* phys_refresh = new QPushButton("Refresh");
   phys_refresh->setObjectName("physicalGroupRefreshButton");
+  phys_refresh->setIcon(gmp::icons::get("refresh"));
   connect(phys_refresh, &QPushButton::clicked, this,
           &GmshPanel::on_physical_group_refresh);
   auto* phys_clear_stage_filter = new QPushButton("Clear Stage Filter");
   phys_clear_stage_filter->setObjectName("physicalGroupClearStageFilterButton");
+  phys_clear_stage_filter->setIcon(gmp::icons::get("clear_stage_filter"));
   connect(phys_clear_stage_filter, &QPushButton::clicked, this, [this]() {
     emit entity_preview_requested(-1, -1, 0.0, 0.0, 0.0);
     emit physical_group_selected(-1, -1);
@@ -554,6 +583,7 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
       "Use dimension:tag, e.g. 3:1 or 2:1, 2:7");
   auto* phys_entities_pick = new QPushButton("Pick");
   phys_entities_pick->setObjectName("physicalGroupEntityPickButton");
+  phys_entities_pick->setIcon(gmp::icons::get("pick"));
   connect(phys_entities_pick, &QPushButton::clicked, this, [this]() {
     const int dim = phys_group_dim_ ? phys_group_dim_->currentData().toInt() : -1;
     // 当前组仍作为 Update/Delete 的编辑目标保留，但拾取候选面前必须
@@ -600,8 +630,11 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   phys_group_update_ = new QPushButton("Update Selected");
   phys_group_delete_ = new QPushButton("Delete Selected");
   phys_group_add_->setObjectName("physicalGroupAddButton");
+  phys_group_add_->setIcon(gmp::icons::get("pg_add"));
   phys_group_update_->setObjectName("physicalGroupUpdateButton");
+  phys_group_update_->setIcon(gmp::icons::get("pg_update"));
   phys_group_delete_->setObjectName("physicalGroupDeleteButton");
+  phys_group_delete_->setIcon(gmp::icons::get("pg_delete"));
   connect(phys_group_add_, &QPushButton::clicked, this,
           &GmshPanel::on_physical_group_add);
   connect(phys_group_update_, &QPushButton::clicked, this,
@@ -693,6 +726,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   field_entities_ = new QLineEdit();
   field_entities_->setPlaceholderText("Entity IDs or dim:tag list");
   auto* field_entities_pick = new QPushButton("Pick");
+  field_entities_pick->setObjectName("gmpIcon_pick");
+  field_entities_pick->setIcon(gmp::icons::get("pick"));
   connect(field_entities_pick, &QPushButton::clicked, this, [this]() {
     const int dim = field_dim_ ? field_dim_->currentData().toInt() : -1;
     active_entity_input_ = field_entities_;
@@ -728,8 +763,14 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   field_form->addRow("SizeMax", field_size_max_);
 
   auto* field_apply = new QPushButton("Apply Field");
+  field_apply->setObjectName("gmpIcon_apply");
+  field_apply->setIcon(gmp::icons::get("apply"));
   auto* field_clear = new QPushButton("Clear Fields");
+  field_clear->setObjectName("gmpIcon_clear");
+  field_clear->setIcon(gmp::icons::get("clear"));
   auto* field_refresh = new QPushButton("Refresh");
+  field_refresh->setObjectName("gmpIcon_refresh");
+  field_refresh->setIcon(gmp::icons::get("refresh"));
   connect(field_apply, &QPushButton::clicked, this, &GmshPanel::on_field_apply);
   connect(field_clear, &QPushButton::clicked, this, &GmshPanel::on_field_clear);
   connect(field_refresh, &QPushButton::clicked, this,
@@ -786,6 +827,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   entity_size_value_->setRange(0.0, 1e6);
   entity_size_value_->setValue(0.1);
   auto* entity_size_pick = new QPushButton("Pick");
+  entity_size_pick->setObjectName("gmpIcon_pick");
+  entity_size_pick->setIcon(gmp::icons::get("pick"));
   connect(entity_size_pick, &QPushButton::clicked, this, [this]() {
     const int dim = entity_size_dim_ ? entity_size_dim_->currentData().toInt() : -1;
     active_entity_input_ = entity_size_ids_;
@@ -795,6 +838,10 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   });
   entity_size_apply_ = new QPushButton("Apply");
   entity_size_clear_ = new QPushButton("Clear");
+  entity_size_apply_->setObjectName("gmpIcon_apply");
+  entity_size_apply_->setIcon(gmp::icons::get("apply"));
+  entity_size_clear_->setObjectName("gmpIcon_clear");
+  entity_size_clear_->setIcon(gmp::icons::get("clear"));
   connect(entity_size_apply_, &QPushButton::clicked, this,
           &GmshPanel::on_entity_size_apply);
   connect(entity_size_clear_, &QPushButton::clicked, this,
@@ -902,6 +949,8 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   output_path_->setText(QDir::currentPath() + "/out/box.msh");
 
   auto* pick_btn = new QPushButton("Pick Output");
+  pick_btn->setObjectName("gmpIcon_pick_output");
+  pick_btn->setIcon(gmp::icons::get("pick_output"));
   connect(pick_btn, &QPushButton::clicked, this, &GmshPanel::on_pick_output);
 
   form->addRow("Mesh Output", output_path_);
@@ -910,17 +959,22 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   mesh_layout->addLayout(form);
 
   auto* export_btn = new QPushButton("Export Geometry");
+  export_btn->setObjectName("gmpIcon_export_geometry");
+  export_btn->setIcon(gmp::icons::get("export_geometry"));
   connect(export_btn, &QPushButton::clicked, this,
           &GmshPanel::on_export_geometry);
 
   auto* generate_btn = new QPushButton("Generate Mesh");
   generate_btn->setObjectName("generateMeshButton");
+  generate_btn->setIcon(gmp::icons::get("generate_mesh"));
   connect(generate_btn, &QPushButton::clicked, this, &GmshPanel::on_generate);
 
   auto* generate_2d_btn = new QPushButton("Generate 2D Mesh");
   auto* generate_3d_btn = new QPushButton("Generate 3D Mesh");
   generate_2d_btn->setObjectName("generate2dMeshButton");
+  generate_2d_btn->setIcon(gmp::icons::get("generate_2d"));
   generate_3d_btn->setObjectName("generate3dMeshButton");
+  generate_3d_btn->setIcon(gmp::icons::get("generate_3d"));
   mesh_generate_buttons_ = {generate_btn, generate_2d_btn, generate_3d_btn};
   connect(generate_2d_btn, &QPushButton::clicked, this, [this]() {
     if (mesh_dim_) {

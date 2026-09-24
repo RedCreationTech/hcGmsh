@@ -1,5 +1,7 @@
 #include "gmp/ResultsWidgets.h"
 
+#include "gmp/IconFactory.h"
+
 #include <QApplication>
 #include <QClipboard>
 #include <QColorDialog>
@@ -118,6 +120,8 @@ ResultsTableWidget::ResultsTableWidget(QWidget* parent) : QWidget(parent) {
   filters->addWidget(value_max_);
   filters->addWidget(special_);
   auto* clear = new QPushButton("Clear filters", this);
+  clear->setIcon(gmp::icons::get("clear_filters"));
+  clear->setObjectName("gmpIcon_clear_filters");
   filters->addWidget(clear);
   filters->addStretch(1);
   layout->addLayout(filters);
@@ -131,7 +135,11 @@ ResultsTableWidget::ResultsTableWidget(QWidget* parent) : QWidget(parent) {
 
   auto* pager = new QHBoxLayout();
   auto* previous = new QPushButton("Previous", this);
+  previous->setIcon(gmp::icons::get("prev_page"));
+  previous->setObjectName("gmpIcon_prev_page");
   auto* next = new QPushButton("Next", this);
+  next->setIcon(gmp::icons::get("next_page"));
+  next->setObjectName("gmpIcon_next_page");
   page_size_ = new QComboBox(this);
   page_size_->setObjectName("resultsTablePageSize");
   page_size_->addItems({"50", "100", "500", "1000"});
@@ -495,14 +503,31 @@ ResultsPlotWidget::ResultsPlotWidget(QWidget* parent) : QWidget(parent) {
   auto* actions = new QHBoxLayout();
   auto* pin = new QPushButton("Pin preview", this);
   pin->setObjectName("resultsPinPreview");
+  pin->setIcon(gmp::icons::get("pin_preview"));
   auto* import = new QPushButton("Import CSV...", this);
+  import->setIcon(gmp::icons::get("import_csv"));
+  import->setObjectName("gmpIcon_import_csv");
   auto* remove = new QPushButton("Remove selected", this);
+  remove->setIcon(gmp::icons::get("remove_selected"));
+  remove->setObjectName("gmpIcon_remove_selected");
   auto* edit = new QPushButton("Edit selected", this);
+  edit->setIcon(gmp::icons::get("edit_selected"));
+  edit->setObjectName("gmpIcon_edit_selected");
   auto* compare = new QPushButton("Compare 2 curves", this);
+  compare->setIcon(gmp::icons::get("compare_curves"));
+  compare->setObjectName("gmpIcon_compare_curves");
   auto* png = new QPushButton("PNG", this);
+  png->setIcon(gmp::icons::get("export_png"));
+  png->setObjectName("gmpIcon_export_png");
   auto* svg = new QPushButton("SVG", this);
+  svg->setIcon(gmp::icons::get("export_svg"));
+  svg->setObjectName("gmpIcon_export_svg");
   auto* csv = new QPushButton("CSV", this);
+  csv->setIcon(gmp::icons::get("export_csv"));
+  csv->setObjectName("gmpIcon_export_csv");
   auto* copy = new QPushButton("Copy image", this);
+  copy->setIcon(gmp::icons::get("copy_image"));
+  copy->setObjectName("gmpIcon_copy_image");
   for (auto* button : {pin, import, remove, edit, compare, png, svg, csv, copy})
     actions->addWidget(button);
   actions->addStretch(1);

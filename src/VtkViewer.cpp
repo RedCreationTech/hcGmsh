@@ -7,6 +7,7 @@
 #include "ViewportInternal.h"
 #include "gmp/ViewportCamera.h"
 #include "gmp/ViewportSelection.h"
+#include "gmp/IconFactory.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -130,7 +131,11 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   // 长路径不撑宽边栏, 超出部分直接裁剪
   file_label_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
   open_btn_ = new QPushButton("Open");
+  open_btn_->setIcon(gmp::icons::get("open_geometry"));
+  open_btn_->setObjectName("gmpIcon_open_geometry");
   reload_btn_ = new QPushButton("Reload");
+  reload_btn_->setIcon(gmp::icons::get("reload"));
+  reload_btn_->setObjectName("gmpIcon_reload");
   connect(open_btn_, &QPushButton::clicked, this, &VtkViewer::on_open_file);
   connect(reload_btn_, &QPushButton::clicked, this, &VtkViewer::on_reload);
   top_bar_layout->addWidget(file_label_);
@@ -147,6 +152,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   output_combo_ = new QComboBox();
   AttachComboPopupFix(output_combo_);
   output_pick_ = new QPushButton("Load Selected");
+  output_pick_->setIcon(gmp::icons::get("load_selected"));
+  output_pick_->setObjectName("gmpIcon_load_selected");
   connect(output_pick_, &QPushButton::clicked, this, [this]() {
     const QString path = output_combo_->currentData().toString();
     if (!path.isEmpty()) {
@@ -411,6 +418,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   connect(pick_mode_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this](int) { update_selection_pipeline(); });
   pick_clear_ = new QPushButton("Clear");
+  pick_clear_->setIcon(gmp::icons::get("clear_x"));
+  pick_clear_->setObjectName("gmpIcon_clear_x");
   connect(pick_clear_, &QPushButton::clicked, this, [this]() {
     selection_.group_dim_ = -1;
     selection_.group_id_ = -1;
@@ -440,6 +449,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   probe_mode_->addItem("Path points", 2);
   AttachComboPopupFix(probe_mode_);
   probe_clear_ = new QPushButton("Clear");
+  probe_clear_->setIcon(gmp::icons::get("clear_x"));
+  probe_clear_->setObjectName("gmpIcon_clear_x");
   hrow(mesh_layout, {probe_enable_, new QLabel("Mode"), probe_mode_,
                      probe_clear_});
   probe_info_ = new QLabel("Probe: disabled");
@@ -492,6 +503,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   view_combo_->addItem("Iso", 4);
   AttachComboPopupFix(view_combo_);
   view_apply_ = new QPushButton("Apply View");
+  view_apply_->setIcon(gmp::icons::get("apply_view"));
+  view_apply_->setObjectName("gmpIcon_apply_view");
   connect(view_apply_, &QPushButton::clicked, this, [this]() {
     apply_view_preset(view_combo_ ? view_combo_->currentData().toInt() : 0);
   });
@@ -504,6 +517,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   connect(show_outline_, &QCheckBox::toggled, this,
           [this](bool) { update_scene_extras(); });
   auto* reset_filters = new QPushButton("Reset Filters");
+  reset_filters->setIcon(gmp::icons::get("reset_filters"));
+  reset_filters->setObjectName("gmpIcon_reset_filters");
   connect(reset_filters, &QPushButton::clicked, this, [this]() {
     if (mesh_dim_) {
       const int idx = mesh_dim_->findData(-1);
@@ -643,6 +658,8 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   vector_auto_sync_deform_ = new QCheckBox("Auto-sync deformation vector");
   vector_auto_sync_deform_->setChecked(true);
   vector_apply_to_deform_ = new QPushButton("Apply to Deform");
+  vector_apply_to_deform_->setIcon(gmp::icons::get("apply_deform"));
+  vector_apply_to_deform_->setObjectName("gmpIcon_apply_deform");
   vector_info_ = new QLabel("No vector data loaded");
   vector_info_->setWordWrap(true);
   vadd(deform_layout, {vector_array_combo_});

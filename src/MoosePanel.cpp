@@ -1,5 +1,7 @@
 #include "gmp/MoosePanel.h"
 
+#include "gmp/IconFactory.h"
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDir>
@@ -241,6 +243,8 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
         "Auto-detect MOOSE executable");
   }
   auto* pick_exec = new QPushButton("Pick");
+  pick_exec->setIcon(gmp::icons::get("pick"));
+  pick_exec->setObjectName("gmpIcon_pick");
   connect(pick_exec, &QPushButton::clicked, this, &MoosePanel::on_pick_exec);
   auto* exec_row = new QHBoxLayout();
   exec_row->addWidget(exec_path_);
@@ -252,6 +256,8 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   input_path_ = new QLineEdit();
   input_path_->setPlaceholderText("Input file path (*.i)");
   auto* pick_input = new QPushButton("Pick");
+  pick_input->setIcon(gmp::icons::get("pick"));
+  pick_input->setObjectName("gmpIcon_pick");
   connect(pick_input, &QPushButton::clicked, this, &MoosePanel::on_pick_input);
   auto* input_row = new QHBoxLayout();
   input_row->addWidget(input_path_);
@@ -263,6 +269,8 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   workdir_path_ = new QLineEdit();
   workdir_path_->setPlaceholderText("Working directory (optional)");
   auto* pick_workdir = new QPushButton("Pick");
+  pick_workdir->setIcon(gmp::icons::get("pick"));
+  pick_workdir->setObjectName("gmpIcon_pick");
   connect(pick_workdir, &QPushButton::clicked, this, &MoosePanel::on_pick_workdir);
   auto* workdir_row = new QHBoxLayout();
   workdir_row->addWidget(workdir_path_);
@@ -293,6 +301,8 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   connect(mesh_path_->lineEdit(), &QLineEdit::editingFinished, this,
           mesh_path_changed);
   auto* insert_mesh_btn = new QPushButton("Insert Mesh Block");
+  insert_mesh_btn->setIcon(gmp::icons::get("insert_mesh_block"));
+  insert_mesh_btn->setObjectName("gmpIcon_insert_mesh_block");
   connect(insert_mesh_btn, &QPushButton::clicked, this,
           &MoosePanel::on_insert_mesh_block);
   auto* mesh_row = new QHBoxLayout();
@@ -311,6 +321,8 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   boundary_list_->setPlaceholderText("No boundary groups detected yet.");
   groups_layout->addWidget(boundary_list_);
   auto* bc_btn = new QPushButton("Insert BCs From Groups");
+  bc_btn->setIcon(gmp::icons::get("insert_bcs_from_groups"));
+  bc_btn->setObjectName("gmpIcon_insert_bcs_from_groups");
   connect(bc_btn, &QPushButton::clicked, this, &MoosePanel::on_insert_bcs_block);
   groups_layout->addWidget(bc_btn);
   setup_layout->addWidget(groups_box);
@@ -354,11 +366,16 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   remote_form->addRow("Project ID", sim_project_);
   auto* sim_btn_row = new QHBoxLayout();
   submit_remote_btn_ = new QPushButton("Submit Job");
+  submit_remote_btn_->setIcon(gmp::icons::get("submit_job"));
   submit_remote_btn_->setObjectName("mooseSubmitRemoteJobButton");
   submit_remote_btn_->setToolTip(
       "Submit latest exported snapshot via LIMS Facade");
   auto* refresh_btn = new QPushButton("Refresh Status");
+  refresh_btn->setIcon(gmp::icons::get("refresh"));
+  refresh_btn->setObjectName("gmpIcon_refresh");
   auto* artifacts_btn = new QPushButton("Open Remote Artifact");
+  artifacts_btn->setIcon(gmp::icons::get("remote_artifact"));
+  artifacts_btn->setObjectName("gmpIcon_remote_artifact");
   connect(submit_remote_btn_, &QPushButton::clicked, this,
           &MoosePanel::on_submit_job);
   connect(refresh_btn, &QPushButton::clicked, this,
@@ -492,6 +509,7 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   template_kind_->addItem("北京混凝土 CDP 参考等效损伤静力对标（prototype）",
                           "tpl-bj-concrete-cdp-static");
   auto* apply_template = new QPushButton("Apply Template");
+  apply_template->setIcon(gmp::icons::get("apply_template"));
   apply_template->setObjectName("mooseApplyTemplateButton");
   connect(apply_template, &QPushButton::clicked, this,
           &MoosePanel::on_apply_template);
@@ -514,6 +532,7 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
       "Structured input is generated from the Model Tree. Expert mode only "
       "allows isolated Custom Blocks; Manual mode directly edits the input.");
   auto* preview_merge = new QPushButton("Validate & Preview Merge");
+  preview_merge->setIcon(gmp::icons::get("preview_merge"));
   preview_merge->setObjectName("moosePreviewExpertMergeButton");
   connect(input_mode_selector_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, &MoosePanel::on_input_mode_changed);
@@ -555,9 +574,12 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
 
   auto* io_actions = new QHBoxLayout();
   auto* write_btn = new QPushButton("Write Input");
+  write_btn->setIcon(gmp::icons::get("write_input"));
+  write_btn->setObjectName("gmpIcon_write_input");
   connect(write_btn, &QPushButton::clicked, this, &MoosePanel::on_write_input);
   io_actions->addWidget(write_btn);
   export_snapshot_btn_ = new QPushButton("Export Job Snapshot");
+  export_snapshot_btn_->setIcon(gmp::icons::get("export_snapshot"));
   export_snapshot_btn_->setObjectName("mooseExportSnapshotButton");
   export_snapshot_btn_->setToolTip(
       "Export .i + referenced mesh/extra files + manifest.json "
@@ -578,9 +600,13 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
 
   auto* action_row = new QHBoxLayout();
   validate_workflow_btn_ = new QPushButton("Validate Workflow");
+  validate_workflow_btn_->setIcon(gmp::icons::get("validate_workflow"));
   run_btn_ = new QPushButton("Run");
+  run_btn_->setIcon(gmp::icons::get("run"));
   check_btn_ = new QPushButton("Check Input");
+  check_btn_->setIcon(gmp::icons::get("check_input"));
   stop_btn_ = new QPushButton("Stop");
+  stop_btn_->setIcon(gmp::icons::get("stop"));
   validate_workflow_btn_->setObjectName("mooseValidateWorkflowButton");
   validate_workflow_btn_->setToolTip(
       "Validate Model Tree completeness and cross-object references. This "

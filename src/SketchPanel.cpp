@@ -11,6 +11,7 @@
 #include <QVBoxLayout>
 
 #include "gmp/SketchDocument.h"
+#include "gmp/IconFactory.h"
 #include "gmp/L10n.h"
 #include "gmp/VtkViewer.h"
 
@@ -29,8 +30,10 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   // 管理态页内标题/描述已删除（P0 审计 C1）：窗口标题已是 Sketch Editor。
   auto* new_btn = new QPushButton("New Sketch", management_box_);
   new_btn->setObjectName("newSketchButton");
+  new_btn->setIcon(gmp::icons::get("new_sketch"));
   auto* open_edit_btn = new QPushButton("Open Edit", management_box_);
   open_edit_btn->setObjectName("openSketchEditButton");
+  open_edit_btn->setIcon(gmp::icons::get("open_edit"));
   open_edit_btn->setToolTip(
       "Open the selected sketch for editing (2D view; drawing tools land in WS1).");
   management_layout->addWidget(new_btn);
@@ -46,9 +49,17 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   management_layout->addWidget(list_);
 
   auto* rename_btn = new QPushButton("Rename", management_box_);
+  rename_btn->setObjectName("gmpIcon_rename");
+  rename_btn->setIcon(gmp::icons::get("rename"));
   auto* duplicate_btn = new QPushButton("Duplicate", management_box_);
+  duplicate_btn->setObjectName("gmpIcon_duplicate");
+  duplicate_btn->setIcon(gmp::icons::get("duplicate"));
   auto* remove_btn = new QPushButton("Remove", management_box_);
+  remove_btn->setObjectName("gmpIcon_remove");
+  remove_btn->setIcon(gmp::icons::get("remove"));
   auto* refresh_btn = new QPushButton("Refresh", management_box_);
+  refresh_btn->setObjectName("gmpIcon_refresh");
+  refresh_btn->setIcon(gmp::icons::get("refresh"));
   auto* row = new QHBoxLayout();
   row->setContentsMargins(0, 0, 0, 0);
   row->addWidget(rename_btn);
@@ -99,6 +110,20 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
                        QHBoxLayout* target) {
     auto* btn = new QPushButton(text, tool_column);
     btn->setObjectName(QString("sketchTool_%1").arg(id));
+    QString icon_key;
+    switch (id) {
+      case SketchToolSelect: icon_key = "sketch_select"; break;
+      case SketchToolMove: icon_key = "sketch_move"; break;
+      case SketchToolDrawLine: icon_key = "sketch_line"; break;
+      case SketchToolDrawCircle: icon_key = "sketch_circle"; break;
+      case SketchToolDrawArc: icon_key = "sketch_arc"; break;
+      case SketchToolDelete: icon_key = "sketch_delete"; break;
+      case SketchToolDrawRectangle: icon_key = "sketch_rectangle"; break;
+      default: break;
+    }
+    if (!icon_key.isEmpty()) {
+      btn->setIcon(gmp::icons::get(icon_key));
+    }
     btn->setCheckable(true);
     btn->setProperty("gmpSketchTool", true);
     btn->setMinimumWidth(64);
@@ -160,6 +185,19 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   auto make_constraint = [&](const QString& text, SketchConstraintType type,
                              const QString& tip, QHBoxLayout* target) {
     auto* btn = new QPushButton(text, setup_column);
+    QString icon_key;
+    switch (type) {
+      case SketchConstraintType::Horizontal: icon_key = "constraint_horizontal"; break;
+      case SketchConstraintType::Vertical: icon_key = "constraint_vertical"; break;
+      case SketchConstraintType::Parallel: icon_key = "constraint_parallel"; break;
+      case SketchConstraintType::Perpendicular: icon_key = "constraint_perpendicular"; break;
+      case SketchConstraintType::Coincident: icon_key = "constraint_coincident"; break;
+      default: break;
+    }
+    if (!icon_key.isEmpty()) {
+      btn->setObjectName(QString("gmpIcon_%1").arg(icon_key));
+      btn->setIcon(gmp::icons::get(icon_key));
+    }
     btn->setToolTip(tip);
     target->addWidget(btn);
     connect(btn, &QPushButton::clicked, this,
@@ -192,9 +230,13 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   dim_value_->setValue(10.0);
   dim_value_->setToolTip("Target value for the driving dimension (mm).");
   auto* dim_dist_btn = new QPushButton("Add Distance", setup_column);
+  dim_dist_btn->setObjectName("gmpIcon_dim_distance");
+  dim_dist_btn->setIcon(gmp::icons::get("dim_distance"));
   dim_dist_btn->setToolTip("Add a driving distance (length) dimension to the "
                            "selected line.");
   auto* dim_radius_btn = new QPushButton("Add Radius", setup_column);
+  dim_radius_btn->setObjectName("gmpIcon_dim_radius");
+  dim_radius_btn->setIcon(gmp::icons::get("dim_radius"));
   dim_radius_btn->setToolTip("Add a driving radius dimension to the selected "
                              "circle or arc.");
   d_row->addWidget(dim_value_);
@@ -219,9 +261,13 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   auto* ur_row = new QHBoxLayout();
   ur_row->setContentsMargins(0, 0, 0, 0);
   undo_btn_ = new QPushButton("Undo", edit_box_);
+  undo_btn_->setObjectName("gmpIcon_undo");
+  undo_btn_->setIcon(gmp::icons::get("undo"));
   undo_btn_->setToolTip("Undo the last sketch change (Cmd/Ctrl+Z).");
   undo_btn_->setEnabled(false);
   redo_btn_ = new QPushButton("Redo", edit_box_);
+  redo_btn_->setObjectName("gmpIcon_redo");
+  redo_btn_->setIcon(gmp::icons::get("redo"));
   redo_btn_->setToolTip("Redo the last undone change (Cmd/Ctrl+Shift+Z).");
   redo_btn_->setEnabled(false);
   ur_row->addWidget(undo_btn_);
@@ -229,6 +275,7 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   ur_row->addStretch(1);
   auto* finish_btn = new QPushButton("Finish Edit", edit_box_);
   finish_btn->setObjectName("finishSketchEditButton");
+  finish_btn->setIcon(gmp::icons::get("finish"));
   finish_btn->setProperty("gmpPrimaryAction", true);
   finish_btn->setMinimumWidth(120);
   finish_btn->setMaximumWidth(160);
