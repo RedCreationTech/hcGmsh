@@ -53,8 +53,6 @@
 #include <QWindow>
 #include <QClipboard>
 #include <QFont>
-#include <QPainter>
-#include <QPainterPath>
 #include <QScreen>
 #include <QImage>
 #include <QVariantMap>
@@ -182,43 +180,6 @@ class CurrentPageStackedWidget final : public QStackedWidget {
   }
 };
 
-enum class IconGlyph {
-  NewFile,
-  OpenFolder,
-  SaveDisk,
-  SaveAsDisk,
-  Sync,
-  Mesh,
-  Run,
-  Check,
-  Stop,
-  Part,
-  Material,
-  Section,
-  Step,
-  Function,
-  Variable,
-  BC,
-  Load,
-  Output,
-  Interaction,
-  Job,
-  Result,
-  AddItem,
-  DuplicateItem,
-  RenameItem,
-  RemoveItem,
-  Undo,
-  Redo,
-  Display,
-  Pick,
-  ClearSelection,
-  Slice,
-  Pause,     // 播放器“暂停”：||
-  StepPrev,  // 播放器“上一帧”：|<
-  StepNext,  // 播放器“下一帧”：>|
-};
-
 constexpr int kNavigationKindRole = Qt::UserRole + 100;
 constexpr int kNavigationNameRole = Qt::UserRole + 101;
 constexpr int kNavigationPathRole = Qt::UserRole + 102;
@@ -241,279 +202,6 @@ bool apply_name_filter(QTreeWidgetItem* item, const QString& needle) {
   return visible;
 }
 
-QIcon MakeIcon(IconGlyph glyph, int size = 18) {
-  QPixmap pix(size, size);
-  pix.fill(Qt::transparent);
-  QPainter p(&pix);
-  p.setRenderHint(QPainter::Antialiasing, true);
-  QPen pen(QColor("#2b2b2b"));
-  pen.setWidthF(1.6);
-  p.setPen(pen);
-
-  const int s = size;
-  const int m = 3;
-  const QRect r(m, m, s - 2 * m, s - 2 * m);
-
-  switch (glyph) {
-    case IconGlyph::NewFile: {
-      // 折角文档 + 蓝色加号，避免在 18 px 下与四宫格网格图标混淆。
-      QPolygon page;
-      page << QPoint(m + 2, m) << QPoint(s - m - 4, m)
-           << QPoint(s - m, m + 4) << QPoint(s - m, s - m)
-           << QPoint(m + 2, s - m) << QPoint(m + 2, m);
-      p.drawPolyline(page);
-      p.drawLine(s - m - 4, m, s - m - 4, m + 4);
-      p.drawLine(s - m - 4, m + 4, s - m, m + 4);
-      QPen plus_pen(QColor("#2f6fed"));
-      plus_pen.setWidthF(1.8);
-      p.setPen(plus_pen);
-      p.drawLine(m + 4, s - m - 5, m + 10, s - m - 5);
-      p.drawLine(m + 7, s - m - 8, m + 7, s - m - 2);
-      break;
-    }
-    case IconGlyph::OpenFolder: {
-      QRect folder(m, m + 4, s - 2 * m, s - m - 6);
-      p.drawRect(folder);
-      p.drawLine(m + 2, m + 4, s / 2, m + 4);
-      p.drawLine(m + 2, m + 4, m + 6, m + 1);
-      break;
-    }
-    case IconGlyph::SaveDisk: {
-      p.drawRect(r);
-      p.drawLine(m + 3, m + 5, s - m - 3, m + 5);
-      p.drawRect(QRect(m + 4, m + 8, s - 2 * m - 8, 5));
-      break;
-    }
-    case IconGlyph::SaveAsDisk: {
-      // 另存为：磁盘主体 + 蓝色加号徽标，和普通保存保持同族但可一眼区分。
-      const QRect disk(m, m, s - 2 * m - 2, s - 2 * m);
-      p.drawRect(disk);
-      p.drawLine(m + 3, m + 5, disk.right() - 2, m + 5);
-      p.drawRect(QRect(m + 4, m + 8, disk.width() - 7, 4));
-      p.setPen(Qt::NoPen);
-      p.setBrush(QColor("#ffffff"));
-      p.drawEllipse(QPoint(s - 4, s - 4), 4, 4);
-      QPen plus_pen(QColor("#2f6fed"));
-      plus_pen.setWidthF(1.8);
-      p.setPen(plus_pen);
-      p.setBrush(Qt::NoBrush);
-      p.drawLine(s - 7, s - 4, s - 1, s - 4);
-      p.drawLine(s - 4, s - 7, s - 4, s - 1);
-      break;
-    }
-    case IconGlyph::Sync: {
-      p.drawArc(r, 40 * 16, 220 * 16);
-      p.drawArc(r, 260 * 16, 220 * 16);
-      p.drawLine(s - m - 2, s / 2, s - m - 6, s / 2 - 3);
-      p.drawLine(s - m - 2, s / 2, s - m - 6, s / 2 + 3);
-      break;
-    }
-    case IconGlyph::Mesh: {
-      for (int i = 0; i < 3; ++i) {
-        int x = m + i * (r.width() / 2);
-        p.drawLine(x, m, x, s - m);
-        int y = m + i * (r.height() / 2);
-        p.drawLine(m, y, s - m, y);
-      }
-      break;
-    }
-    case IconGlyph::Pause: {
-      // 播放器“暂停”：两条竖线。
-      p.drawLine(m + 4, m + 1, m + 4, s - m - 1);
-      p.drawLine(s - m - 4, m + 1, s - m - 4, s - m - 1);
-      break;
-    }
-    case IconGlyph::StepPrev: {
-      // 播放器“上一帧”：左侧竖条 + 左指实心三角。
-      QPolygon tri;
-      tri << QPoint(s - m - 2, m + 1) << QPoint(m + 5, s / 2)
-          << QPoint(s - m - 2, s - m - 1);
-      p.setBrush(QColor("#2b2b2b"));
-      p.drawPolygon(tri);
-      p.setBrush(Qt::NoBrush);
-      p.drawLine(m + 2, m + 1, m + 2, s - m - 1);
-      break;
-    }
-    case IconGlyph::StepNext: {
-      // 播放器“下一帧”：右指实心三角 + 右侧竖条。
-      QPolygon tri;
-      tri << QPoint(m + 2, m + 1) << QPoint(s - m - 5, s / 2)
-          << QPoint(m + 2, s - m - 1);
-      p.setBrush(QColor("#2b2b2b"));
-      p.drawPolygon(tri);
-      p.setBrush(Qt::NoBrush);
-      p.drawLine(s - m - 2, m + 1, s - m - 2, s - m - 1);
-      break;
-    }
-    case IconGlyph::Run: {
-      QPolygon poly;
-      poly << QPoint(m + 2, m + 1) << QPoint(s - m - 2, s / 2)
-           << QPoint(m + 2, s - m - 1);
-      p.setBrush(QColor("#2b2b2b"));
-      p.drawPolygon(poly);
-      break;
-    }
-    case IconGlyph::Check: {
-      p.drawLine(m + 2, s / 2, s / 2 - 1, s - m - 2);
-      p.drawLine(s / 2 - 1, s - m - 2, s - m - 2, m + 3);
-      break;
-    }
-    case IconGlyph::Stop: {
-      p.setBrush(QColor("#2b2b2b"));
-      p.drawRect(QRect(m + 3, m + 3, s - 2 * m - 6, s - 2 * m - 6));
-      break;
-    }
-    case IconGlyph::Part: {
-      QRect back(m + 3, m + 1, s - 2 * m - 6, s - 2 * m - 6);
-      QRect front(m, m + 4, s - 2 * m - 6, s - 2 * m - 6);
-      p.drawRect(back);
-      p.drawRect(front);
-      p.drawLine(front.topLeft(), back.topLeft());
-      p.drawLine(front.topRight(), back.topRight());
-      p.drawLine(front.bottomLeft(), back.bottomLeft());
-      break;
-    }
-    case IconGlyph::Material: {
-      p.setBrush(QColor("#2b2b2b"));
-      p.drawEllipse(r.adjusted(2, 2, -2, -2));
-      break;
-    }
-    case IconGlyph::Section: {
-      p.drawLine(m + 2, m + 4, s - m - 2, m + 4);
-      p.drawLine(m + 2, s / 2, s - m - 2, s / 2);
-      p.drawLine(m + 2, s - m - 4, s - m - 2, s - m - 4);
-      break;
-    }
-    case IconGlyph::Step: {
-      QPolygon poly;
-      poly << QPoint(m + 2, m + 1) << QPoint(s - m - 2, s / 2)
-           << QPoint(m + 2, s - m - 1);
-      p.drawPolygon(poly);
-      break;
-    }
-    case IconGlyph::Function: {
-      QPainterPath path;
-      path.moveTo(m + 1, s - m - 2);
-      path.cubicTo(s / 3, m + 1, s / 2, s - m - 2, s - m - 1, m + 2);
-      p.drawPath(path);
-      break;
-    }
-    case IconGlyph::Variable: {
-      p.drawLine(m + 2, m + 2, s - m - 2, s - m - 2);
-      p.drawLine(m + 2, s - m - 2, s - m - 2, m + 2);
-      break;
-    }
-    case IconGlyph::BC: {
-      p.drawRect(r);
-      p.drawLine(m, m, s - m, m);
-      break;
-    }
-    case IconGlyph::Load: {
-      p.drawLine(s / 2, m + 2, s / 2, s - m - 2);
-      p.drawLine(s / 2, m + 2, s / 2 - 3, m + 6);
-      p.drawLine(s / 2, m + 2, s / 2 + 3, m + 6);
-      break;
-    }
-    case IconGlyph::Output: {
-      p.drawRect(r);
-      p.drawLine(s / 2, m + 2, s / 2, s - m - 6);
-      p.drawLine(s / 2, s - m - 6, s / 2 - 3, s - m - 9);
-      p.drawLine(s / 2, s - m - 6, s / 2 + 3, s - m - 9);
-      break;
-    }
-    case IconGlyph::Interaction: {
-      p.drawLine(m + 2, s / 2, s - m - 2, s / 2);
-      p.drawLine(m + 2, s / 2, m + 6, s / 2 - 3);
-      p.drawLine(m + 2, s / 2, m + 6, s / 2 + 3);
-      p.drawLine(s - m - 2, s / 2, s - m - 6, s / 2 - 3);
-      p.drawLine(s - m - 2, s / 2, s - m - 6, s / 2 + 3);
-      break;
-    }
-    case IconGlyph::Job: {
-      p.drawRect(r);
-      p.drawLine(m + 2, m + 2, s - m - 2, s - m - 2);
-      p.drawLine(m + 2, s - m - 2, s - m - 2, m + 2);
-      break;
-    }
-    case IconGlyph::Result: {
-      p.drawRect(r);
-      p.drawLine(m + 2, s - m - 3, s / 2, s / 2);
-      p.drawLine(s / 2, s / 2, s - m - 2, m + 3);
-      break;
-    }
-    case IconGlyph::AddItem: {
-      p.drawEllipse(r);
-      p.drawLine(s / 2, m + 4, s / 2, s - m - 4);
-      p.drawLine(m + 4, s / 2, s - m - 4, s / 2);
-      break;
-    }
-    case IconGlyph::DuplicateItem: {
-      QRect back(m + 4, m + 1, s - 2 * m - 5, s - 2 * m - 5);
-      QRect front(m + 1, m + 4, s - 2 * m - 5, s - 2 * m - 5);
-      p.drawRect(back);
-      p.setBrush(QColor("#ffffff"));
-      p.drawRect(front);
-      break;
-    }
-    case IconGlyph::RenameItem: {
-      // 铅笔: 斜向笔身 + 笔尖
-      p.drawLine(m + 3, s - m - 3, s - m - 4, m + 2);
-      p.drawLine(m + 5, s - m - 1, s - m - 2, m + 4);
-      p.drawLine(m + 3, s - m - 3, m + 2, s - m - 1);
-      p.drawLine(m + 2, s - m - 1, m + 5, s - m - 1);
-      break;
-    }
-    case IconGlyph::RemoveItem: {
-      // 垃圾桶: 桶身 + 盖子 + 提手
-      p.drawLine(m + 2, m + 4, s - m - 2, m + 4);
-      p.drawLine(s / 2 - 3, m + 4, s / 2 - 3, m + 2);
-      p.drawLine(s / 2 - 3, m + 2, s / 2 + 3, m + 2);
-      p.drawLine(s / 2 + 3, m + 2, s / 2 + 3, m + 4);
-      QPolygon bin;
-      bin << QPoint(m + 3, m + 4) << QPoint(s - m - 3, m + 4)
-          << QPoint(s - m - 4, s - m - 1) << QPoint(m + 4, s - m - 1);
-      p.drawPolyline(bin);
-      break;
-    }
-    case IconGlyph::Undo:
-    case IconGlyph::Redo: {
-      const bool redo = glyph == IconGlyph::Redo;
-      const QRect arc_rect(m + 2, m + 3, s - 2 * m - 4, s - 2 * m - 5);
-      p.drawArc(arc_rect, (redo ? -35 : 35) * 16, (redo ? 250 : -250) * 16);
-      const int x = redo ? s - m - 2 : m + 2;
-      p.drawLine(x, m + 4, redo ? x - 4 : x + 4, m + 2);
-      p.drawLine(x, m + 4, redo ? x - 2 : x + 2, m + 8);
-      break;
-    }
-    case IconGlyph::Display: {
-      p.drawRect(r);
-      p.drawEllipse(r.adjusted(3, 3, -3, -3));
-      break;
-    }
-    case IconGlyph::Pick: {
-      QPolygon cursor;
-      cursor << QPoint(m + 1, m + 1) << QPoint(s - m - 2, s / 2)
-             << QPoint(s / 2 + 1, s / 2 + 1)
-             << QPoint(s / 2 + 4, s - m - 1);
-      p.drawPolyline(cursor);
-      break;
-    }
-    case IconGlyph::ClearSelection: {
-      p.drawLine(m + 2, m + 2, s - m - 2, s - m - 2);
-      p.drawLine(m + 2, s - m - 2, s - m - 2, m + 2);
-      break;
-    }
-    case IconGlyph::Slice: {
-      p.drawRect(r);
-      p.setBrush(QColor("#2f6fed"));
-      p.drawRect(QRect(m + 5, m, 3, s - 2 * m));
-      break;
-    }
-  }
-
-  return QIcon(pix);
-}
-
 // W-03b：Physics generate_output 默认值（v01 验收基线 16 项；候选另有
 // max/mid/min_principal_strain 3 项主应变可手补）。与 PropertyEditor.cpp
 // 的 kPhysicsGenerateOutputDefault 保持一致。
@@ -522,8 +210,6 @@ const char* kPhysicsGenerateOutputDefault =
     "strain_xx strain_xy strain_xz strain_yy strain_yz strain_zz "
     "max_principal_stress mid_principal_stress min_principal_stress "
     "vonmises_stress";
-
-
 
 }  // namespace
 
@@ -966,18 +652,24 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   tree_layout->addWidget(workflow_status_label_);
 
   auto* tree_actions = new QHBoxLayout();
-  auto make_tree_action = [](IconGlyph glyph, const QString& tip) {
+  auto make_tree_action = [](const QString& key, const QString& tip,
+                             const QString& object_name) {
     auto* b = new QPushButton();
-    b->setIcon(MakeIcon(glyph, 16));
+    b->setObjectName(object_name);
+    b->setIcon(gmp::icons::get(key, gmp::icons::Size::Button));
     b->setIconSize(QSize(16, 16));
     b->setFixedSize(30, 30);
     b->setToolTip(tip);
     return b;
   };
-  auto* add_btn = make_tree_action(IconGlyph::AddItem, "Add");
-  auto* dup_btn = make_tree_action(IconGlyph::DuplicateItem, "Duplicate");
-  auto* rename_btn = make_tree_action(IconGlyph::RenameItem, "Rename");
-  auto* remove_btn = make_tree_action(IconGlyph::RemoveItem, "Remove");
+  auto* add_btn =
+      make_tree_action("tree_add", "Add", "gmpIcon_tree_add");
+  auto* dup_btn =
+      make_tree_action("tree_duplicate", "Duplicate", "gmpIcon_tree_duplicate");
+  auto* rename_btn =
+      make_tree_action("tree_rename", "Rename", "gmpIcon_tree_rename");
+  auto* remove_btn =
+      make_tree_action("tree_remove", "Remove", "gmpIcon_tree_remove");
   tree_actions->addWidget(add_btn);
   tree_actions->addWidget(dup_btn);
   tree_actions->addWidget(rename_btn);
@@ -6470,47 +6162,47 @@ void MainWindow::build_model_tree() {
     item->setFlags(item->flags() & ~Qt::ItemIsEditable);
     QIcon icon;
     if (name == "Parts") {
-      icon = MakeIcon(IconGlyph::Part);
+      icon = gmp::icons::get("tree_parts", gmp::icons::Size::Tree);
     } else if (name == "Sketches") {
-      icon = MakeIcon(IconGlyph::Section);
+      icon = gmp::icons::get("tree_sketches", gmp::icons::Size::Tree);
     } else if (name == "Features") {
-      icon = MakeIcon(IconGlyph::Part);
+      icon = gmp::icons::get("tree_features", gmp::icons::Size::Tree);
     } else if (name == "Datums") {
-      icon = MakeIcon(IconGlyph::Variable);
+      icon = gmp::icons::get("tree_datums", gmp::icons::Size::Tree);
     } else if (name == "Materials") {
-      icon = MakeIcon(IconGlyph::Material);
+      icon = gmp::icons::get("tree_materials", gmp::icons::Size::Tree);
     } else if (name == "Sections") {
-      icon = MakeIcon(IconGlyph::Section);
+      icon = gmp::icons::get("tree_sections", gmp::icons::Size::Tree);
     } else if (name == "Steps") {
-      icon = MakeIcon(IconGlyph::Step);
+      icon = gmp::icons::get("tree_steps", gmp::icons::Size::Tree);
     } else if (name == "Functions") {
-      icon = MakeIcon(IconGlyph::Function);
+      icon = gmp::icons::get("tree_functions", gmp::icons::Size::Tree);
     } else if (name == "Variables") {
-      icon = MakeIcon(IconGlyph::Variable);
+      icon = gmp::icons::get("tree_variables", gmp::icons::Size::Tree);
     } else if (name == "BC") {
-      icon = MakeIcon(IconGlyph::BC);
+      icon = gmp::icons::get("tree_bc", gmp::icons::Size::Tree);
     } else if (name == "Loads") {
-      icon = MakeIcon(IconGlyph::Load);
+      icon = gmp::icons::get("tree_loads", gmp::icons::Size::Tree);
     } else if (name == "Outputs") {
-      icon = MakeIcon(IconGlyph::Output);
+      icon = gmp::icons::get("tree_outputs", gmp::icons::Size::Tree);
     } else if (name == "Interactions") {
-      icon = MakeIcon(IconGlyph::Interaction);
+      icon = gmp::icons::get("tree_interactions", gmp::icons::Size::Tree);
     } else if (name == "Assembly") {
-      icon = MakeIcon(IconGlyph::Part);
+      icon = gmp::icons::get("tree_assembly", gmp::icons::Size::Tree);
     } else if (name == "Physics") {
-      icon = MakeIcon(IconGlyph::Step);
+      icon = gmp::icons::get("tree_physics", gmp::icons::Size::Tree);
     } else if (name == "Constraints") {
-      icon = MakeIcon(IconGlyph::Interaction);
+      icon = gmp::icons::get("tree_constraints", gmp::icons::Size::Tree);
     } else if (name == "Selections") {
-      icon = MakeIcon(IconGlyph::Pick);
+      icon = gmp::icons::get("tree_selections", gmp::icons::Size::Tree);
     } else if (name == "Mesh") {
-      icon = MakeIcon(IconGlyph::Mesh);
+      icon = gmp::icons::get("tree_mesh", gmp::icons::Size::Tree);
     } else if (name == "Input Cases") {
-      icon = MakeIcon(IconGlyph::Output);
+      icon = gmp::icons::get("tree_input_cases", gmp::icons::Size::Tree);
     } else if (name == "Jobs") {
-      icon = MakeIcon(IconGlyph::Job);
+      icon = gmp::icons::get("tree_jobs", gmp::icons::Size::Tree);
     } else if (name == "Results") {
-      icon = MakeIcon(IconGlyph::Result);
+      icon = gmp::icons::get("tree_results", gmp::icons::Size::Tree);
     }
     if (!icon.isNull()) {
       item->setIcon(0, icon);
@@ -7608,12 +7300,12 @@ void MainWindow::refresh_tree_statuses() {
       "BC",    "Loads",     "Mesh",     "Jobs"};
 
   auto set_status = [](QTreeWidgetItem* item, const QString& text,
-                       IconGlyph glyph, const QString& tooltip) {
+                       const QString& icon_key, const QString& tooltip) {
     if (!item) {
       return;
     }
     item->setText(1, text);
-    item->setIcon(1, MakeIcon(glyph, 14));
+    item->setIcon(1, gmp::icons::get(icon_key, gmp::icons::Size::Tree));
     item->setToolTip(1, tooltip);
   };
 
@@ -7677,7 +7369,7 @@ void MainWindow::refresh_tree_statuses() {
       if (normalized.contains("fail") || normalized.contains("error")) {
         has_failed = true;
         all_success = false;
-        set_status(child, chinese ? "失败" : "Failed", IconGlyph::Stop,
+        set_status(child, chinese ? "失败" : "Failed", "status_failed",
                    raw.isEmpty() ? QString("Failed") : raw);
       } else if (normalized.contains("run") ||
                  normalized.contains("queue") ||
@@ -7685,7 +7377,7 @@ void MainWindow::refresh_tree_statuses() {
                  normalized.contains("pending")) {
         has_running = true;
         all_success = false;
-        set_status(child, chinese ? "运行中" : "Running", IconGlyph::Run,
+        set_status(child, chinese ? "运行中" : "Running", "status_running",
                    raw.isEmpty() ? QString("Running") : raw);
       } else if (normalized.contains("invalid") ||
                  normalized.contains("stale") ||
@@ -7694,7 +7386,7 @@ void MainWindow::refresh_tree_statuses() {
         has_invalid = true;
         all_success = false;
         set_status(
-            child, chinese ? "失效" : "Invalid", IconGlyph::Sync,
+            child, chinese ? "失效" : "Invalid", "status_invalid",
             missing_file
                 ? QString("Referenced file is unavailable: %1").arg(path)
                 : (stale_section_ref
@@ -7703,21 +7395,21 @@ void MainWindow::refresh_tree_statuses() {
                        : raw));
       } else if (normalized.contains("complete") ||
                  normalized.contains("success") || normalized == "normal") {
-        set_status(child, chinese ? "成功" : "Success", IconGlyph::Check,
+        set_status(child, chinese ? "成功" : "Success", "status_success",
                    raw);
       } else if (normalized.contains("generated") ||
                  normalized.contains("written")) {
         has_generated = true;
         all_success = false;
         set_status(child, chinese ? "已生成" : "Generated",
-                   IconGlyph::Output, raw);
+                   "status_generated", raw);
       } else if (normalized.contains("new") || normalized.contains("idle") ||
                  normalized.contains("missing") ||
                  !validation_issues.isEmpty()) {
         has_incomplete = true;
         all_success = false;
         set_status(child, chinese ? "不完整" : "Incomplete",
-                   IconGlyph::Sync,
+                   "status_invalid",
                    raw.isEmpty()
                        ? QString("Required configuration is incomplete: %1")
                              .arg(validation_issues.join(", "))
@@ -7726,10 +7418,10 @@ void MainWindow::refresh_tree_statuses() {
         has_incomplete = true;
         all_success = false;
         set_status(child, chinese ? "未配置" : "Unconfigured",
-                   IconGlyph::Result, "No configuration");
+                   "status_unconfigured", "No configuration");
       } else {
         all_success = false;
-        set_status(child, chinese ? "就绪" : "Ready", IconGlyph::Check,
+        set_status(child, chinese ? "就绪" : "Ready", "status_success",
                    raw.isEmpty() ? QString("Ready") : raw);
       }
     }
@@ -7740,7 +7432,7 @@ void MainWindow::refresh_tree_statuses() {
                  QString("%1 (%2)")
                      .arg(chinese ? "有问题" : "Issues")
                      .arg(count),
-                 IconGlyph::Sync,
+                 "status_invalid",
                  chinese ? "包含失败、失效或缺少文件的对象"
                          : "Contains failed, invalid, or missing-file objects");
     } else if (has_running) {
@@ -7748,7 +7440,7 @@ void MainWindow::refresh_tree_statuses() {
                  QString("%1 (%2)")
                      .arg(chinese ? "运行中" : "Running")
                      .arg(count),
-                 IconGlyph::Run,
+                 "status_running",
                  chinese ? "包含正在运行或排队的对象"
                          : "Contains running or queued objects");
     } else if (has_incomplete) {
@@ -7756,13 +7448,13 @@ void MainWindow::refresh_tree_statuses() {
                  QString("%1 (%2)")
                      .arg(chinese ? "不完整" : "Incomplete")
                      .arg(count),
-                 IconGlyph::Sync,
+                 "status_invalid",
                  chinese ? "包含尚未完成配置的对象"
                          : "Contains incompletely configured objects");
     } else if (all_success) {
       set_status(root,
                  QString("%1 (%2)").arg(chinese ? "成功" : "Success").arg(count),
-                 IconGlyph::Check,
+                 "status_success",
                  chinese ? "所有对象均已成功完成"
                          : "All objects completed successfully");
     } else if (has_generated) {
@@ -7770,22 +7462,22 @@ void MainWindow::refresh_tree_statuses() {
                  QString("%1 (%2)")
                      .arg(chinese ? "已生成" : "Generated")
                      .arg(count),
-                 IconGlyph::Output,
+                 "status_generated",
                  chinese ? "对象已生成" : "Objects generated");
     } else if (count > 0) {
       set_status(root,
                  QString("%1 (%2)")
                      .arg(chinese ? "就绪" : "Ready")
                      .arg(count),
-                 IconGlyph::Check, chinese ? "对象已配置" : "Objects configured");
+                 "status_success", chinese ? "对象已配置" : "Objects configured");
     } else if (required_roots.contains(root->text(0))) {
       set_status(root, chinese ? "缺失 (0)" : "Missing (0)",
-                 IconGlyph::Stop,
+                 "status_failed",
                  chinese ? "当前流程尚未配置此类对象"
                          : "This workflow object type is not configured");
     } else {
       set_status(root, chinese ? "未配置 (0)" : "Unconfigured (0)",
-                 IconGlyph::Result, chinese ? "当前没有对象" : "No objects");
+                 "status_unconfigured", chinese ? "当前没有对象" : "No objects");
     }
   }
   apply_model_tree_filter(model_tree_filter_ ? model_tree_filter_->text()
@@ -7817,8 +7509,9 @@ void MainWindow::refresh_results_navigation() {
     nav_root->setText(0, kind);
     nav_root->setData(0, kNavigationKindRole, kind);
     nav_root->setFlags(nav_root->flags() & ~Qt::ItemIsEditable);
-    nav_root->setIcon(0, MakeIcon(kind == "Jobs" ? IconGlyph::Job
-                                                 : IconGlyph::Result));
+    nav_root->setIcon(0, gmp::icons::get(kind == "Jobs" ? "tree_jobs"
+                                                        : "tree_results",
+                                         gmp::icons::Size::Tree));
     if (source_root) {
       nav_root->setText(1, source_root->text(1));
       nav_root->setIcon(1, source_root->icon(1));
@@ -7832,8 +7525,9 @@ void MainWindow::refresh_results_navigation() {
         item->setText(0, source->text(0));
         item->setText(1, source->text(1));
         item->setIcon(0, source->icon(0).isNull()
-                             ? MakeIcon(kind == "Jobs" ? IconGlyph::Job
-                                                       : IconGlyph::Result)
+                             ? gmp::icons::get(kind == "Jobs" ? "tree_jobs"
+                                                              : "tree_results",
+                                               gmp::icons::Size::Tree)
                              : source->icon(0));
         item->setIcon(1, source->icon(1));
         item->setData(0, kNavigationKindRole, kind);
