@@ -1144,10 +1144,12 @@ void apply(QWidget* root) {
   for (auto* w : widgets) {
     translate_widget(w, lang);
   }
-  // QAction (菜单项/工具栏动作) 不属于控件树, 单独处理
+  // QAction (菜单项/工具栏动作) 不属于控件树, 单独处理；
+  // tooltip 也要翻译：QToolButton 无自身 tooltip 时直接展示 action 的。
   const auto actions = root->findChildren<QAction*>();
   for (auto* a : actions) {
     a->setText(translate_text(a->text(), lang));
+    a->setToolTip(translate_text(a->toolTip(), lang));
   }
   // 顶层菜单标题
   if (auto* window = root->window()) {
