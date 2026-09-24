@@ -55,3 +55,4 @@ GMP_TOUR_REAL_CLICKS=1 GMP_TOUR_STEP_FILTER=<步骤名片段> \
 | 项目重开物理组清单/引用校验恢复（2026-09-17-019） | `project_reopen_group_contract` |
 | 另存为副本网格路径迁移（2026-09-17-024） | `project_save_as_mesh_migration_contract` |
 | 树↔文档投影一致性（TASK-V02-014，含真实 G1 等价判据） | `model_tree_projection_contract` |
+| 模块弹窗样式采集（42 张逐 TAB 截图，需 GMP_UI_AUDIT=1） | `audit_`（如 `audit_form`、`audit_mesh`） |

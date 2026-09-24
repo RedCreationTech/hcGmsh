@@ -20737,6 +20737,268 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       nullptr});
     steps = scenarios;
   }
+  if (qEnvironmentVariableIsSet("GMP_UI_AUDIT")) {
+    // GMP_UI_AUDIT=1：替换为 UI 样式采集步骤——自动打开 13 个模块的工作窗/
+    // 弹窗并逐 TAB 截图，供后续样式统一分析。要求同时设置 GMP_SCREENSHOT_DIR。
+    steps.clear();
+    auto reveal = [](QDockWidget* workspace) {
+      if (!workspace) {
+        throw std::runtime_error("audit workspace window is null");
+      }
+      workspace->show();
+      workspace->raise();
+      workspace->activateWindow();
+    };
+    auto tabs_of = [](QWidget* host, const char* name) -> QTabWidget* {
+      auto* tabs = host ? host->findChild<QTabWidget*>(QLatin1String(name))
+                        : nullptr;
+      if (!tabs) {
+        throw std::runtime_error(std::string("audit tab widget not found: ") +
+                                 name);
+      }
+      return tabs;
+    };
+    // 共享模块工作窗：property_stack_ 页序与模块的对应关系。
+    struct ModulePage {
+      const char* step;
+      int page;
+    };
+    const ModulePage module_pages[] = {
+        {"audit_module_sketch", 8},      {"audit_module_part", 1},
+        {"audit_module_property", 0},    {"audit_module_material", 2},
+        {"audit_module_section", 3},     {"audit_module_assembly", 4},
+        {"audit_module_step", 5},        {"audit_module_interaction", 6},
+        {"audit_module_load", 7}};
+    for (const auto& module_page : module_pages) {
+      steps.append({QString::fromLatin1(module_page.step),
+                    [this, reveal, page = module_page.page]() {
+                      reveal(module_work_window_);
+                      module_work_window_->resize(1100, 750);
+                      property_stack_->setCurrentIndex(page);
+                      qApp->processEvents();
+                    },
+                    module_work_window_});
+    }
+    const char* part_tab_steps[] = {"audit_part_extrude", "audit_part_revolve",
+                                    "audit_part_loft", "audit_part_sweep"};
+    for (int i = 0; i < 4; ++i) {
+      steps.append({QString::fromLatin1(part_tab_steps[i]),
+                    [this, reveal, i, tabs_of]() {
+                      reveal(module_work_window_);
+                      property_stack_->setCurrentIndex(1);
+                      tabs_of(property_stack_->widget(1), "partFeatureTabs")
+                          ->setCurrentIndex(i);
+                      qApp->processEvents();
+                    },
+                    module_work_window_});
+    }
+    const char* property_tab_steps[] = {
+        "audit_property_general", "audit_property_parameters",
+        "audit_property_validation", "audit_property_preview"};
+    auto* audit_material_item = [&]() -> QTreeWidgetItem* {
+      auto* root = find_root_item("Materials");
+      if (!root || root->childCount() == 0) {
+        throw std::runtime_error(
+            "audit fixture missing: Materials tree node is empty");
+      }
+      return root->child(0);
+    }();
+    for (int i = 0; i < 4; ++i) {
+      steps.append({QString::fromLatin1(property_tab_steps[i]),
+                    [this, reveal, i, tabs_of, audit_material_item]() {
+                      reveal(module_work_window_);
+                      property_stack_->setCurrentIndex(0);
+                      if (property_editor_) {
+                        property_editor_->set_item(audit_material_item);
+                      }
+                      tabs_of(property_editor_, "propertyEditorTabs")
+                          ->setCurrentIndex(i);
+                      qApp->processEvents();
+                    },
+                    module_work_window_});
+    }
+    // Mesh 工作窗：gmshWorkspaceTabs(Model/Geometry/Groups & Fields/Mesh)。
+    auto mesh_step = [this, reveal](std::function<void()> switch_tabs) {
+      reveal(mesh_work_window_);
+      mesh_work_window_->resize(1100, 750);
+      switch_tabs();
+      qApp->processEvents();
+    };
+    steps.append({"audit_mesh_model",
+                  [this, mesh_step, tabs_of]() {
+                    mesh_step([this, tabs_of]() {
+                      tabs_of(gmsh_panel_, "gmshWorkspaceTabs")
+                          ->setCurrentIndex(0);
+                    });
+                  },
+                  mesh_work_window_});
+    const char* geometry_tab_steps[] = {"audit_mesh_geometry_primitives",
+                                        "audit_mesh_geometry_transform",
+                                        "audit_mesh_geometry_boolean"};
+    for (int i = 0; i < 3; ++i) {
+      steps.append({QString::fromLatin1(geometry_tab_steps[i]),
+                    [this, mesh_step, i, tabs_of]() {
+                      mesh_step([this, i, tabs_of]() {
+                        tabs_of(gmsh_panel_, "gmshWorkspaceTabs")
+                            ->setCurrentIndex(1);
+                        tabs_of(gmsh_panel_, "gmshGeometryTabs")
+                            ->setCurrentIndex(i);
+                      });
+                    },
+                    mesh_work_window_});
+    }
+    const char* groups_tab_steps[] = {"audit_mesh_groups_physical",
+                                      "audit_mesh_groups_fields"};
+    for (int i = 0; i < 2; ++i) {
+      steps.append({QString::fromLatin1(groups_tab_steps[i]),
+                    [this, mesh_step, i, tabs_of]() {
+                      mesh_step([this, i, tabs_of]() {
+                        tabs_of(gmsh_panel_, "gmshWorkspaceTabs")
+                            ->setCurrentIndex(2);
+                        tabs_of(gmsh_panel_, "gmshGroupsTabs")
+                            ->setCurrentIndex(i);
+                      });
+                    },
+                    mesh_work_window_});
+    }
+    steps.append({"audit_mesh_mesh",
+                  [this, mesh_step, tabs_of]() {
+                    mesh_step([this, tabs_of]() {
+                      tabs_of(gmsh_panel_, "gmshWorkspaceTabs")
+                          ->setCurrentIndex(3);
+                    });
+                  },
+                  mesh_work_window_});
+    // Job 工作窗：jobWorkspaceTabs(Jobs/MOOSE Setup) → mooseWorkspaceTabs →
+    // mooseInputDetailTabs。GMP_SCREENSHOT_DIR 已设置时打开 Job 窗不会触发
+    // 远程刷新（见 tabBarClicked 处理），列表为空也能截图。
+    auto job_step = [this, reveal](std::function<void()> switch_tabs) {
+      reveal(job_work_window_);
+      job_work_window_->resize(1100, 750);
+      switch_tabs();
+      qApp->processEvents();
+    };
+    steps.append({"audit_job_jobs",
+                  [this, job_step, tabs_of]() {
+                    job_step([this, tabs_of]() {
+                      tabs_of(job_work_window_, "jobWorkspaceTabs")
+                          ->setCurrentIndex(0);
+                    });
+                  },
+                  job_work_window_});
+    steps.append({"audit_job_case_setup",
+                  [this, job_step, tabs_of]() {
+                    job_step([this, tabs_of]() {
+                      tabs_of(job_work_window_, "jobWorkspaceTabs")
+                          ->setCurrentIndex(1);
+                      tabs_of(job_work_window_, "mooseWorkspaceTabs")
+                          ->setCurrentIndex(0);
+                    });
+                  },
+                  job_work_window_});
+    steps.append({"audit_job_execution",
+                  [this, job_step, tabs_of]() {
+                    job_step([this, tabs_of]() {
+                      tabs_of(job_work_window_, "jobWorkspaceTabs")
+                          ->setCurrentIndex(1);
+                      tabs_of(job_work_window_, "mooseWorkspaceTabs")
+                          ->setCurrentIndex(1);
+                    });
+                  },
+                  job_work_window_});
+    const char* input_tab_steps[] = {"audit_job_input_generated",
+                                     "audit_job_input_custom",
+                                     "audit_job_input_report"};
+    for (int i = 0; i < 3; ++i) {
+      steps.append({QString::fromLatin1(input_tab_steps[i]),
+                    [this, job_step, i, tabs_of]() {
+                      job_step([this, i, tabs_of]() {
+                        tabs_of(job_work_window_, "jobWorkspaceTabs")
+                            ->setCurrentIndex(1);
+                        tabs_of(job_work_window_, "mooseWorkspaceTabs")
+                            ->setCurrentIndex(2);
+                        tabs_of(job_work_window_, "mooseInputDetailTabs")
+                            ->setCurrentIndex(i);
+                      });
+                    },
+                    job_work_window_});
+    }
+    // Visualization 工作窗：control_nav_(QComboBox) 页序
+    // Scalar/Mesh/View/Time/Deformation。
+    const char* viz_tab_steps[] = {"audit_viz_scalar", "audit_viz_mesh",
+                                   "audit_viz_view",   "audit_viz_time",
+                                   "audit_viz_deformation"};
+    for (int i = 0; i < 5; ++i) {
+      steps.append({QString::fromLatin1(viz_tab_steps[i]),
+                    [this, reveal, i]() {
+                      reveal(visualization_work_window_);
+                      visualization_work_window_->resize(700, 640);
+                      if (!viewer_ || !viewer_->control_tabs()) {
+                        throw std::runtime_error(
+                            "audit viewer control tabs are missing");
+                      }
+                      auto* nav = viewer_->control_tabs()
+                                      ->findChild<QComboBox*>();
+                      if (!nav) {
+                        throw std::runtime_error(
+                            "audit control combo box (control_nav_) not found");
+                      }
+                      nav->setCurrentIndex(i);
+                      qApp->processEvents();
+                    },
+                    visualization_work_window_});
+    }
+    // Results 工作窗：resultsWorkspaceTabs(Results/Plot/Table)。
+    const char* results_tab_steps[] = {"audit_results_results",
+                                       "audit_results_plot",
+                                       "audit_results_table"};
+    for (int i = 0; i < 3; ++i) {
+      steps.append({QString::fromLatin1(results_tab_steps[i]),
+                    [this, reveal, i, tabs_of]() {
+                      reveal(results_work_window_);
+                      results_work_window_->resize(900, 600);
+                      tabs_of(results_work_window_, "resultsWorkspaceTabs")
+                          ->setCurrentIndex(i);
+                      qApp->processEvents();
+                    },
+                    results_work_window_});
+    }
+    // 浮动属性表单：对演示模型的 Materials/diffusion 节点直接打开非模态
+    // FloatingPropertyForm（form->open() 不阻塞事件循环），逐 TAB 截图。
+    if (!floating_property_form_) {
+      open_property_form(audit_material_item, nullptr);
+    }
+    auto* audit_form = floating_property_form_;
+    if (!audit_form) {
+      throw std::runtime_error(
+          "audit floating property form was not created");
+    }
+    // 采集期间表单全程驻留；恢复为非模态，避免窗口模态阻塞巡览结束时的
+    // QApplication::quit()（GMP_TOUR_STEP_FILTER 只跑部分步骤时表单不会被
+    // audit_done 关闭，仍需能正常退出）。
+    audit_form->setWindowModality(Qt::NonModal);
+    const char* form_tab_steps[] = {
+        "audit_form_general", "audit_form_parameters", "audit_form_validation",
+        "audit_form_preview"};
+    for (int i = 0; i < 4; ++i) {
+      steps.append({QString::fromLatin1(form_tab_steps[i]),
+                    [this, i, tabs_of, audit_form]() {
+                      audit_form->show();
+                      audit_form->raise();
+                      audit_form->activateWindow();
+                      tabs_of(audit_form, "propertyEditorTabs")
+                          ->setCurrentIndex(i);
+                      qApp->processEvents();
+                    },
+                    audit_form});
+    }
+    steps.append({"audit_done",
+                  [this, audit_form]() {
+                    audit_form->deleteLater();
+                    qApp->processEvents();
+                  },
+                  this});
+  }
   const QString step_filter =
       qEnvironmentVariable("GMP_TOUR_STEP_FILTER").trimmed();
   if (!step_filter.isEmpty()) {
