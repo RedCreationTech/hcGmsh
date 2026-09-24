@@ -1096,11 +1096,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* center_layout = new QVBoxLayout(center_panel);
   center_layout->setContentsMargins(0, 0, 0, 0);
   center_layout->setSpacing(3);
-  auto* center_title = new QLabel("Viewport", center_panel);
-  QFont center_title_font = center_title->font();
-  center_title_font.setBold(true);
-  center_title->setFont(center_title_font);
-  center_layout->addWidget(center_title);
   auto* center_tabs = new QTabWidget(center_panel);
   viewer_ = new VtkViewer(center_tabs);
   center_tabs->addTab(viewer_, "Viewport");
@@ -5880,8 +5875,7 @@ void MainWindow::apply_language_to_windows() {
 }
 
 QToolBar* MainWindow::make_tool_group(const QString& title,
-                                      const QString& object_name,
-                                      bool text_under_icon) {
+                                      const QString& object_name) {
   auto* toolbar = new QToolBar(title, this);
   addToolBar(Qt::TopToolBarArea, toolbar);
   toolbar->setObjectName(object_name);
@@ -5892,22 +5886,20 @@ QToolBar* MainWindow::make_tool_group(const QString& title,
   // 在停靠区间拖动、经 View 菜单显隐；工作窗浮动（QDockWidget）不受影响。
   toolbar->setFloatable(false);
   toolbar->setAllowedAreas(Qt::AllToolBarAreas);
-  toolbar->setIconSize(QSize(20, 20));
-  toolbar->setToolButtonStyle(text_under_icon ? Qt::ToolButtonTextUnderIcon
-                                              : Qt::ToolButtonIconOnly);
+  toolbar->setIconSize(QSize(16, 16));
+  // 全工具栏统一纯图标（用户决策 2026-09-24），文字由中文 tooltip 承载。
+  toolbar->setToolButtonStyle(Qt::ToolButtonIconOnly);
   // 受控拖拽（浮出/磁吸）由应用级事件过滤实现。
   toolbar->installEventFilter(this);
-  auto update_compact_extent = [toolbar, text_under_icon](Qt::Orientation orientation) {
-    // 图标+文字上下排布需要约 50px 容纳 20px 图标+文字行；纯图标组保持 30px。
-    const int extent = text_under_icon ? 50 : 30;
+  auto update_compact_extent = [toolbar](Qt::Orientation orientation) {
     if (orientation == Qt::Horizontal) {
       toolbar->setMinimumWidth(0);
       toolbar->setMaximumWidth(QWIDGETSIZE_MAX);
-      toolbar->setFixedHeight(extent);
+      toolbar->setFixedHeight(30);
     } else {
       toolbar->setMinimumHeight(0);
       toolbar->setMaximumHeight(QWIDGETSIZE_MAX);
-      toolbar->setFixedWidth(extent);
+      toolbar->setFixedWidth(30);
     }
   };
   update_compact_extent(Qt::Horizontal);
@@ -5999,9 +5991,7 @@ void MainWindow::build_toolbar() {
   // Abaqus 风格的紧凑显示组：默认悬浮于舞台右上角，同时保留 Qt
   // 原生的四向停靠预览和整组拖拽行为。
   display_tool_group_ = make_tool_group("Display Group", "displayToolGroup");
-  auto* playback_tool_group = make_tool_group("Playback", "playbackToolGroup", false);
-  // 白名单纯图标：文字经 tooltip 承载（l10n 运行时翻译），按钮下不排文字。
-  playback_tool_group->setToolButtonStyle(Qt::ToolButtonIconOnly);
+  auto* playback_tool_group = make_tool_group("Playback", "playbackToolGroup");
   // 时间步动画回放：播放 / 暂停 / 进度条（可拖动定位）。
   action_playback_play_ = playback_tool_group->addAction("Play");
   action_playback_play_->setObjectName("playbackPlayAction");
@@ -6130,6 +6120,16 @@ void MainWindow::build_toolbar() {
       viewer_->set_stage_slice(enabled);
     }
   });
+  // 纯图标按钮的文字说明：无 tooltip 的 action 回填 text 作为 tooltip，
+  // 运行时由 l10n 字典翻译（与菜单条目同键）。
+  for (auto* toolbar : {project_toolbar, edit_toolbar, model_toolbar,
+                        mesh_toolbar, job_toolbar}) {
+    for (auto* action : toolbar->actions()) {
+      if (action->toolTip().isEmpty()) {
+        action->setToolTip(action->text());
+      }
+    }
+  }
   // 直接切为顶层 Tool，同时仍保留在 QMainWindow 的工具栏布局注册表中。
   // 与 QDockWidget 不同，重新拖回顶部后可和其他 QToolBar 共用同一行。
   display_tool_group_->setParent(this, Qt::Tool);

@@ -81,8 +81,7 @@ class MainWindow : public QMainWindow {
   void apply_language_to_windows();
   // 创建并接线一个工具组（顶部停靠、紧凑尺寸、浮动恢复）；复位时
   // 也用同一入口重建被拖出的工具组。
-  QToolBar* make_tool_group(const QString& title, const QString& object_name,
-                            bool text_under_icon = true);
+  QToolBar* make_tool_group(const QString& title, const QString& object_name);
   // 受控浮动/停靠（setParent(Qt::Tool) 路径，与 Qt 原生拖出浮动完全
   // 隔离；Qt 原生浮动在 macOS 上不可靠已禁用）。View → Toolbars →
   // Float Group 菜单触发；复位时浮动态组走重建兜底回顶部。
