@@ -117,6 +117,41 @@ FloatingPropertyForm::FloatingPropertyForm(
   editor_->set_volume_groups(volume_groups);
   editor_->set_item(buffer_item_);
 
+  // 弹窗内废除内部滚动区（如 paramsTabScroll）：内容 widget 直接并入页面
+  // 布局按自身高度全部展开，杜绝"外层+内层"双滚动条；唯一滚动由下方
+  // 外层 QScrollArea 承载。共享编辑器（模块窗内）不受影响，仍保留其
+  // 内部滚动层。
+  for (auto* scroll : editor_->findChildren<QScrollArea*>()) {
+    QWidget* content = scroll->takeWidget();
+    QLayout* host_layout = scroll->parentWidget()
+                               ? scroll->parentWidget()->layout()
+                               : nullptr;
+    if (!content || !host_layout) {
+      continue;
+    }
+    // 手动换位：replaceWidget 对仍带父对象的 content 不可靠。
+    int index = -1;
+    for (int i = 0; i < host_layout->count(); ++i) {
+      if (host_layout->itemAt(i)->widget() == scroll) {
+        index = i;
+        break;
+      }
+    }
+    content->setParent(scroll->parentWidget());
+    if (auto* box = qobject_cast<QBoxLayout*>(host_layout)) {
+      if (index >= 0) {
+        box->insertWidget(index, content);
+      } else {
+        box->addWidget(content);
+      }
+    } else {
+      host_layout->addWidget(content);
+    }
+    // 立即删除（构造期内无重入风险）：deleteLater 在巡览/断言的同一事件
+    //  pass 内尚未处理，残留的滚动区会被误判为双滚动条。
+    delete scroll;
+  }
+
   // 弹窗唯一的外层滚动承载：内容按当前 TAB 自然展开（wrap_content），
   // 高度不超上限时滚动条隐藏；内容超高时窗口按上限定高、由这里滚动。
   // 内部（如参数页的 paramsTabScroll）因此永远拿到足够高度，不再出现

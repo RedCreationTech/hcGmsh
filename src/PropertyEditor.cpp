@@ -957,14 +957,14 @@ void PropertyEditor::update_validation_table_height() {
   if (!validation_table_) {
     return;
   }
-  // 表格高度 = 内容高度（表头 + 各行），超过上限后表格自己滚动；
-  // 这样校验汇总框整体按内容自适应，无问题时只剩摘要一行 + 筛选/按钮。
+  // 表格高度 = 内容高度（表头 + 各行），按内容全部展开不设上限；
+  // 弹窗场景由外层唯一滚动条承载，无问题时只剩摘要一行 + 筛选/按钮。
   int height = validation_table_->horizontalHeader()->height();
   for (int row = 0; row < validation_table_->rowCount(); ++row) {
     height += validation_table_->rowHeight(row);
   }
   height += validation_table_->frameWidth() * 2;
-  validation_table_->setFixedHeight(qMin(height, 400));
+  validation_table_->setFixedHeight(height);
 }
 
 void PropertyEditor::refresh_validation_summary() {
@@ -1680,13 +1680,12 @@ void PropertyEditor::update_preview_text_height() {
   if (!preview_text_ || !preview_text_->document()) {
     return;
   }
-  // 等宽预览区按内容行数给高（上限 400），内容短时不再被拉伸/裁掉末行；
-  // 超高部分由外层滚动承载。NoWrap 下每个文本块即一行，blockCount 同步
-  // 可得，不依赖文档异步重排。
+  // 等宽预览区按内容行数给高、全部展开，内容短时不再被拉伸/裁掉末行。
+  // NoWrap 下每个文本块即一行，blockCount 同步可得，不依赖异步重排。
   const int line_count = qMax(1, preview_text_->document()->blockCount());
   const int height = line_count * preview_text_->fontMetrics().lineSpacing() +
                      preview_text_->frameWidth() * 2 + 4;
-  preview_text_->setFixedHeight(qMin(height, 400));
+  preview_text_->setFixedHeight(height);
 }
 
 void PropertyEditor::refresh_preview() {

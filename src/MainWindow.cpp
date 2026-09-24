@@ -12272,30 +12272,33 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         !name || !cancel) {
                       throw std::runtime_error("I-01 floating property form contract failed");
                     }
-                    // I-01 合同（2026-09-24 滚动结构重构）：弹窗改为"最外层
-                    // 一条垂直滚动条"——外层滚动区承载整窗超高内容，内部
-                    // 各区块按内容展开。外层滚动区必须存在且承载
-                    // propertyEditorTabs；paramsTabScroll 保留为按内容展开
-                    // 的容器，窗口按内容适配后它不得处于可滚动状态（否则
-                    // 就是双滚动条回潮）。
+                    // I-01 合同（2026-09-24 滚动结构重构，当日晚修订）：弹窗
+                    // 为"最外层一条垂直滚动条"——内部滚动区已废除（内容
+                    // widget 直接并入页面布局全部展开），唯一滚动由外层
+                    // 滚动区承载。外层滚动区必须存在且承载 propertyEditorTabs；
+                    // 弹窗内不得残留任何可滚动的 QScrollArea（双滚动条回潮
+                    // 检测）；共享编辑器（模块窗）的 paramsTabScroll 不在
+                    // 本合同范围。
                     QScrollArea* outer_sa = nullptr;
+                    int inner_scrollable = 0;
                     for (auto* sa : form->findChildren<QScrollArea*>()) {
                       if (sa->findChild<QTabWidget*>("propertyEditorTabs")) {
                         outer_sa = sa;
-                        break;
+                      } else if (sa->verticalScrollBarPolicy() !=
+                                     Qt::ScrollBarAlwaysOff &&
+                                 sa->verticalScrollBar()->maximum() > 0) {
+                        ++inner_scrollable;
                       }
-                    }
-                    auto* params_scroll =
-                        form->findChild<QScrollArea*>("paramsTabScroll");
-                    if (!outer_sa || !params_scroll) {
-                      throw std::runtime_error(
-                          "I-01 property form scroll carrier contract failed");
                     }
                     auto* editor_tabs =
                         form->findChild<QTabWidget*>("propertyEditorTabs");
+                    if (!outer_sa || !editor_tabs || inner_scrollable > 0) {
+                      throw std::runtime_error(
+                          "I-01 property form scroll carrier contract failed");
+                    }
                     editor_tabs->setCurrentIndex(1);
                     qApp->processEvents();
-                    if (params_scroll->verticalScrollBar()->maximum() > 0) {
+                    if (inner_scrollable > 0) {
                       throw std::runtime_error(
                           "I-01 property form shows a double vertical scrollbar");
                     }
