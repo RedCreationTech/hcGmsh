@@ -16,6 +16,7 @@
 #include "gmp/Env.h"
 #include "gmp/ComboPopupFix.h"
 #include "gmp/OperationLog.h"
+#include "gmp/AppStyle.h"
 #include "gmp/IconFactory.h"
 
 int main(int argc, char** argv) {
@@ -27,53 +28,7 @@ int main(int argc, char** argv) {
   // 全局统一样式须设在 QApplication 级：主窗口样式表不覆盖独立顶级
   // 工作窗/浮动表单（Sketch/Mesh/Job/表单均为无父对象工具窗），
   // 且控件带局部样式表时其 tooltip 只继承应用级规则。
-  app.setStyleSheet(QStringLiteral(
-      "QToolTip { background: #1f2937; color: #f9fafb; border: none; "
-      "padding: 4px 8px; }"
-      // 滚动条：带上下箭头的经典细条样式（用户指定），全应用统一。
-      "QScrollBar:vertical { background: #f0f2f5; width: 14px; margin: 0; }"
-      "QScrollBar::handle:vertical { background: #c8ced6; border: 1px solid "
-      "#b8bfc8; min-height: 24px; }"
-      "QScrollBar::handle:vertical:hover { background: #aeb6c0; }"
-      "QScrollBar::add-line:vertical { height: 14px; background: #e4e8ee; "
-      "subcontrol-position: bottom; subcontrol-origin: margin; "
-      "border-top: 1px solid #d5dbe3; }"
-      "QScrollBar::sub-line:vertical { height: 14px; background: #e4e8ee; "
-      "subcontrol-position: top; subcontrol-origin: margin; "
-      "border-bottom: 1px solid #d5dbe3; }"
-      "QScrollBar::up-arrow:vertical, QScrollBar::down-arrow:vertical { "
-      "width: 8px; height: 8px; }"
-      "QScrollBar:horizontal { background: #f0f2f5; height: 14px; margin: 0; }"
-      "QScrollBar::handle:horizontal { background: #c8ced6; border: 1px solid "
-      "#b8bfc8; min-width: 24px; }"
-      "QScrollBar::handle:horizontal:hover { background: #aeb6c0; }"
-      "QScrollBar::add-line:horizontal { width: 14px; background: #e4e8ee; "
-      "subcontrol-position: right; subcontrol-origin: margin; "
-      "border-left: 1px solid #d5dbe3; }"
-      "QScrollBar::sub-line:horizontal { width: 14px; background: #e4e8ee; "
-      "subcontrol-position: left; subcontrol-origin: margin; "
-      "border-right: 1px solid #d5dbe3; }"
-      "QScrollBar::left-arrow:horizontal, QScrollBar::right-arrow:horizontal { "
-      "width: 8px; height: 8px; }"
-      "QScrollBar::add-page, QScrollBar::sub-page { background: none; }"
-      // 勾选/单选：强调蓝选中态，全应用一致（消除原生风格差异）。
-      "QCheckBox, QRadioButton { spacing: 6px; }"
-      "QCheckBox::indicator, QRadioButton::indicator { width: 14px; "
-      "height: 14px; border: 1px solid #aab4c0; border-radius: 3px; "
-      "background: #ffffff; }"
-      "QRadioButton::indicator { border-radius: 7px; }"
-      "QCheckBox::indicator:checked { background: #2f6fed; "
-      "border: 1px solid #2f6fed; image: url(\":/icons/check.png\"); }"
-      "QRadioButton::indicator:checked { background: #2f6fed; "
-      "border: 1px solid #2f6fed; image: url(\":/icons/dot.png\"); }"
-      "QCheckBox::indicator:hover, QRadioButton::indicator:hover { "
-      "border-color: #2f6fed; }"
-      // 滑块：与强调蓝一致（播放进度条等）。
-      "QSlider::groove:horizontal { height: 4px; background: #d5dbe3; "
-      "border-radius: 2px; }"
-      "QSlider::handle:horizontal { width: 14px; height: 14px; "
-      "margin: -5px 0; border-radius: 7px; background: #2f6fed; }"
-      "QSlider::handle:horizontal:hover { background: #1d4ed8; }"));
+  app.setStyleSheet(gmp::app_style_sheet());
 
   // 全局下拉框滚轮拦截：选项只能通过展开下拉点选切换。
   gmp::install_combo_wheel_block(&app);

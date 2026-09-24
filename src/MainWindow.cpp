@@ -875,7 +875,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   stage_toolbar_scroll->setWidgetResizable(true);
   stage_toolbar_scroll->setFrameShape(QFrame::NoFrame);
   stage_toolbar_scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  stage_toolbar_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
+  // 工具列窄条不显示滚动条（滚轮仍可滚动），保持列视觉干净。
+  stage_toolbar_scroll->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   stage_toolbar_scroll->setFixedWidth(48);
   stage_left_toolbar_ = new StageLeftToolbar();
   // 滚动区 48px 而工具条列 42px：包一层零边距容器让按钮列在视口内水平居中。

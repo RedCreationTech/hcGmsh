@@ -1,5 +1,7 @@
 #include "gmp/FloatingPropertyForm.h"
 
+#include "gmp/AppStyle.h"
+
 #include "gmp/L10n.h"
 #include "gmp/PropertyEditor.h"
 
@@ -74,6 +76,9 @@ FloatingPropertyForm::FloatingPropertyForm(
     const QStringList& interaction_type_options, QWidget* parent)
     : QDialog(parent), target_item_(target) {
   setObjectName("floatingPropertyForm");
+  // 实测 macOS 上 QDialog 独立顶层路径不继承 QApplication 样式表
+  // （勾选框等回退原生渲染），显式同步全局统一样式。
+  setStyleSheet(gmp::app_style_sheet());
   setModal(true);
   setAttribute(Qt::WA_DeleteOnClose);
   setWindowFlag(Qt::WindowContextHelpButtonHint, false);
