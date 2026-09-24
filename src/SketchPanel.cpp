@@ -126,6 +126,9 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
     }
     btn->setCheckable(true);
     btn->setProperty("gmpSketchTool", true);
+    btn->setIconSize(QSize(14, 14));
+    // 收窄默认内边距，避免图标+文字撑宽后顶破草图编辑窗 640px 紧凑宽度合同。
+    btn->setStyleSheet("QPushButton{padding:2px 4px;}");
     btn->setMinimumWidth(64);
     btn->setToolTip(tip);
     tool_group_->addButton(btn, id);
@@ -159,6 +162,15 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
             "Draw an axis-aligned rectangle: click one corner, then the "
             "opposite corner. Creates 4 lines with coincident corners.",
             tool_row2);
+  // 工具按钮统一宽度：以内容最宽者为基准，避免中英文/图标组合导致宽窄不一。
+  int tool_btn_width = 0;
+  const auto tool_btns = tool_group_->buttons();
+  for (auto* b : tool_btns) {
+    tool_btn_width = qMax(tool_btn_width, b->sizeHint().width());
+  }
+  for (auto* b : tool_btns) {
+    b->setFixedWidth(tool_btn_width);
+  }
   tool_row1->addStretch(1);
   tool_row2->addStretch(1);
   tool_layout->addLayout(tool_row1);

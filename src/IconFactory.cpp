@@ -40,16 +40,16 @@ const QHash<QString, QString>& mapping() {
       {"sketch_move", "arrows-up-down-left-right"},
       {"sketch_line", "slash"},
       {"sketch_circle", "circle"},
-      {"sketch_arc", "circle-notch"},
+      {"sketch_arc", "circle-half-stroke"},
       {"sketch_rectangle", "square"},
       {"sketch_delete", "eraser"},
       // ---- 约束 / 标注 ----
       {"constraint_horizontal", "arrows-left-right"},
       {"constraint_vertical", "arrows-up-down"},
-      {"constraint_parallel", "bars-staggered"},
-      {"constraint_perpendicular", "angle-right"},
+      {"constraint_parallel", "grip-lines"},
+      {"constraint_perpendicular", "arrow-turn-down"},
       {"constraint_coincident", "circle-dot"},
-      {"dim_distance", "ruler-horizontal"},
+      {"dim_distance", "arrows-left-right-to-line"},
       {"dim_radius", "compass-drafting"},
       // ---- 通用编辑 ----
       {"undo", "rotate-left"},
@@ -190,14 +190,21 @@ void init(QWidget* paletteAnchor) {
 
   const QPalette palette =
       paletteAnchor ? paletteAnchor->palette() : QApplication::palette();
-  g_awesome->setDefaultOption("color", palette.color(QPalette::Normal, QPalette::Text));
+  // 浅色主题下纯黑图标视觉重量过重，用深灰中和；深色主题保持文字色。
+  const QColor text =
+      palette.color(QPalette::Normal, QPalette::Text);
+  const QColor iconColor =
+      text.lightness() > 128 ? QColor(0x44, 0x44, 0x44) : text;
+  const QColor highlight =
+      palette.color(QPalette::Normal, QPalette::Highlight);
+  g_awesome->setDefaultOption("color", iconColor);
   g_awesome->setDefaultOption("color-disabled",
                               palette.color(QPalette::Disabled, QPalette::Text));
-  g_awesome->setDefaultOption("color-active",
-                              palette.color(QPalette::Active, QPalette::Text));
-  g_awesome->setDefaultOption("color-selected",
-                              palette.color(QPalette::Active, QPalette::Text));
-  g_awesome->setDefaultOption("scale-factor", 0.9);
+  g_awesome->setDefaultOption("color-active", highlight);
+  g_awesome->setDefaultOption("color-selected", highlight);
+  // 可勾选按钮的选中态（On）同样用主题色，如草图工具、固定预览曲线。
+  g_awesome->setDefaultOption("color-on", highlight);
+  g_awesome->setDefaultOption("scale-factor", 0.8);
 }
 
 QIcon get(const QString& key, Size size) {

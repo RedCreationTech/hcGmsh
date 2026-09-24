@@ -6910,7 +6910,9 @@ void MainWindow::apply_module_workspace_profile(bool sketch_editor) {
     module_workspace_sketch_profile_ = sketch_editor;
   }
 
-  const QSize minimum = sketch_editor ? QSize(640, 320) : QSize(620, 400);
+  // 640 为纯文字时代基线；图标化后编辑区内容最小宽度约 660，放宽到 680
+  // 保留跨平台（Windows 字体度量更宽）余量。
+  const QSize minimum = sketch_editor ? QSize(680, 320) : QSize(620, 400);
   const QSize initial = sketch_editor ? QSize(680, 350) : QSize(680, 560);
   module_work_window_->setProperty(
       "gmpWorkspaceProfile", sketch_editor ? "sketch" : "module");
@@ -13304,7 +13306,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         !finish ||
                         module_work_window_->property("gmpWorkspaceProfile")
                                 .toString() != "sketch" ||
-                        module_work_window_->minimumSize() != QSize(640, 320) ||
+                        module_work_window_->minimumSize() != QSize(680, 320) ||
                         finish->maximumWidth() > 160) {
                       throw std::runtime_error(
                           "Sketch editor compact window profile is not active");
