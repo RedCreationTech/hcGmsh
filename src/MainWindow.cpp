@@ -1185,7 +1185,14 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   stage_toolbar_scroll->setStyleSheet("QScrollBar:vertical { width: 4px; }");
   stage_toolbar_scroll->setFixedWidth(48);
   stage_left_toolbar_ = new StageLeftToolbar();
-  stage_toolbar_scroll->setWidget(stage_left_toolbar_);
+  // 滚动区 48px 而工具条列 42px：包一层零边距容器让按钮列在视口内水平居中。
+  auto* stage_toolbar_host = new QWidget;
+  auto* stage_toolbar_host_layout = new QVBoxLayout(stage_toolbar_host);
+  stage_toolbar_host_layout->setContentsMargins(0, 0, 0, 0);
+  stage_toolbar_host_layout->setSpacing(0);
+  stage_toolbar_host_layout->addWidget(stage_left_toolbar_, 0,
+                                       Qt::AlignHCenter);
+  stage_toolbar_scroll->setWidget(stage_toolbar_host);
   stage_layout->addWidget(stage_toolbar_scroll);
   stage_layout->addWidget(center_scroll, 1);
   center_layout->addWidget(stage_host, 1);
