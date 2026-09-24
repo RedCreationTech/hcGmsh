@@ -162,8 +162,8 @@ const QHash<QString, QString>& mapping() {
       {"add_generic_load", "weight-hanging"},
       {"add_surface_pressure", "compress"},
       {"bool_intersect", "compress"},
-      {"open_bc_root", "vector-square"},
-      {"insert_bcs_from_groups", "vector-square"},
+      {"open_bc_root", "flag"},
+      {"insert_bcs_from_groups", "flag"},
       {"add_thermal_source", "fire"},
       // ---- 几何工具 ----
       {"open_geometry", "folder-open"},
@@ -202,7 +202,7 @@ const QHash<QString, QString>& mapping() {
       {"screenshot", "camera"},
       {"validate_workflow", "clipboard-check"},
       {"check_input", "file-circle-check"},
-      {"verify_package", "badge-check"},
+      {"verify_package", "circle-check"},
       // ---- 结果面板 ----
       {"apply_view", "eye"},
       {"open_in_viewer", "eye"},
@@ -258,7 +258,7 @@ const QHash<QString, QString>& mapping() {
       {"tree_assembly", "puzzle-piece"},
       {"tree_physics", "atom"},
       {"tree_steps", "list-ol"},
-      {"tree_bc", "vector-square"},
+      {"tree_bc", "flag"},
       {"tree_loads", "weight-hanging"},
       {"tree_functions", "wave-square"},
       {"tree_variables", "square-root-variable"},
@@ -317,6 +317,38 @@ void init(QWidget* paletteAnchor) {
   // 可勾选按钮的选中态（On）同样用主题色，如草图工具、固定预览曲线。
   g_awesome->setDefaultOption("color-on", highlight);
   g_awesome->setDefaultOption("scale-factor", 0.8);
+}
+
+QStringList auditBlankGlyphs() {
+  // 开发工具：渲染映射表全部字形，报告在 FA7 Free 字体中实际缺失
+  // （渲染为空白）的字形。GMP_ICON_AUDIT=1 时由 main 调用。
+  QStringList blank;
+  if (!g_awesome) {
+    init();
+  }
+  QSet<QString> seen;
+  for (auto it = mapping().constBegin(); it != mapping().constEnd(); ++it) {
+    const QString& glyph = it.value();
+    if (seen.contains(glyph)) {
+      continue;
+    }
+    seen.insert(glyph);
+    const QImage image =
+        g_awesome->icon(glyph).pixmap(24, 24).toImage();
+    bool has_pixel = false;
+    for (int y = 0; y < image.height() && !has_pixel; ++y) {
+      for (int x = 0; x < image.width(); ++x) {
+        if (qAlpha(image.pixel(x, y)) > 0) {
+          has_pixel = true;
+          break;
+        }
+      }
+    }
+    if (!has_pixel) {
+      blank << glyph;
+    }
+  }
+  return blank;
 }
 
 QIcon get(const QString& key, Size size) {

@@ -58,6 +58,15 @@ int main(int argc, char** argv) {
 
   // 图标体系初始化（QtAwesome / FA7 Free，须在 QApplication 之后、UI 构造前）
   gmp::icons::init(&window);
+  // 开发工具：GMP_ICON_AUDIT=1 时报告映射表中渲染为空白的字形。
+  if (qEnvironmentVariableIsSet("GMP_ICON_AUDIT")) {
+    const QStringList blank = gmp::icons::auditBlankGlyphs();
+    qWarning("[icon-audit] total mapped glyphs checked, blank: %d",
+             int(blank.size()));
+    for (const QString& glyph : blank) {
+      qWarning("[icon-audit] blank glyph: %s", qPrintable(glyph));
+    }
+  }
   window.show();
 
   // 文档截图巡览：GMP_SCREENSHOT_DIR=<目录> 时自动切换页面截图并退出

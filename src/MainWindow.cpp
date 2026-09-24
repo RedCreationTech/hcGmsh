@@ -684,7 +684,8 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   model_tree_->setColumnCount(2);
   model_tree_->setHeaderLabels({"Object", "Status"});
   model_tree_->header()->setSectionResizeMode(QHeaderView::Interactive);
-  model_tree_->header()->setStretchLastSection(false);
+  // 末列跟随面板宽度拉伸，避免拖动加宽后右侧留白不自适应。
+  model_tree_->header()->setStretchLastSection(true);
   model_tree_->header()->setSectionsMovable(false);
   model_tree_->header()->setMinimumSectionSize(60);
   model_tree_->header()->resizeSection(0, 165);

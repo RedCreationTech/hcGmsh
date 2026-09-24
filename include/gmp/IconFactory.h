@@ -25,4 +25,8 @@ QIcon get(const QString& key, Size size = Size::Button);
 // 便捷：工具栏/回放控件用（等价 get(key, Size::Toolbar)）。
 QIcon toolbar(const QString& key);
 
+// 开发工具（GMP_ICON_AUDIT=1）：渲染映射表全部字形，
+// 返回在 FA7 Free 字体中缺失（渲染空白）的字形名列表。
+QStringList auditBlankGlyphs();
+
 } // namespace gmp::icons
