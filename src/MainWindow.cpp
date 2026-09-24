@@ -6766,7 +6766,11 @@ void MainWindow::refresh_module_node_list(QListWidget* list,
     item->setData(Qt::UserRole, i);
     const QString status = params.value("status").toString();
     if (!status.isEmpty()) {
-      item->setToolTip(QString("status: %1").arg(status));
+      const bool chinese =
+          l10n::current_language() == l10n::Language::Chinese;
+      item->setToolTip(
+          chinese ? QString::fromUtf8("状态：%1").arg(status)
+                  : QString("status: %1").arg(status));
     } else if (!params.isEmpty()) {
       item->setToolTip(params.keys().join(", "));
     }
@@ -7080,12 +7084,18 @@ void MainWindow::update_command_availability() {
       current && current->parent() && kind != "Mesh" && kind != "Jobs" &&
       kind != "Results";
 
+  // 动态 tooltip 双语：跟随界面语言实时切换，避免中文界面出现英文提示。
+  const auto tt = [chinese](const char* en, const char* zh) -> QString {
+    return chinese ? QString::fromUtf8(zh) : QString::fromLatin1(en);
+  };
+
   if (module_selector_) {
     module_selector_->setEnabled(!sketch_editing);
     module_selector_->setToolTip(
         sketch_editing
-            ? "Finish or close the active Sketch edit before switching modules."
-            : "Select the active work module.");
+            ? tt("Finish or close the active Sketch edit before switching modules.",
+                 "请先完成或关闭当前草图编辑，再切换模块。")
+            : tt("Select the active work module.", "选择当前工作模块。"));
   }
   if (context_object_selector_) {
     const bool has_context =
@@ -7093,7 +7103,8 @@ void MainWindow::update_command_availability() {
     context_object_selector_->setEnabled(has_context && !sketch_editing);
     if (sketch_editing) {
       context_object_selector_->setToolTip(
-          "Finish or close the active Sketch edit before changing objects.");
+          tt("Finish or close the active Sketch edit before changing objects.",
+             "请先完成或关闭当前草图编辑，再切换对象。"));
     }
   }
   if (model_tree_) {
@@ -7110,17 +7121,21 @@ void MainWindow::update_command_availability() {
     action_edit_properties_->setEnabled(editable_object && !sketch_editing);
     action_edit_properties_->setToolTip(
         editable_object && !sketch_editing
-            ? "Edit the active model object."
+            ? tt("Edit the active model object.", "编辑当前模型对象。")
             : (sketch_editing
-                   ? "Finish the active Sketch edit first."
-                   : "Select an editable child object; roots, Mesh, Job and Result are not property forms."));
+                   ? tt("Finish the active Sketch edit first.", "请先完成当前草图编辑。")
+                   : tt("Select an editable child object; roots, Mesh, Job and Result are not property forms.",
+                        "请选择可编辑的子对象；根节点、网格、作业和结果不是属性表单对象。")));
   }
   if (action_sync_) {
     action_sync_->setEnabled(!task_busy && !sketch_editing);
     action_sync_->setToolTip(
-        task_busy ? "Wait for the active Mesh/Job task to finish."
-                  : (sketch_editing ? "Finish the active Sketch edit first."
-                                    : "Generate the active MOOSE .i input case."));
+        task_busy ? tt("Wait for the active Mesh/Job task to finish.",
+                       "请等待当前网格/作业任务完成。")
+                  : (sketch_editing
+                         ? tt("Finish the active Sketch edit first.", "请先完成当前草图编辑。")
+                         : tt("Generate the active MOOSE .i input case.",
+                              "生成当前算例的 MOOSE .i 输入文件。")));
   }
   if (action_mesh_) {
     action_mesh_->setEnabled(!task_busy && !sketch_editing);
@@ -7132,11 +7147,15 @@ void MainWindow::update_command_availability() {
                        : QString("Generate Mesh")));
     action_mesh_->setToolTip(
         active_ui_context_.mesh_running
-            ? "Mesh generation is running; duplicate submission is disabled."
+            ? tt("Mesh generation is running; duplicate submission is disabled.",
+                 "网格生成进行中，已禁止重复提交。")
             : (active_ui_context_.job_running
-                   ? "Wait for the active Job to finish before regenerating the mesh."
-                   : (sketch_editing ? "Finish the active Sketch edit first."
-                                     : "Generate mesh for the active project.")));
+                   ? tt("Wait for the active Job to finish before regenerating the mesh.",
+                        "请先等待当前作业完成，再重新生成网格。")
+                   : (sketch_editing
+                          ? tt("Finish the active Sketch edit first.", "请先完成当前草图编辑。")
+                          : tt("Generate mesh for the active project.",
+                               "为当前项目生成网格。"))));
   }
   if (action_preview_mesh_) {
     action_preview_mesh_->setEnabled(!active_ui_context_.mesh_running &&
@@ -7150,11 +7169,14 @@ void MainWindow::update_command_availability() {
             : (chinese ? QString::fromUtf8("运行") : QString("Run")));
     action_run_->setToolTip(
         active_ui_context_.job_running
-            ? "A Job is already running; duplicate submission is disabled."
+            ? tt("A Job is already running; duplicate submission is disabled.",
+                 "已有作业在运行，已禁止重复提交。")
             : (active_ui_context_.mesh_running
-                   ? "Wait for mesh generation to finish."
-                   : (sketch_editing ? "Finish the active Sketch edit first."
-                                     : "Run the active MOOSE input case.")));
+                   ? tt("Wait for mesh generation to finish.", "请等待网格生成完成。")
+                   : (sketch_editing
+                          ? tt("Finish the active Sketch edit first.", "请先完成当前草图编辑。")
+                          : tt("Run the active MOOSE input case.",
+                               "运行当前 MOOSE 输入算例。"))));
   }
   if (action_check_) {
     action_check_->setEnabled(!task_busy && !sketch_editing);
@@ -7162,8 +7184,8 @@ void MainWindow::update_command_availability() {
   if (action_stop_) {
     action_stop_->setEnabled(active_ui_context_.job_running);
     action_stop_->setToolTip(active_ui_context_.job_running
-                                 ? "Stop the active Job."
-                                 : "No Job is currently running.");
+                                 ? tt("Stop the active Job.", "停止当前作业。")
+                                 : tt("No Job is currently running.", "当前没有运行中的作业。"));
   }
   if (action_stage_clear_) {
     const bool has_stage_selection =
@@ -7172,8 +7194,8 @@ void MainWindow::update_command_availability() {
          !viewer_->sketch_selection().isEmpty());
     action_stage_clear_->setEnabled(has_stage_selection);
     action_stage_clear_->setToolTip(
-        has_stage_selection ? "Clear the active stage selection."
-                            : "No stage selection to clear.");
+        has_stage_selection ? tt("Clear the active stage selection.", "清除当前舞台选择。")
+                            : tt("No stage selection to clear.", "没有可清除的舞台选择。"));
   }
   if (!active_sketch_doc_) {
     if (action_undo_) {
@@ -7213,10 +7235,11 @@ void MainWindow::update_command_availability() {
     }
     if (can_play) {
       action_playback_play_->setToolTip(
-          "Play/Pause the time-step animation.");
+          tt("Play/Pause the time-step animation.", "播放/暂停时间步动画。"));
     } else if (!sketch_editing) {
       action_playback_play_->setToolTip(
-          "Load an Exodus result with multiple time steps to play.");
+          tt("Load an Exodus result with multiple time steps to play.",
+             "加载含多个时间步的 Exodus 结果后可播放。"));
     }
   }
   if (job_run_button_) {
@@ -7306,10 +7329,17 @@ void MainWindow::refresh_work_context() {
     context_object_selector_->setCurrentIndex(selected_combo_index);
   }
   context_object_selector_->setEnabled(root != nullptr && !active_sketch_doc_);
+  const bool context_chinese =
+      l10n::current_language() == l10n::Language::Chinese;
   context_object_selector_->setToolTip(
-      root ? QString("Current %1 object; selecting an entry locates it in the model tree.")
-                 .arg(root_name)
-           : QString("No object selector is available in this context."));
+      root ? (context_chinese
+                  ? QString::fromUtf8("当前 %1 对象；选择条目可在模型树中定位。")
+                        .arg(root_name)
+                  : QString("Current %1 object; selecting an entry locates it in the model tree.")
+                        .arg(root_name))
+           : (context_chinese
+                  ? QString::fromUtf8("此上下文没有可用的对象选择器。")
+                  : QString("No object selector is available in this context.")));
 }
 
 void MainWindow::init_app_profile_support() {
@@ -7345,12 +7375,14 @@ void MainWindow::refresh_app_profile_selector() {
         QString());
     app_profile_selector_->setEnabled(false);
     app_profile_selector_->setToolTip(
-        "No application profile directory was found.");
+        chinese ? QString::fromUtf8("未找到应用档案目录。")
+                : QString("No application profile directory was found."));
     return;
   }
   app_profile_selector_->setEnabled(true);
   app_profile_selector_->setToolTip(
-      "Select the active MOOSE application profile.");
+      chinese ? QString::fromUtf8("选择当前 MOOSE 应用档案。")
+              : QString("Select the active MOOSE application profile."));
   app_profile_selector_->addItem(
       chinese ? QString::fromUtf8("未选择") : QString("Unselected"), QString());
   for (const ApplicationProfile& profile : app_profile_registry_.profiles()) {
@@ -7448,14 +7480,22 @@ void MainWindow::update_app_profile_display() {
       application_profile_.value("mapping_version").toString();
   app_profile_status_label_->setToolTip(
       id.isEmpty()
-          ? QString("No application profile is selected.")
-          : QString("Application profile: %1\nVersion: %2\nMapping registry: "
-                    "%3 (%4)")
-                .arg(id, version,
-                     mapping_registry_.is_loaded()
-                         ? mapping_registry_.version()
-                         : QString("not loaded"),
-                     mapping_version));
+          ? (chinese ? QString::fromUtf8("未选择应用档案。")
+                     : QString("No application profile is selected."))
+          : (chinese
+                 ? QString::fromUtf8("应用档案：%1\n版本：%2\n映射注册表：%3（%4）")
+                       .arg(id, version,
+                            mapping_registry_.is_loaded()
+                                ? mapping_registry_.version()
+                                : QString::fromUtf8("未加载"),
+                            mapping_version)
+                 : QString("Application profile: %1\nVersion: %2\nMapping registry: "
+                           "%3 (%4)")
+                       .arg(id, version,
+                            mapping_registry_.is_loaded()
+                                ? mapping_registry_.version()
+                                : QString("not loaded"),
+                            mapping_version)));
 }
 
 void MainWindow::push_context_to_moose_panel() {
@@ -8106,6 +8146,7 @@ void MainWindow::refresh_workflow_status() {
   if (!workflow_status_label_) {
     return;
   }
+  const bool chinese = l10n::current_language() == l10n::Language::Chinese;
   const int parts = child_count("Parts");
   const int materials = child_count("Materials");
   const int sections = child_count("Sections");
@@ -8115,22 +8156,24 @@ void MainWindow::refresh_workflow_status() {
   const int meshes = child_count("Mesh");
   const int jobs = child_count("Jobs");
 
-  auto format_state = [](int count, const QString& name) -> QString {
+  auto format_state = [chinese](int count, const QString& name,
+                                const char* zh_name) -> QString {
     return QString("%1: %2 (%3)")
-        .arg(name)
+        .arg(chinese ? QString::fromUtf8(zh_name) : name)
         .arg(count)
-        .arg(count > 0 ? "ready" : "missing");
+        .arg(chinese ? (count > 0 ? QString::fromUtf8("就绪") : QString::fromUtf8("缺失"))
+                     : QString(count > 0 ? "ready" : "missing"));
   };
 
   QStringList segments;
-  segments << format_state(parts, "Parts");
-  segments << format_state(materials, "Materials");
-  segments << format_state(sections, "Sections");
-  segments << format_state(steps, "Steps");
-  segments << format_state(bcs, "BC");
-  segments << format_state(loads, "Loads");
-  segments << format_state(meshes, "Mesh");
-  segments << format_state(jobs, "Jobs");
+  segments << format_state(parts, "Parts", "部件");
+  segments << format_state(materials, "Materials", "材料");
+  segments << format_state(sections, "Sections", "截面");
+  segments << format_state(steps, "Steps", "分析步");
+  segments << format_state(bcs, "BC", "边界条件");
+  segments << format_state(loads, "Loads", "载荷");
+  segments << format_state(meshes, "Mesh", "网格");
+  segments << format_state(jobs, "Jobs", "作业");
 
   const QVariantList issues = collect_workflow_issues();
   int errors = 0;
@@ -8159,17 +8202,28 @@ void MainWindow::refresh_workflow_status() {
   }
   const QString readiness =
       errors == 0
-          ? QString("Workflow ready%1")
-                .arg(warnings > 0 ? QString(" (%1 warning)").arg(warnings)
-                                  : QString())
-          : QString("Workflow blocked: %1 error(s), %2 warning(s)")
-                .arg(errors)
-                .arg(warnings);
+          ? (chinese
+                 ? QString::fromUtf8("工作流就绪%1")
+                       .arg(warnings > 0
+                                ? QString::fromUtf8("（%1 个警告）").arg(warnings)
+                                : QString())
+                 : QString("Workflow ready%1")
+                       .arg(warnings > 0 ? QString(" (%1 warning)").arg(warnings)
+                                         : QString()))
+          : (chinese
+                 ? QString::fromUtf8("工作流阻塞：%1 个错误，%2 个警告")
+                       .arg(errors)
+                       .arg(warnings)
+                 : QString("Workflow blocked: %1 error(s), %2 warning(s)")
+                       .arg(errors)
+                       .arg(warnings));
   workflow_status_label_->setText(readiness + " | " + segments.join(" | "));
   workflow_status_label_->setToolTip(
       errors == 0
-          ? QString("All blocking workflow checks passed.")
-          : QString("Use Job > Validate Workflow to locate blocking issues."));
+          ? (chinese ? QString::fromUtf8("所有阻塞性工作流检查均已通过。")
+                     : QString("All blocking workflow checks passed."))
+          : (chinese ? QString::fromUtf8("使用 作业 › 校验工作流 定位阻塞问题。")
+                     : QString("Use Job > Validate Workflow to locate blocking issues.")));
   refresh_tree_statuses();
   refresh_results_navigation();
 }
@@ -9610,7 +9664,7 @@ void MainWindow::refresh_results_panel() {
   auto* root = find_root_item("Results");
   if (!root || root->childCount() == 0) {
     if (results_list_->count() == 0) {
-      results_list_->addItem("No results yet.");
+      results_list_->addItem(l10n::tr("No results yet."));
     }
     return;
   }
@@ -9745,7 +9799,7 @@ void MainWindow::refresh_results_panel() {
     }
   }
   if (results_list_->count() == 0) {
-    results_list_->addItem("No results yet.");
+    results_list_->addItem(l10n::tr("No results yet."));
   }
   if (!saved_path.isEmpty()) {
     for (int i = 0; i < results_list_->count(); ++i) {
@@ -9759,7 +9813,7 @@ void MainWindow::refresh_results_panel() {
       }
     }
   } else if (results_list_->count() > 0 &&
-             results_list_->item(0)->text() != "No results yet.") {
+             results_list_->item(0)->text() != l10n::tr("No results yet.")) {
     results_list_->setCurrentRow(0);
   }
 }
@@ -9771,7 +9825,7 @@ void MainWindow::populate_results_compare_list(QListWidget* list) const {
   list->clear();
   auto* root = find_root_item("Results");
   if (!root || root->childCount() == 0) {
-    list->addItem("No results yet.");
+    list->addItem(l10n::tr("No results yet."));
     return;
   }
   for (int i = 0; i < root->childCount(); ++i) {
@@ -9805,7 +9859,7 @@ void MainWindow::populate_results_compare_list(QListWidget* list) const {
     }
   }
   if (list->count() == 0) {
-    list->addItem("No results yet.");
+    list->addItem(l10n::tr("No results yet."));
   }
 }
 
