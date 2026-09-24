@@ -3,6 +3,7 @@
 #include <QApplication>
 #include <QDebug>
 #include <QHash>
+#include <QPainter>
 #include <QPalette>
 #include <QSet>
 #include <QWidget>
@@ -15,6 +16,69 @@ namespace {
 
 fa::QtAwesome* g_awesome = nullptr;
 QSet<QString> g_warned_keys;
+
+// 方向视图图标：等轴立方体单面高亮（CAD 惯例，Font Awesome 无此字形，
+// 经 QtAwesome::give 注册自定义绘制器实现）。与下方实心立方体（等轴测）
+// 图标视觉区分。
+class CubeFacePainter : public fa::QtAwesomeIconPainter {
+ public:
+  enum Face { Front, Right, Top };
+
+  explicit CubeFacePainter(Face face) : face_(face) {}
+
+  void paint(fa::QtAwesome* /*awesome*/, QPainter* painter,
+             const QRect& rect, QIcon::Mode /*mode*/, QIcon::State /*state*/,
+             const QVariantMap& options) override {
+    const QColor base =
+        options.value("color").value<QColor>().isValid()
+            ? options.value("color").value<QColor>()
+            : painter->pen().color();
+    QColor faint = base;
+    faint.setAlpha(48);
+    QColor edge = base;
+    edge.setAlpha(210);
+
+    const double size = qMin(rect.width(), rect.height()) * 0.92;
+    const QPointF o = rect.center() + QPointF(0, size * 0.10);
+    const QPointF x(size * 0.433, size * 0.25);
+    const QPointF y(-size * 0.433, size * 0.25);
+    const QPointF z(0, -size * 0.5);
+
+    const QPointF oz = o + z, ox = o + x, oy = o + y;
+    const QPointF oxz = ox + z, oyz = oy + z, oxyz = o + x + y + z, oxy = o + x + y;
+
+    const QPolygonF top_face{oz, oxz, oxyz, oyz};
+    const QPolygonF front_face{o, ox, oxz, oz};
+    const QPolygonF right_face{ox, oxy, oxyz, oxz};
+
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing);
+    // 非目标面：淡填充，突出目标面。
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(faint);
+    painter->drawPolygon(top_face);
+    painter->drawPolygon(front_face);
+    painter->drawPolygon(right_face);
+    // 目标面：实色高亮。
+    painter->setBrush(base);
+    switch (face_) {
+      case Front: painter->drawPolygon(front_face); break;
+      case Right: painter->drawPolygon(right_face); break;
+      case Top: painter->drawPolygon(top_face); break;
+    }
+    // 外轮廓线。
+    painter->setBrush(Qt::NoBrush);
+    QPen pen(edge, qMax<qreal>(1.0, size * 0.055));
+    painter->setPen(pen);
+    painter->drawPolygon(top_face);
+    painter->drawPolygon(front_face);
+    painter->drawPolygon(right_face);
+    painter->restore();
+  }
+
+ private:
+  Face face_;
+};
 
 // 键名（snake_case 英文动作名）→ Font Awesome 7 Free 字形名。
 // 字形名逐一核对过 QtAwesomeStringGenerated.h（QtAwesome main @ 3d9064a）。
@@ -180,9 +244,9 @@ const QHash<QString, QString>& mapping() {
       {"expand", "angles-right"},
       {"zoom", "magnifying-glass-plus"},
       {"fit", "expand"},
-      {"front", "arrow-down"},
-      {"right", "arrow-right"},
-      {"top", "arrow-up"},
+      {"front", "view_front"},
+      {"right", "view_right"},
+      {"top", "view_top"},
       {"iso", "cube"},
   };
   return kMap;
@@ -196,6 +260,10 @@ void init(QWidget* paletteAnchor) {
   }
   g_awesome = new fa::QtAwesome(qApp);
   g_awesome->initFontAwesome();
+  // CAD 惯例的方向视图图标：等轴立方体单面高亮（自定义绘制器）。
+  g_awesome->give("view_front", new CubeFacePainter(CubeFacePainter::Front));
+  g_awesome->give("view_right", new CubeFacePainter(CubeFacePainter::Right));
+  g_awesome->give("view_top", new CubeFacePainter(CubeFacePainter::Top));
 
   const QPalette palette =
       paletteAnchor ? paletteAnchor->palette() : QApplication::palette();
