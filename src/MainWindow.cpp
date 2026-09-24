@@ -958,7 +958,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   workflow_status_label_->setObjectName("workflowStatus");
   workflow_status_label_->setWordWrap(true);
   workflow_status_label_->setTextFormat(Qt::PlainText);
-  workflow_status_label_->setStyleSheet("color: #404040;");
+  // 文字色用 palette 而非局部样式表：局部样式表会把 tooltip 样式带偏
+  // （浮动提示统一样式见 main.cpp 的 QApplication 级 QToolTip 规则）。
+  QPalette workflow_palette = workflow_status_label_->palette();
+  workflow_palette.setColor(QPalette::WindowText, QColor(0x40, 0x40, 0x40));
+  workflow_status_label_->setPalette(workflow_palette);
   tree_layout->addWidget(workflow_status_label_);
 
   auto* tree_actions = new QHBoxLayout();
@@ -6441,14 +6445,9 @@ QSlider::handle:horizontal {
   border-radius: 7px; background: #2f6fed;
 }
 QSlider::handle:horizontal:hover { background: #1d4ed8; }
-
-QToolTip {
-  background: #1f2937;
-  color: #f9fafb;
-  border: none;
-  padding: 4px 8px;
-}
 )";
+  // 注：QToolTip 统一样式已上移至 QApplication 级（src/main.cpp），
+  // 覆盖独立顶级工作窗的浮动提示。
   setStyleSheet(style);
 }
 

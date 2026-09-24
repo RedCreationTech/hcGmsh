@@ -212,6 +212,20 @@ StageLeftToolbar::StageLeftToolbar(QWidget* parent) : QWidget(parent) {
   root->addWidget(visualization_group_);
   root->addStretch(1);
 
+  // 列宽 42px 而按钮 36px，默认左对齐显得偏挤；全部按钮与分隔线水平居中。
+  for (auto* button : findChildren<QToolButton*>()) {
+    if (auto* box = qobject_cast<QVBoxLayout*>(button->parentWidget()->layout())) {
+      box->setAlignment(button, Qt::AlignHCenter);
+    }
+  }
+  for (auto* line : findChildren<QFrame*>()) {
+    if (line->frameShape() == QFrame::HLine &&
+        qobject_cast<QVBoxLayout*>(line->parentWidget()->layout())) {
+      qobject_cast<QVBoxLayout*>(line->parentWidget()->layout())
+          ->setAlignment(line, Qt::AlignHCenter);
+    }
+  }
+
   set_context(QString());
 }
 

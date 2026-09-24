@@ -24,6 +24,13 @@ int main(int argc, char** argv) {
 #endif
   QApplication app(argc, argv);
 
+  // 浮动提示统一样式须设在 QApplication 级：主窗口样式表不覆盖独立顶级
+  // 工作窗（Sketch/Mesh/Job/Visualization/Results 均为无父对象工具窗），
+  // 且控件带局部样式表时其 tooltip 只继承应用级规则。
+  app.setStyleSheet(
+      "QToolTip { background: #1f2937; color: #f9fafb; border: none; "
+      "padding: 4px 8px; }");
+
   // 全局下拉框滚轮拦截：选项只能通过展开下拉点选切换。
   gmp::install_combo_wheel_block(&app);
 

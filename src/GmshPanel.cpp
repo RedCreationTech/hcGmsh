@@ -3806,7 +3806,9 @@ void GmshPanel::validate_entity_input(QLineEdit* input, int dim_filter,
   input->setStyleSheet(
       "QLineEdit{border: 1px solid #d32f2f; background: #fff5f6;}");
   input->setToolTip(
-      QString("Invalid entities: %1").arg(invalid.join(", ")));
+      l10n::current_language() == l10n::Language::Chinese
+          ? QString::fromUtf8("无效实体：%1").arg(invalid.join(", "))
+          : QString("Invalid entities: %1").arg(invalid.join(", ")));
 }
 
 static void fill_entity_template_combo(QComboBox* combo, int dim_filter,
