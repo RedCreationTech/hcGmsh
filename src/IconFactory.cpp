@@ -123,6 +123,7 @@ const QHash<QString, QString>& mapping() {
       {"apply", "check"},
       {"clear", "eraser"},
       {"clear_x", "xmark"},
+      {"select_all", "check-double"},
       {"cancel", "xmark"},
       {"remove_selected", "xmark"},
       {"clear_selection", "xmark"},

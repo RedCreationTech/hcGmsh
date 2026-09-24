@@ -4108,8 +4108,12 @@ QString GmshPanel::pick_entities_dialog(int dim_filter,
   buttons->setObjectName("entityPickerButtons");
   auto* select_all = new QPushButton(chinese ? QString::fromUtf8("全部")
                                              : QString("All"));
+  select_all->setIcon(gmp::icons::get("select_all"));
+  select_all->setObjectName("gmpIcon_select_all");
   auto* clear_all = new QPushButton(chinese ? QString::fromUtf8("清除")
                                             : QString("Clear"));
+  clear_all->setIcon(gmp::icons::get("clear_x"));
+  clear_all->setObjectName("gmpIcon_clear_x");
   if (auto* ok = buttons->button(QDialogButtonBox::Ok)) {
     ok->setText(chinese ? QString::fromUtf8("确定") : QString("OK"));
   }
