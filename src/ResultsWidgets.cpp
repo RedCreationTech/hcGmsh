@@ -133,8 +133,9 @@ ResultsTableWidget::ResultsTableWidget(QWidget* parent) : QWidget(parent) {
   table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
   table_->setSortingEnabled(false);
   table_->horizontalHeader()->setSortIndicatorShown(true);
-  // 末列跟随容器宽度拉伸，避免表格按内容定宽后右侧大片留白。
-  table_->horizontalHeader()->setStretchLastSection(true);
+  // 列宽策略：全列按比例分摊容器宽度（rebuild() 每次重建列后重设，
+  // 保证重进弹窗/切换数据后依然生效）。
+  table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
   layout->addWidget(table_, 1);
 
   auto* pager = new QHBoxLayout();
@@ -248,6 +249,9 @@ void ResultsTableWidget::rebuild() {
   const QStringList columns = snapshot_.value("columns").toStringList();
   table_->clear();
   table_->setColumnCount(columns.size());
+  // 全列 Stretch：所有列按比例分摊容器宽度（用户反馈只拉伸末列会让
+  // 最后一列巨大留白、重进弹窗又被 resizeColumnsToContents 打回内容宽）。
+  table_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
   QStringList displayed_columns;
   for (const QString& name : columns) displayed_columns << l10n::tr(name);
   table_->setHorizontalHeaderLabels(displayed_columns);
@@ -320,7 +324,7 @@ void ResultsTableWidget::rebuild() {
           .arg(rows_.size())
           .arg(l10n::tr("rows")));
   page_status_->setText(QString("/ %1").arg(pages));
-  table_->resizeColumnsToContents();
+  // Stretch 模式下内容定宽无意义，去掉以免覆盖列宽策略。
 }
 
 class ResultsPlotWidget::Canvas final : public QWidget {
