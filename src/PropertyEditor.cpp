@@ -1013,10 +1013,14 @@ void PropertyEditor::refresh_validation_summary() {
       }
     }
   }
+  const bool chinese =
+      gmp::l10n::current_language() == gmp::l10n::Language::Chinese;
   validation_summary_label_->setText(
-      rows.isEmpty()
-          ? "No validation issues."
-          : QString("%1 issue(s) found").arg(rows.size()));
+      rows.isEmpty() ? (chinese ? QString::fromUtf8("无校验问题。")
+                                : QString("No validation issues."))
+                     : (chinese ? QString::fromUtf8("发现 %1 个问题")
+                                : QString("%1 issue(s) found"))
+                           .arg(rows.size()));
   if (rows.isEmpty()) {
     validation_table_->setVisible(false);
     if (validation_goto_btn_) {

@@ -165,7 +165,10 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* model_form = new QFormLayout(model_box);
   model_selector_ = new QComboBox();
   model_selector_->setObjectName("gmshModelSelector");
-  model_selector_->setPlaceholderText("No geometry loaded");
+  model_selector_->setPlaceholderText(
+      l10n::current_language() == l10n::Language::Chinese
+          ? QString::fromUtf8("未加载几何")
+          : QStringLiteral("No geometry loaded"));
   tune_gmsh_combo(model_selector_, 180, 240);
   geo_path_ = new QLineEdit(this);  // 持久化导入路径，不再作为只读展示控件。
   geo_path_->hide();
@@ -235,7 +238,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   use_sample_box_->setChecked(true);
   connect(use_sample_box_, &QCheckBox::toggled, this,
           [this](bool) { update_geometry_controls(); });
-  geo_form->addRow("", use_sample_box_);
+  // 整行跨列放置，使复选框与下方 "Size X/Y/Z" 标签列左对齐
+  // （addRow("", w) 会把 w 放进第二列，视觉上右缩进一个标签列）。
+  geo_form->addRow(use_sample_box_);
 
   size_x_ = new QDoubleSpinBox();
   size_x_->setRange(0.01, 1000.0);

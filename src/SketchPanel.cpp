@@ -28,16 +28,20 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   management_layout->setSpacing(6);
 
   // 管理态页内标题/描述已删除（P0 审计 C1）：窗口标题已是 Sketch Editor。
+  // 布局与其他模块页同构：顶部左对齐小按钮行 + 列表 stretch 撑满 + 底部五键行。
   auto* new_btn = new QPushButton("New Sketch", management_box_);
   new_btn->setObjectName("newSketchButton");
   new_btn->setIcon(gmp::icons::get("new_sketch"));
-  auto* open_edit_btn = new QPushButton("Open Edit", management_box_);
-  open_edit_btn->setObjectName("openSketchEditButton");
-  open_edit_btn->setIcon(gmp::icons::get("open_edit"));
-  open_edit_btn->setToolTip(
-      "Open the selected sketch for editing (2D view; drawing tools land in WS1).");
-  management_layout->addWidget(new_btn);
-  management_layout->addWidget(open_edit_btn);
+  auto* open_root_btn = new QPushButton("Open Sketches Root", management_box_);
+  open_root_btn->setObjectName("gmpIcon_open_root");
+  open_root_btn->setIcon(gmp::icons::get("open_root"));
+  open_root_btn->setToolTip("Select the Sketches root node in the model tree.");
+  auto* top_row = new QHBoxLayout();
+  top_row->setContentsMargins(0, 0, 0, 0);
+  top_row->addWidget(new_btn);
+  top_row->addWidget(open_root_btn);
+  top_row->addStretch(1);
+  management_layout->addLayout(top_row);
 
   management_layout->addWidget(
       new QLabel("Current entries:", management_box_));
@@ -46,8 +50,14 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   list_->setMinimumHeight(90);
   list_->setAlternatingRowColors(true);
   list_->setToolTip("Double click a sketch to open the 2D editor.");
-  management_layout->addWidget(list_);
+  management_layout->addWidget(list_, 1);
 
+  auto* open_selected_btn =
+      new QPushButton("Open Selected Sketch", management_box_);
+  open_selected_btn->setObjectName("openSketchSelectedButton");
+  open_selected_btn->setIcon(gmp::icons::get("open_edit"));
+  open_selected_btn->setToolTip(
+      "Open the selected sketch for editing (2D view; drawing tools land in WS1).");
   auto* rename_btn = new QPushButton("Rename", management_box_);
   rename_btn->setObjectName("gmpIcon_rename");
   rename_btn->setIcon(gmp::icons::get("rename"));
@@ -62,13 +72,15 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   refresh_btn->setIcon(gmp::icons::get("refresh"));
   auto* row = new QHBoxLayout();
   row->setContentsMargins(0, 0, 0, 0);
+  row->addWidget(open_selected_btn);
   row->addWidget(rename_btn);
   row->addWidget(duplicate_btn);
   row->addWidget(remove_btn);
   row->addStretch(1);
   row->addWidget(refresh_btn);
   management_layout->addLayout(row);
-  layout->addWidget(management_box_);
+  // stretch(1) 交给管理态列表区，让列表撑满模块页剩余高度。
+  layout->addWidget(management_box_, 1);
 
   // ---- WS1 编辑工具区 (默认隐藏, set_editing(true) 时显示) ----
   edit_box_ = new QWidget(this);
@@ -298,11 +310,9 @@ SketchPanel::SketchPanel(QWidget* parent) : QWidget(parent) {
   edit_box_->setVisible(false);
   layout->addWidget(edit_box_);
 
-  layout->addStretch(1);
-
   connect(new_btn, &QPushButton::clicked, this,
           &SketchPanel::new_sketch_requested);
-  connect(open_edit_btn, &QPushButton::clicked, this,
+  connect(open_selected_btn, &QPushButton::clicked, this,
           &SketchPanel::open_edit_requested);
   connect(rename_btn, &QPushButton::clicked, this,
           &SketchPanel::rename_requested);

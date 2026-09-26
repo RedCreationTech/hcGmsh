@@ -1668,7 +1668,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "Assembly",
       module_assembly_list_,
       "No assembly instances yet.",
-      "instance",
+      "Assembly Instance",
       {
           {"Open Assembly Root", [this]() {
              if (auto* root = find_root_item("Assembly")) {
@@ -1981,6 +1981,15 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
           });
   connect(sketch_panel_, &SketchPanel::refresh_requested, this,
           [this]() { refresh_module_pages(); });
+  if (auto* open_root = sketch_panel_->findChild<QPushButton*>(
+          "gmpIcon_open_root")) {
+    connect(open_root, &QPushButton::clicked, this, [this]() {
+      if (auto* root = find_root_item("Sketches")) {
+        model_tree_->setCurrentItem(root);
+        root->setExpanded(true);
+      }
+    });
+  }
   // 编辑工具区接线: 工具/约束/尺寸 -> 视口; 视口回调 -> 面板/持久化
   connect(sketch_panel_, &SketchPanel::tool_selected, this, [this](int tool) {
     if (viewer_) {
@@ -6449,13 +6458,18 @@ void MainWindow::refresh_module_node_list(QListWidget* list,
 }
 
 QString MainWindow::build_step_sequence_preview() const {
+  const bool chinese =
+      l10n::current_language() == l10n::Language::Chinese;
   auto* root = find_root_item("Steps");
   if (!root || root->childCount() == 0) {
-    return "No step blocks yet.";
+    return chinese ? QString::fromUtf8("暂无分析步。")
+                   : QString("No step blocks yet.");
   }
   QStringList lines;
-  lines << "Executioner uses the first step only.";
-  lines << "Configured sequence:";
+  lines << (chinese ? QString::fromUtf8("执行器只使用第一个分析步；其余仅供检查")
+                    : QString("Executioner uses the first step only."));
+  lines << (chinese ? QString::fromUtf8("已配置的序列:")
+                    : QString("Configured sequence:"));
   for (int i = 0; i < root->childCount(); ++i) {
     auto* child = root->child(i);
     if (!child) {
@@ -6466,7 +6480,8 @@ QString MainWindow::build_step_sequence_preview() const {
     const QString type = params.value("type", "Transient").toString();
     const QString dt = params.value("dt", "default").toString();
     const QString end_time = params.value("end_time", "default").toString();
-    lines << QString("%1) %2 | type=%3 dt=%4 end_time=%5")
+    lines << QString(chinese ? QString::fromUtf8("%1) %2 | 类型=%3 时间步=%4 结束时间=%5")
+                             : "%1) %2 | type=%3 dt=%4 end_time=%5")
                  .arg(i + 1)
                  .arg(child->text(0))
                  .arg(type)

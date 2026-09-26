@@ -37,6 +37,8 @@
 
 #include "gmp/ComboPopupFix.h"
 
+#include "gmp/L10n.h"
+
 #include "gmp/ArtifactDialog.h"
 #include "gmp/ApplicationProfile.h"
 #include "gmp/MooseSnapshot.h"
@@ -242,9 +244,9 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
     exec_path_->lineEdit()->setPlaceholderText(
         "Auto-detect MOOSE executable");
   }
-  auto* pick_exec = new QPushButton("Pick");
-  pick_exec->setIcon(gmp::icons::get("pick"));
-  pick_exec->setObjectName("gmpIcon_pick");
+  auto* pick_exec = new QPushButton("Browse...");
+  pick_exec->setIcon(gmp::icons::get("open_geometry"));
+  pick_exec->setObjectName("gmpIcon_browse");
   connect(pick_exec, &QPushButton::clicked, this, &MoosePanel::on_pick_exec);
   auto* exec_row = new QHBoxLayout();
   exec_row->addWidget(exec_path_);
@@ -255,9 +257,9 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
 
   input_path_ = new QLineEdit();
   input_path_->setPlaceholderText("Input file path (*.i)");
-  auto* pick_input = new QPushButton("Pick");
-  pick_input->setIcon(gmp::icons::get("pick"));
-  pick_input->setObjectName("gmpIcon_pick");
+  auto* pick_input = new QPushButton("Browse...");
+  pick_input->setIcon(gmp::icons::get("open_geometry"));
+  pick_input->setObjectName("gmpIcon_browse_2");
   connect(pick_input, &QPushButton::clicked, this, &MoosePanel::on_pick_input);
   auto* input_row = new QHBoxLayout();
   input_row->addWidget(input_path_);
@@ -268,9 +270,9 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
 
   workdir_path_ = new QLineEdit();
   workdir_path_->setPlaceholderText("Working directory (optional)");
-  auto* pick_workdir = new QPushButton("Pick");
-  pick_workdir->setIcon(gmp::icons::get("pick"));
-  pick_workdir->setObjectName("gmpIcon_pick");
+  auto* pick_workdir = new QPushButton("Browse...");
+  pick_workdir->setIcon(gmp::icons::get("open_geometry"));
+  pick_workdir->setObjectName("gmpIcon_browse_3");
   connect(pick_workdir, &QPushButton::clicked, this, &MoosePanel::on_pick_workdir);
   auto* workdir_row = new QHBoxLayout();
   workdir_row->addWidget(workdir_path_);
@@ -556,8 +558,13 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   custom_blocks_editor_ = new QPlainTextEdit();
   custom_blocks_editor_->setObjectName("mooseCustomBlocksEditor");
   custom_blocks_editor_->setPlaceholderText(
-      "Expert-only MOOSE blocks, for example:\n"
-      "[Checkpoint]\n  execute_on = 'timestep_end'\n[]");
+      l10n::current_language() == l10n::Language::Chinese
+          ? QString::fromUtf8(
+                "仅限专家的 MOOSE 块，例如:\n"
+                "[Checkpoint]\n  execute_on = 'timestep_end'\n[]")
+          : QString(
+                "Expert-only MOOSE blocks, for example:\n"
+                "[Checkpoint]\n  execute_on = 'timestep_end'\n[]"));
   connect(custom_blocks_editor_, &QPlainTextEdit::textChanged, this, [this]() {
     custom_blocks_text_ = custom_blocks_editor_->toPlainText();
   });
@@ -1178,7 +1185,7 @@ void MoosePanel::reset_project_state() {
   log_job_id_.clear();
   download_job_id_.clear();
   if (sim_status_label_) {
-    sim_status_label_->setText(QStringLiteral("(no job submitted)"));
+    sim_status_label_->setText(l10n::tr("(no job submitted)"));
   }
   set_workflow_preflight(false, {});
 }
@@ -1740,7 +1747,7 @@ void MoosePanel::on_submit_job() {
                               ? sim_project_->placeholderText()
                               : sim_project_->text().trimmed();
   sim_client_->set_base_url(server);
-  sim_status_label_->setText("submitting...");
+  sim_status_label_->setText(l10n::tr("submitting..."));
   append_log("Submitting snapshot via LIMS Facade: " + server);
   append_log("  snapshot: " + dir + " project: " + project);
   sim_client_->submit_snapshot(dir, project);
@@ -1826,7 +1833,7 @@ void MoosePanel::download_remote_file(const QString& job_id,
 void MoosePanel::on_sim_submit_finished(bool ok, const QJsonObject& body,
                                         const QString& error) {
   if (!ok) {
-    sim_status_label_->setText("submit failed");
+    sim_status_label_->setText(l10n::tr("submit failed"));
     append_log("Job submit failed: " + error);
     return;
   }

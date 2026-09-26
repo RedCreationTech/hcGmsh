@@ -11,9 +11,10 @@ class QPushButton;
 
 namespace gmp {
 
-// 草图模块 v1 骨架面板: 草图列表 + 新建/打开编辑/重命名/复制/删除/刷新。
-// 面板本身不碰模型树与视口, 具体行为由 MainWindow 连接信号实现,
-// 交互模式参照 make_module_node_page 生成的模块页。
+// 草图模块面板（2026-09-25 管理态布局重做）: 顶部按钮行（新建草图/
+// 打开草图根节点）+ 草图列表(stretch 撑满) + 底部五键行（打开所选草图/
+// 重命名/复制/删除/刷新），与 make_module_node_page 模块页同构。
+// 面板本身不碰模型树与视口, 具体行为由 MainWindow 连接信号实现。
 //
 // WS1: 追加"编辑工具区"(默认隐藏, set_editing(true) 进入编辑时显示):
 // 工具按钮组 (Select/Line/Circle/Arc/Delete/Rectangle, 与 VtkViewer 的

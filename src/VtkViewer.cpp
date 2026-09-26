@@ -233,9 +233,12 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
     tab_page_layout->setSpacing(0);
     // 窗体高度统一处理：页内容包一层滚动区（widgetResizable + NoFrame），
     // 空间不足时页内滚动，不再压扁控件；滚动只此一层。
+    // 横向永不滚动：页内宽内容（如 Mesh 页长组名）靠控件自身的最小宽度
+    // 约束收敛，避免水平滚动条把整页内容顶出视口右缘。
     auto* scroll = new QScrollArea(tab);
     scroll->setWidgetResizable(true);
     scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
     auto* content = new QWidget(scroll);
     auto* tab_layout = new QVBoxLayout(content);
     tab_layout->setContentsMargins(0, 0, 0, 0);
@@ -366,6 +369,10 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   connect(mesh_dim_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this](int) { update_mesh_pipeline(); });
   mesh_group_ = new QComboBox();
+  // 组名可能很长：QComboBox::minimumSizeHint 默认按最长条目计算，会把页
+  // 布局最小宽度撑破视口。限定最小内容长度收敛最小宽度，完整文本仍可在
+  // 下拉弹窗中查看（ComboPopupFix 按内容定宽、不省略）。
+  mesh_group_->setMinimumContentsLength(14);
   AttachComboPopupFix(mesh_group_);
   connect(mesh_group_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this](int) { update_mesh_pipeline(); });
@@ -375,12 +382,16 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
        {new QLabel("Dim"), mesh_dim_, new QLabel("Group"), mesh_group_});
 
   mesh_entity_ = new QComboBox();
+  // 同 mesh_group_：收敛 minimumSizeHint，防长条目撑破页最小宽度。
+  mesh_entity_->setMinimumContentsLength(10);
   AttachComboPopupFix(mesh_entity_);
   connect(mesh_entity_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this](int) { update_mesh_pipeline(); });
   vadd(mesh_layout, {new QLabel("Entity"), mesh_entity_});
 
   mesh_type_ = new QComboBox();
+  // 同 mesh_group_：收敛 minimumSizeHint，防长条目撑破页最小宽度。
+  mesh_type_->setMinimumContentsLength(14);
   AttachComboPopupFix(mesh_type_);
   connect(mesh_type_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this](int) { update_mesh_pipeline(); });
