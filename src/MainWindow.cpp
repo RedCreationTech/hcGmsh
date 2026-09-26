@@ -836,9 +836,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   table_time_step->setObjectName("resultTableTimeStep");
   table_time_step->setRange(0, 0);
   table_time_step->setEnabled(false);
-  table_time_step->setPrefix(l10n::tr("Time step") + " ");
   table_time_step->setToolTip(
       "The table shows entity values at this viewport time step.");
+  // 前缀(prefix)在样式表渲染下会导致文字不垂直居中；改为独立标签。
+  auto* table_time_step_label =
+      new QLabel(l10n::tr("Time step"), table_page);
   auto* table_latest_btn = new QPushButton("Latest", table_page);
   table_latest_btn->setIcon(gmp::icons::get("latest"));
   table_latest_btn->setObjectName("resultTableLatestStep");
@@ -847,6 +849,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   auto* table_status = new QLabel("No data", table_page);
   table_open_row->addWidget(table_open_btn);
   table_open_row->addWidget(table_refresh_btn);
+  table_open_row->addWidget(table_time_step_label);
   table_open_row->addWidget(table_time_step);
   table_open_row->addWidget(table_latest_btn);
   table_open_row->addWidget(table_status, 1);
