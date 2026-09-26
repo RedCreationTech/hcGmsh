@@ -59,9 +59,10 @@ inline QString app_style_sheet() {
       "QPushButton[gmpDestructive=\"true\"] { color: #b42318; "
       "border: 1px solid #e4b6b2; }"
       // 统一控件高度：按钮与数值/文本输入、下拉同一基线（用户反馈
-      // 数值框偏矮、警示按钮高度不一致，根源都是无边一度量基线）。
-      "QPushButton { padding: 4px 12px; min-height: 24px; }"
-      "QAbstractSpinBox, QLineEdit, QComboBox { min-height: 24px; }");
+      // 数值框偏矮、警示按钮高度不一致，根源都是无边一度量基线；
+      // 2026-09-26 按反馈整体收矮一档）。
+      "QPushButton { padding: 3px 10px; min-height: 18px; }"
+      "QAbstractSpinBox, QLineEdit, QComboBox { min-height: 22px; }");
 }
 
 } // namespace gmp
