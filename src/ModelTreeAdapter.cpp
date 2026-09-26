@@ -21,10 +21,17 @@ ModelTreeAdapter::ModelTreeAdapter(QTreeWidget* tree)
     if (!root) {
       continue;
     }
-    root_names_.append(root->text(0));
-    const core::ObjectId id = root_id(root->text(0));
+    // 根显示文本随语言翻译，文档对象名/id 以 kKindRole 数据键为准
+    // （无 kind 时回退文本，兼容旧数据）。
+    const QString root_name = [&]() {
+      const QString kind =
+          root->data(0, PropertyEditor::kKindRole).toString();
+      return kind.isEmpty() ? root->text(0) : kind;
+    }();
+    root_names_.append(root_name);
+    const core::ObjectId id = root_id(root_name);
     document_.addObject(std::make_unique<core::ProjectObject>(
-        root->text(0), root->text(0), id));
+        root_name, root_name, id));
     root->setData(0, PropertyEditor::kObjectIdRole, id.toString());
   }
 }
