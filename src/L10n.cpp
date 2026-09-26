@@ -1229,5 +1229,41 @@ QString tr(const QString& text) {
   return translate_text(text, current_language());
 }
 
+QString translate_moose_type(const QString& type) {
+  if (type.isEmpty() || current_language() != Language::Chinese) {
+    return type;
+  }
+  // 第三批 3-3: 常见 MOOSE 类名的显示层中文化；仅显示用，数据层 type
+  // 仍保持英文。未知类型原样返回。
+  static const QHash<QString, QString> moose_type_zh = {
+      {"GenericConstantMaterial", "常值材料"},
+      {"AbaqusCDP", "CDP 损伤塑性材料"},
+      {"ParsedFunction", "解析函数"},
+      {"PiecewiseLinear", "分段线性函数"},
+      {"ConstantFunction", "常值函数"},
+      {"NeumannBC", "诺依曼边界条件"},
+      {"DirichletBC", "狄利克雷边界条件"},
+      {"FunctionDirichletBC", "函数狄利克雷边界条件"},
+      {"BodyForce", "体力"},
+      {"MatDiffusion", "材料扩散"},
+      {"TimeDerivative", "时间导数"},
+      {"Diffusion", "扩散"},
+      {"Pressure", "面压力"},
+      {"SolidSection", "实体截面"},
+      {"Transient", "瞬态"},
+      {"Steady", "稳态"},
+      {"QuasiStatic", "准静态"},
+      {"SMP", "对称逐次超松弛"},
+      {"IterationAdaptiveDT", "自适应迭代时间步"},
+      {"ConstantDT", "恒定时间步"},
+      {"ElementAverageValue", "单元平均值"},
+      {"SideAverageValue", "侧面平均值"},
+      {"PointValue", "点值"},
+      {"NodalValue", "节点值"},
+  };
+  const auto it = moose_type_zh.constFind(type);
+  return it != moose_type_zh.constEnd() ? it.value() : type;
+}
+
 }  // namespace l10n
 }  // namespace gmp

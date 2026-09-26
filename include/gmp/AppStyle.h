@@ -75,7 +75,17 @@ inline QString app_style_sheet() {
       // Generation Report）：小字号、窄内边距，与外层 workspace 页签
       // 拉开视觉层级。
       "QTabWidget[gmpNestedTabs=\"true\"] > QTabBar::tab { "
-      "padding: 2px 8px; font-size: 11px; }");
+      "padding: 2px 8px; font-size: 11px; }"
+      // 页签统一：共享属性编辑器（模块窗）与浮动表单收敛到同一套
+      // 页签观感（左对齐、细边框 pane、统一内边距、选中强调蓝）。
+      "QTabWidget::tab-bar { alignment: left; }"
+      "QTabWidget::pane { border: 1px solid #d5dbe3; top: -1px; }"
+      "QTabBar::tab { padding: 4px 12px; }"
+      "QTabBar::tab:selected { color: #2f6fed; }"
+      // 禁用态统一：文字统一灰（边框保留原样），消除禁用灰字/黑字/
+      // 浅灰按钮的多种表达。
+      "QPushButton:disabled, QLineEdit:disabled, QComboBox:disabled, "
+      "QAbstractSpinBox:disabled { color: #9aa4b0; }");
 }
 
 } // namespace gmp

@@ -111,6 +111,10 @@
 #endif
 
 namespace gmp {
+namespace l10n {
+// 第三批 3-3: 定义在 L10n.cpp（显示层 MOOSE 类型名中文化）
+QString translate_moose_type(const QString& type);
+}
 
 namespace {
 
@@ -6458,7 +6462,7 @@ void MainWindow::refresh_module_node_list(QListWidget* list,
         child->data(0, PropertyEditor::kParamsRole).toMap();
     const QString type = params.value("type").toString();
     if (!type.isEmpty()) {
-      label += QString(" (%1)").arg(type);
+      label += QString(" (%1)").arg(l10n::translate_moose_type(type));
     }
     auto* item = new QListWidgetItem(label, list);
     item->setData(Qt::UserRole, i);
