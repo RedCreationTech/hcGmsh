@@ -65,7 +65,12 @@ inline QString app_style_sheet() {
       // 不要加 padding/子控件规则——Qt 样式表会因此破坏其绘制
       // （底框丢失/文字偏上），9f94870 以来的验证结论。
       "QPushButton { padding: 3px 10px; min-height: 18px; }"
-      "QAbstractSpinBox, QLineEdit, QComboBox { min-height: 22px; }");
+      "QAbstractSpinBox, QLineEdit, QComboBox { min-height: 22px; }"
+      // 列表统一样式（E2）：行内边距 + 选中态，选中色与主窗树/表既有
+      // 选中蓝体系 (#dbe7ff/#1e3a5f) 保持一致；斑马纹由代码侧统一关闭。
+      "QListWidget::item, QTreeWidget::item { padding: 3px 4px; }"
+      "QListWidget::item:selected, QTreeWidget::item:selected { "
+      "background: #dbe7ff; color: #1e3a5f; }");
 }
 
 } // namespace gmp

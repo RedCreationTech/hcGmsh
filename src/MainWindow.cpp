@@ -478,7 +478,6 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     auto* list = new QListWidget(panel);
     list->setSelectionMode(QAbstractItemView::SingleSelection);
     list->setMinimumHeight(120);
-    list->setAlternatingRowColors(true);
     list->setToolTip("Double click item to jump to model tree.");
     list_out = list;
 
@@ -1296,7 +1295,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "Manage part-level entities. Use Part Features below to turn a sketch into 3D (extrude, revolve, loft, sweep); the result is meshed and shown in the viewport.",
       "Parts",
       module_part_list_,
-      "No parts yet. Create one from this module or Gmsh panel.",
+      "No parts yet. Click 'New Part' above to create one.",
       "part",
       {
           {"Open Parts Root",
@@ -1609,7 +1608,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "Create material definitions, tune constitutive laws, and keep properties ready for sections.",
       "Materials",
       module_material_list_,
-      "No materials yet.",
+      "No materials yet. Click 'New Material' above to create one.",
       "material",
       {
           {"Open Materials Root", [this]() {
@@ -1640,7 +1639,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "Create section assignments to bind materials and options to part regions or sets.",
       "Sections",
       module_section_list_,
-      "No sections yet.",
+      "No sections yet. Click 'New Solid Section' above to create one.",
       "section",
       {
           {"Open Sections Root", [this]() {
@@ -1670,7 +1669,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "Combine and instantiate parts into assembly-level units, then map mesh/topology for job-level binding.",
       "Assembly",
       module_assembly_list_,
-      "No assembly instances yet.",
+      "No assembly instances yet. Click 'Create Instance' above to create one.",
       "Assembly Instance",
       {
           {"Open Assembly Root", [this]() {
@@ -1693,7 +1692,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "Create analysis steps, control time integration and execution options in the current model setup.",
       "Steps",
       module_step_list_,
-      "No steps yet. Add at least one step before run.",
+      "No steps yet. Click 'Add Static Step' above to create one.",
       "step",
       {
           {"Open Steps Root", [this]() {
@@ -1734,7 +1733,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "Setup contact, ties, and other coupling behaviors between sets/parts.",
       "Interactions",
       module_interaction_list_,
-      "No interactions yet.",
+      "No interactions yet. Click 'Add Interaction' above to create one.",
       "interaction",
       {
           {"Open Interactions Root", [this]() {
@@ -1761,7 +1760,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "Create loads, body forces, pressure and thermal sources and map them to mesh groups.",
       "Loads",
       module_load_list_,
-      "No loads yet.",
+      "No loads yet. Click 'Add Generic Load' above to create one.",
       "load",
       {
           {"Open Loads Root", [this]() {
@@ -6435,7 +6434,10 @@ void MainWindow::refresh_module_node_list(QListWidget* list,
   list->clear();
   auto* root = find_root_item(root_name);
   if (!root || root->childCount() == 0) {
-    list->addItem(empty_text);
+    // E1/E2 空态：灰色不可选占位，与正常条目区分（样式修复第二批）。
+    auto* placeholder = new QListWidgetItem(empty_text, list);
+    placeholder->setFlags(Qt::NoItemFlags);
+    placeholder->setForeground(QColor("#8a94a6"));
     return;
   }
   for (int i = 0; i < root->childCount(); ++i) {
@@ -6500,18 +6502,23 @@ QString MainWindow::build_step_sequence_preview() const {
 }
 
 void MainWindow::refresh_module_pages() {
-  refresh_module_node_list(module_part_list_, "Parts", "No parts yet.");
-  refresh_module_node_list(module_material_list_, "Materials", "No materials yet.");
-  refresh_module_node_list(module_section_list_, "Sections", "No sections yet.");
+  refresh_module_node_list(module_part_list_, "Parts",
+                           "No parts yet. Click 'New Part' above to create one.");
+  refresh_module_node_list(module_material_list_, "Materials",
+                           "No materials yet. Click 'New Material' above to create one.");
+  refresh_module_node_list(module_section_list_, "Sections",
+                           "No sections yet. Click 'New Solid Section' above to create one.");
   refresh_module_node_list(module_assembly_list_, "Assembly",
-                           "No assembly instances yet.");
-  refresh_module_node_list(module_step_list_, "Steps", "No steps yet.");
+                           "No assembly instances yet. Click 'Create Instance' above to create one.");
+  refresh_module_node_list(module_step_list_, "Steps",
+                           "No steps yet. Click 'Add Static Step' above to create one.");
   refresh_module_node_list(module_interaction_list_, "Interactions",
-                          "No interactions yet.");
-  refresh_module_node_list(module_load_list_, "Loads", "No loads yet.");
+                           "No interactions yet. Click 'Add Interaction' above to create one.");
+  refresh_module_node_list(module_load_list_, "Loads",
+                           "No loads yet. Click 'Add Generic Load' above to create one.");
   if (sketch_panel_) {
     refresh_module_node_list(sketch_panel_->sketch_list(), "Sketches",
-                            "No sketches yet.");
+                            "No sketches yet. Click 'New Sketch' above to create one.");
   }
   if (part_feature_panel_) {
     QStringList sketch_names;
@@ -8337,7 +8344,6 @@ void MainWindow::show_workflow_validation_report(const QVariantList& issues) {
   table->setColumnCount(4);
   table->setHeaderLabels({"Severity", "Object", "Field", "Message"});
   table->setRootIsDecorated(false);
-  table->setAlternatingRowColors(true);
   for (const auto& value : issues) {
     const QVariantMap issue = value.toMap();
     auto* row = new QTreeWidgetItem(table);

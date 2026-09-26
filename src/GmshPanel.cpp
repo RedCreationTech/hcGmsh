@@ -3319,7 +3319,8 @@ void GmshPanel::update_entity_list() {
     return;
   }
   if (!gmsh_ready_) {
-    entity_list_->setPlainText("No model.");
+    entity_list_->setPlainText(
+        "No model yet. Click 'Use Sample Box' or 'Open Geometry' to load one.");
     return;
   }
   const int dim_filter = entity_dim_ ? entity_dim_->currentData().toInt() : -1;
@@ -3359,7 +3360,8 @@ void GmshPanel::update_entity_list() {
   entity_list_->setPlainText(lines.join("\n"));
 #else
   if (entity_list_) {
-    entity_list_->setPlainText("No model.");
+    entity_list_->setPlainText(
+        "No model yet. Click 'Use Sample Box' or 'Open Geometry' to load one.");
   }
 #endif
 }
@@ -3534,7 +3536,11 @@ void GmshPanel::update_physical_group_table() {
   }
   if (phys_group_feedback_) {
     phys_group_feedback_->setText(l10n::tr(
-        "Group tag stays unchanged when its member entities are updated."));
+        groups.empty()
+            ? "No physical groups yet. Use 'Use Sample Box' or 'Open "
+              "Geometry' to load a model."
+            : "Group tag stays unchanged when its member entities are "
+              "updated."));
   }
 
   const QString current =
@@ -3623,7 +3629,8 @@ void GmshPanel::update_field_list() {
     return;
   }
   if (!gmsh_ready_) {
-    field_list_->setPlainText("No model.");
+    field_list_->setPlainText(
+        "No model yet. Click 'Use Sample Box' or 'Open Geometry' to load one.");
     return;
   }
   std::vector<int> tags;
@@ -3637,13 +3644,15 @@ void GmshPanel::update_field_list() {
                  .arg(QString::fromStdString(type));
   }
   if (lines.isEmpty()) {
-    field_list_->setPlainText("No fields.");
+    field_list_->setPlainText(
+        "No fields yet. Fields added for mesh sizing will be listed here.");
   } else {
     field_list_->setPlainText(lines.join("\n"));
   }
 #else
   if (field_list_) {
-    field_list_->setPlainText("No fields.");
+    field_list_->setPlainText(
+        "No fields yet. Fields added for mesh sizing will be listed here.");
   }
 #endif
 }

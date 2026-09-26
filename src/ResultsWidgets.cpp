@@ -13,6 +13,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QHeaderView>
 #include <QImage>
 #include <QInputDialog>
@@ -89,7 +90,6 @@ QString translated_preview_name(const QString& name) {
 ResultsTableWidget::ResultsTableWidget(QWidget* parent) : QWidget(parent) {
   setObjectName("resultsDataTablePanel");
   auto* layout = new QVBoxLayout(this);
-  auto* filters = new QHBoxLayout();
   metadata_ = new QLabel("No data", this);
   metadata_->setObjectName("resultsTableMetadata");
   metadata_->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -109,23 +109,37 @@ ResultsTableWidget::ResultsTableWidget(QWidget* parent) : QWidget(parent) {
   special_->addItems({"All values", "Finite", "NaN", "+Inf", "-Inf"});
   for (auto* edit : {entity_min_, entity_max_, value_min_, value_max_}) {
     edit->setMaximumWidth(92);
+    edit->setPlaceholderText("0");
   }
-  entity_min_->setPlaceholderText("Entity min");
-  entity_max_->setPlaceholderText("Entity max");
-  value_min_->setPlaceholderText("Value min");
-  value_max_->setPlaceholderText("Value max");
-  filters->addWidget(new QLabel("Column", this));
-  filters->addWidget(column_);
-  filters->addWidget(entity_min_);
-  filters->addWidget(entity_max_);
-  filters->addWidget(value_min_);
-  filters->addWidget(value_max_);
-  filters->addWidget(special_);
+  // 第二行：四个输入框上方的持久微型标签（输入后仍可辨识各框用途，
+  // 替代原仅靠 placeholder 的方案）。列与下方输入框按 QGridLayout 对齐。
+  const bool zh = l10n::current_language() == l10n::Language::Chinese;
+  auto* filters = new QGridLayout();
+  filters->setContentsMargins(0, 0, 0, 0);
+  filters->setHorizontalSpacing(6);
+  filters->addWidget(new QLabel(l10n::tr("Column"), this), 0, 0);
+  auto* entity_min_label =
+      new QLabel(zh ? QString::fromUtf8("实体#从") : "Entity # from", this);
+  auto* entity_max_label =
+      new QLabel(zh ? QString::fromUtf8("实体#到") : "Entity # to", this);
+  auto* value_min_label =
+      new QLabel(zh ? QString::fromUtf8("数值从") : "Value from", this);
+  auto* value_max_label =
+      new QLabel(zh ? QString::fromUtf8("数值到") : "Value to", this);
+  filters->addWidget(entity_min_label, 0, 1);
+  filters->addWidget(entity_max_label, 0, 2);
+  filters->addWidget(value_min_label, 0, 3);
+  filters->addWidget(value_max_label, 0, 4);
+  filters->addWidget(column_, 1, 0);
+  filters->addWidget(entity_min_, 1, 1);
+  filters->addWidget(entity_max_, 1, 2);
+  filters->addWidget(value_min_, 1, 3);
+  filters->addWidget(value_max_, 1, 4);
+  filters->addWidget(special_, 0, 5, 2, 1);
   auto* clear = new QPushButton("Clear filters", this);
   clear->setIcon(gmp::icons::get("clear_filters"));
   clear->setObjectName("gmpIcon_clear_filters");
-  filters->addWidget(clear);
-  filters->addStretch(1);
+  filters->addWidget(clear, 0, 6, 2, 1);
   layout->addLayout(filters);
 
   table_ = new QTableWidget(this);
@@ -314,15 +328,22 @@ void ResultsTableWidget::rebuild() {
       table_->setItem(display - begin, column, item);
     }
   }
-  metadata_->setText(
-      QString("%1: %2  |  %3: %4  |  %5  |  %6: %7  |  %8 / %9 %10")
-          .arg(l10n::tr("Source"), snapshot_.value("source").toString(),
-               l10n::tr("Field"), snapshot_.value("field").toString(),
-               l10n::tr(snapshot_.value("association").toString()),
-               l10n::tr("Time"), snapshot_.value("time").toString())
-          .arg(visible_rows_.size())
-          .arg(rows_.size())
-          .arg(l10n::tr("rows")));
+  // 信息行：收集非空片段后用 " | " 拼接，association 为空时不再出现
+  // 连续双竖线。
+  QStringList segments;
+  segments << QString("%1: %2")
+                  .arg(l10n::tr("Source"), snapshot_.value("source").toString());
+  segments << QString("%1: %2")
+                  .arg(l10n::tr("Field"), snapshot_.value("field").toString());
+  const QString association = snapshot_.value("association").toString();
+  if (!association.isEmpty()) segments << l10n::tr(association);
+  segments << QString("%1: %2")
+                  .arg(l10n::tr("Time"), snapshot_.value("time").toString());
+  segments << QString("%1 / %2 %3")
+                  .arg(visible_rows_.size())
+                  .arg(rows_.size())
+                  .arg(l10n::tr("rows"));
+  metadata_->setText(segments.join(" | "));
   page_status_->setText(QString("/ %1").arg(pages));
   // Stretch 模式下内容定宽无意义，去掉以免覆盖列宽策略。
 }

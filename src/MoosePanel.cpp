@@ -320,7 +320,8 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
   boundary_list_ = new QPlainTextEdit();
   boundary_list_->setReadOnly(true);
   boundary_list_->setMaximumHeight(120);
-  boundary_list_->setPlaceholderText("No boundary groups detected yet.");
+  boundary_list_->setPlaceholderText(
+      "No boundary groups yet. Generate or sync a mesh first.");
   groups_layout->addWidget(boundary_list_);
   auto* bc_btn = new QPushButton("Insert BCs From Groups");
   bc_btn->setIcon(gmp::icons::get("insert_bcs_from_groups"));

@@ -25,6 +25,7 @@
 #include <QDialog>
 #include <QFileDialog>
 #include <QPlainTextEdit>
+#include <QColor>
 #include <QFont>
 #include <QSignalBlocker>
 #include <QTimer>
@@ -833,7 +834,19 @@ void PropertyEditor::update_group_widget_for_kind(const QString& kind) {
        (kind == "Loads" &&
         params.value("type").toString() == "Pressure"));
   QStringList source = use_boundary ? boundary_groups_ : volume_groups_;
-  groups_list_->addItems(source);
+  if (source.isEmpty()) {
+    // E3 空列表占位：灰色不可选引导文案，仅 count==0 时插入，
+    // 非空清单无占位，不影响 groups_list_->count() 类断言。
+    auto* placeholder = new QListWidgetItem(
+        l10n::tr(use_boundary
+                     ? "No boundary groups yet. Sync the mesh first."
+                     : "No volume groups yet. Sync the mesh first."),
+        groups_list_);
+    placeholder->setFlags(Qt::NoItemFlags);
+    placeholder->setForeground(QColor("#8a94a6"));
+  } else {
+    groups_list_->addItems(source);
+  }
   if (groups_hint_) {
     groups_hint_->setText(l10n::tr(
         use_boundary
