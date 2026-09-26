@@ -1209,7 +1209,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   job_manager_scroll->setWidgetResizable(true);
   job_manager_scroll->setFrameShape(QFrame::NoFrame);
   job_manager_scroll->setWidget(job_manager_page);
-  job_tabs->addTab(job_manager_scroll, "Jobs");
+  job_tabs->addTab(job_manager_scroll, "Job List");
   job_tabs->addTab(job_page, "MOOSE Setup");
   job_layout->addWidget(job_tabs, 1);
 
@@ -3661,7 +3661,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                           .arg(total)
                     : QString("%1 %2 (%3: %4)")
                           .arg(field, l10n::tr("history ready"),
-                               l10n::tr("Steps"))
+                               l10n::tr("Time Steps"))
                           .arg(total),
                 completed < total ? 0 : 3000);
             QCoreApplication::processEvents(QEventLoop::ExcludeUserInputEvents);
@@ -6205,7 +6205,12 @@ void MainWindow::build_model_tree() {
             model_tree_->setCurrentItem(item);
             QMenu menu(this);
             if (!item->parent()) {
-              const QString kind = item->text(0);
+              const QString kind =
+                  item->data(0, PropertyEditor::kKindRole)
+                      .toString()
+                      .isEmpty()
+                      ? item->text(0)
+                      : item->data(0, PropertyEditor::kKindRole).toString();
               if (kind == "Jobs" || kind == "Results") {
                 auto* open_action = menu.addAction(
                     kind == "Jobs" ? "Open Job Workspace"
@@ -6595,8 +6600,13 @@ QString MainWindow::context_root_for_module(int module_index) const {
     case 2: {
       // Property 直接跟随当前树对象所属根节点。
       auto* current = model_tree_ ? model_tree_->currentItem() : nullptr;
-      return current && current->parent() ? current->parent()->text(0)
-                                           : QString();
+      if (!current || !current->parent()) {
+        return QString();
+      }
+      // 根节点显示文本随语言翻译，返回 kind 数据键（无 kind 时回退文本）。
+      const QString kind =
+          current->parent()->data(0, PropertyEditor::kKindRole).toString();
+      return kind.isEmpty() ? current->parent()->text(0) : kind;
     }
     default:
       return {};
@@ -6671,8 +6681,13 @@ void MainWindow::remember_active_object_for_module(int module_index) {
   }
   const QString expected_root = context_root_for_module(module_index);
   auto* current = model_tree_->currentItem();
-  if (expected_root.isEmpty() || !current || !current->parent() ||
-      current->parent()->text(0) != expected_root) {
+  if (expected_root.isEmpty() || !current || !current->parent()) {
+    return;
+  }
+  const QString current_root_kind =
+      current->parent()->data(0, PropertyEditor::kKindRole).toString();
+  if ((current_root_kind.isEmpty() ? current->parent()->text(0)
+                                   : current_root_kind) != expected_root) {
     return;
   }
   module_object_memory_.insert(module_index, current->text(0));
@@ -7326,6 +7341,11 @@ void MainWindow::refresh_tree_statuses() {
     bool has_incomplete = false;
     bool has_generated = false;
     bool all_success = root->childCount() > 0;
+    // 根节点显示文本随语言翻译，根级 kind 数据键从 kKindRole 取（无 kind
+    // 时回退文本，兼容旧数据）。
+    const QString root_kind =
+        root->data(0, PropertyEditor::kKindRole).toString();
+    const QString root_key = root_kind.isEmpty() ? root->text(0) : root_kind;
     for (int row = 0; row < root->childCount(); ++row) {
       auto* child = root->child(row);
       if (!child) {
@@ -7335,7 +7355,7 @@ void MainWindow::refresh_tree_statuses() {
           child->data(0, PropertyEditor::kParamsRole).toMap();
       const QString kind =
           child->data(0, PropertyEditor::kKindRole).toString().isEmpty()
-              ? root->text(0)
+              ? root_key
               : child->data(0, PropertyEditor::kKindRole).toString();
       const QStringList validation_issues =
           property_editor_ ? property_editor_->validate_params(kind, params)
@@ -7351,12 +7371,12 @@ void MainWindow::refresh_tree_statuses() {
       const QString normalized = raw.toLower();
       const QString path = params.value("path").toString();
       const bool missing_file =
-          (root->text(0) == "Mesh" || root->text(0) == "Results") &&
-          !path.isEmpty() && !QFileInfo::exists(path);
+          (root_key == "Mesh" || root_key == "Results") && !path.isEmpty() &&
+          !QFileInfo::exists(path);
       // W-01b：Section 子项引用的材料被删除/重命名时标记失效（仅显示层，
       // 不覆写 status 角色；材料恢复同名后自愈）。
       bool stale_section_ref = false;
-      if (root->text(0) == "Sections") {
+      if (root_key == "Sections") {
         const QString material =
             params.value("material").toString().trimmed();
         if (!material.isEmpty()) {
@@ -7476,7 +7496,7 @@ void MainWindow::refresh_tree_statuses() {
                      .arg(chinese ? "就绪" : "Ready")
                      .arg(count),
                  "status_success", chinese ? "对象已配置" : "Objects configured");
-    } else if (required_roots.contains(root->text(0))) {
+    } else if (required_roots.contains(root_key)) {
       set_status(root, chinese ? "缺失 (0)" : "Missing (0)",
                  "status_failed",
                  chinese ? "当前流程尚未配置此类对象"
@@ -8500,7 +8520,14 @@ void MainWindow::start_submit_workflow() {
 QTreeWidgetItem* MainWindow::find_root_item(const QString& name) const {
   for (int i = 0; i < model_tree_->topLevelItemCount(); ++i) {
     auto* root = model_tree_->topLevelItem(i);
-    if (root && root->text(0) == name) {
+    if (!root) {
+      continue;
+    }
+    // 根节点显示文本随语言翻译，数据查找以 kKindRole 为准；text(0) 仅作
+    // 兼容旧数据的回退。
+    const QString kind = root->data(0, PropertyEditor::kKindRole).toString();
+    if ((!kind.isEmpty() && kind == name) ||
+        (kind.isEmpty() && root->text(0) == name)) {
       return root;
     }
   }
@@ -10777,7 +10804,12 @@ void MainWindow::add_item_under_root(QTreeWidgetItem* root) {
   if (!root) {
     return;
   }
-  const QString kind = root->text(0);
+  // 根节点显示文本随语言翻译，kind 数据键以 kKindRole 为准（无 kind 时
+  // 回退文本）；否则新建子项的 kind/default_params 会被译名污染。
+  const QString kind = [&]() {
+    const QString k = root->data(0, PropertyEditor::kKindRole).toString();
+    return k.isEmpty() ? root->text(0) : k;
+  }();
   const QString base = kind.left(kind.size() - 1).toLower();
   QString name;
   if (!prompt_unique_child_name(root, QString("Add %1").arg(kind),
@@ -17550,7 +17582,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   pressure_params->item(pressure_boundary_row, 1)
                       ->setText("instance_plate");
-                  qApp->processEvents();
+                  // 校验刷新经事件队列传递，多轮 processEvents 确保
+                  // 内联标签与校验表都已更新后再断言（修时序竞态）。
+                  for (int flush = 0; flush < 5; ++flush) {
+                    qApp->processEvents();
+                    qApp->sendPostedEvents();
+                  }
                   const QString pressure_dimension_issue =
                       "boundary must reference an existing 2D Physical Group";
                   bool pressure_issue_row_found = false;

@@ -96,6 +96,17 @@ const QHash<QString, QString>& zh_dict() {
       {"Visualization", "可视化"},
       {"Results", "结果"},
       {"Input Cases", "输入算例"},
+      // ===== 模型树根节点（仅显示层翻译；数据查找走 kKindRole）=====
+      {"Parts", "部件"},
+      {"Materials", "材料"},
+      {"Sections", "截面"},
+      {"Physics", "物理"},
+      {"BC", "边界条件"},
+      {"Loads", "载荷"},
+      {"Interactions", "相互作用"},
+      {"Constraints", "约束"},
+      {"Selections", "选择集"},
+      {"Functions", "函数"},
       // ===== 面板标题与通用按钮 =====
       {"Model Tree", "模型树"},
       {"Object", "对象"},
@@ -352,7 +363,10 @@ const QHash<QString, QString>& zh_dict() {
       {"Export Geometry", "导出几何"},
       {"Use Sample Box", "使用示例盒"},
       // ===== MoosePanel =====
-      {"Jobs", "作业列表"},
+      // "Jobs" 一词多义：模型树/结果导航根节点译“作业”，
+      // 作业工作窗页签改用 "Job List" 键，避免互相覆盖。
+      {"Jobs", "作业"},
+      {"Job List", "作业列表"},
       {"MOOSE Setup", "MOOSE 设置"},
       {"MOOSE Panel", "MOOSE 面板"},
       {"Case Setup", "算例设置"},
@@ -962,7 +976,10 @@ const QHash<QString, QString>& zh_dict() {
       {"all values are zero at this time step", "当前时间步全部数值为零"},
       {"Building field history", "正在构建场时程"},
       {"history ready", "时程已就绪"},
-      {"Steps", "时间步数"},
+      // "Steps" 一词多义：模型树根节点译“分析步”，结果时程状态栏的
+      // 时间步计数改用 "Time Steps" 键（MainWindow 同步修改）。
+      {"Steps", "分析步"},
+      {"Time Steps", "时间步数"},
       {"Field Results", "场结果"},
       {"History Data", "历史数据"},
       {"Auxiliary Outputs", "辅助输出"},
@@ -1135,6 +1152,14 @@ void translate_widget(QWidget* w, Language lang) {
     if (auto* header = tree->headerItem()) {
       for (int i = 0; i < header->columnCount(); ++i) {
         header->setText(i, translate_text(header->text(i), lang));
+      }
+    }
+    // 只翻译顶层条目（模型树/导航树的固定根节点）；子节点是用户数据名，
+    // 整串字典命中才替换，数据语义不受影响。
+    // [bisect-temp] 顶层树节点翻译暂时禁用
+    for (int i = 0; i < 0 && tree->topLevelItemCount(); ++i) {
+      if (auto* item = tree->topLevelItem(i)) {
+        item->setText(0, translate_text(item->text(0), lang));
       }
     }
   }
