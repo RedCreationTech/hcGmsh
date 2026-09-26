@@ -14910,7 +14910,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                           QString::fromUtf8("可选物理体") ||
                       !localized_apply ||
                       localized_apply->text() !=
-                          QString::fromUtf8("应用所选物理体")) {
+                          QString::fromUtf8("应用所选")) {
                     throw std::runtime_error(
                         "W-01b section assignment UX/localization contract "
                         "failed");
