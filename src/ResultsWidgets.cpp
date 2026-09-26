@@ -21,6 +21,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QMenu>
+#include <QSplitter>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
@@ -597,7 +598,6 @@ ResultsPlotWidget::ResultsPlotWidget(QWidget* parent) : QWidget(parent) {
   warning_->setStyleSheet("color:#9c5b00;");
   layout->addWidget(metadata_);
   layout->addWidget(warning_);
-  auto* body = new QHBoxLayout();
   canvas_ = new Canvas(this);
   canvas_->setObjectName("resultsPlotCanvas");
   legend_ = new QTableWidget(this);
@@ -605,14 +605,21 @@ ResultsPlotWidget::ResultsPlotWidget(QWidget* parent) : QWidget(parent) {
   legend_->setColumnCount(4);
   legend_->setHorizontalHeaderLabels({"Visible", "Pinned", "Curve", "Source"});
   legend_->setSelectionBehavior(QAbstractItemView::SelectRows);
-  legend_->setMaximumWidth(360);
-  // 横向滚动条关闭：列宽由 resizeColumnsToContents+末列拉伸管理。
-  // 否则横向滚动条挤占高度触发纵向滚动条，两者互相反馈，
+  legend_->setMinimumWidth(220);
+  legend_->setMaximumWidth(640);
+  // 横向滚动条关闭：列宽由内容定宽+末列拉伸管理（见 refresh() 的列宽
+  // 策略）。否则横向滚动条挤占高度触发纵向滚动条，两者互相反馈，
   // 在 可见/固定 列旁残留滚动条残影。
   legend_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
-  body->addWidget(canvas_, 1);
-  body->addWidget(legend_);
-  layout->addLayout(body, 1);
+  // 曲线区与清单表之间可拖动调整比例（用户反馈原固定布局）。
+  auto* body_splitter = new QSplitter(Qt::Horizontal, this);
+  body_splitter->setObjectName("resultsPlotSplitter");
+  body_splitter->setChildrenCollapsible(false);
+  body_splitter->addWidget(canvas_);
+  body_splitter->addWidget(legend_);
+  body_splitter->setStretchFactor(0, 1);
+  body_splitter->setStretchFactor(1, 0);
+  layout->addWidget(body_splitter, 1);
   connect(pin, &QPushButton::clicked, this, [this]() {
     for (Series& item : series_) {
       if (!item.preview) continue;
@@ -987,7 +994,16 @@ void ResultsPlotWidget::refresh() {
                                        : first->y_unit) +
                                   "]"
                            : "Y";
-  legend_->resizeColumnsToContents();
+  // 列宽策略：无数据时全列等分占满清单宽；有数据时按内容定宽、
+  // 末列拉伸填满余量（无横向滚动条），各列保持可手动拖动调整。
+  if (series_.isEmpty()) {
+    legend_->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+  } else {
+    legend_->horizontalHeader()->setSectionResizeMode(
+        QHeaderView::Interactive);
+    legend_->resizeColumnsToContents();
+    legend_->horizontalHeader()->setStretchLastSection(true);
+  }
   QStringList warnings;
   if (!status_warning_.isEmpty()) warnings << status_warning_;
   for (const Series& item : series_)
