@@ -58,11 +58,14 @@ inline QString app_style_sheet() {
       // 破坏性操作警示（如 移到废纸篓）：红字红边，与常规操作区分。
       "QPushButton[gmpDestructive=\"true\"] { color: #b42318; "
       "border: 1px solid #e4b6b2; }"
-      // 统一控件高度：按钮与数值/文本输入、下拉同一基线（用户反馈
-      // 数值框偏矮、警示按钮高度不一致，根源都是无边一度量基线；
-      // 2026-09-26 按反馈整体收矮一档）。
+      // 统一控件高度基线（用户反馈数值框偏矮、警示按钮高度不一致）。
+      // 数值框(SpinBox)保持原生渲染——QSS 样式化它会破坏子控件绘制
+      // （底框丢失/文字偏上），故按钮/输入框的基线向原生数值框看齐。
+      // 统一控件高度基线。注意：QAbstractSpinBox 只能给 min-height，
+      // 不要加 padding/子控件规则——Qt 样式表会因此破坏其绘制
+      // （底框丢失/文字偏上），9f94870 以来的验证结论。
       "QPushButton { padding: 3px 10px; min-height: 18px; }"
-      "QLineEdit, QComboBox { min-height: 22px; }");
+      "QAbstractSpinBox, QLineEdit, QComboBox { min-height: 22px; }");
 }
 
 } // namespace gmp
