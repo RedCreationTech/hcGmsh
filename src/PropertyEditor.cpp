@@ -1009,7 +1009,8 @@ void PropertyEditor::refresh_validation_summary() {
     if (!root) {
       continue;
     }
-    const QString kind = root->text(0);
+    const QString root_kind2 = root->data(0, kKindRole).toString();
+    const QString kind = root_kind2.isEmpty() ? root->text(0) : root_kind2;
     if (filter_current && kind != current_kind) {
       continue;
     }
@@ -1361,7 +1362,13 @@ QStringList PropertyEditor::collect_model_names(const QString& root_name) const 
   }
   for (int i = 0; i < tree->topLevelItemCount(); ++i) {
     auto* root = tree->topLevelItem(i);
-    if (!root || root->text(0) != root_name) {
+    if (!root) {
+      continue;
+    }
+    // 根节点显示文本随语言翻译，数据查找以 kKindRole 为准（无 kind
+    // 时回退文本，兼容旧数据）。
+    const QString root_kind = root->data(0, kKindRole).toString();
+    if ((root_kind.isEmpty() ? root->text(0) : root_kind) != root_name) {
       continue;
     }
     for (int j = 0; j < root->childCount(); ++j) {
