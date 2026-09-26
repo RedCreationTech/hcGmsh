@@ -8,6 +8,7 @@
 #include <functional>
 #include <utility>
 
+#include "gmp/L10n.h"
 #include "gmp/PropertyBag.h"
 #include "gmp/PropertyEditor.h"
 
@@ -96,7 +97,9 @@ void ModelTreeAdapter::project_object(const core::ObjectId& id) {
     return;
   }
   QSignalBlocker blocker(tree_);
-  item->setText(0, object->name());
+  // 根节点名称为受控词表(词典有对应中文)，显示时翻译；子节点为用户
+  // 数据名，l10n::tr 精确匹配不会命中，原样显示。
+  item->setText(0, l10n::tr(object->name()));
   item->setData(0, PropertyEditor::kKindRole, object->kind());
   item->setData(0, PropertyEditor::kParamsRole,
                 object->properties().to_variant_map());
@@ -126,7 +129,7 @@ void ModelTreeAdapter::project_document(const core::ObjectId& selected) {
       return;
     }
     item->setIcon(0, icon);
-    item->setText(0, object->name());
+    item->setText(0, l10n::tr(object->name()));
     item->setData(0, PropertyEditor::kKindRole, object->kind());
     item->setData(0, PropertyEditor::kParamsRole,
                   object->properties().to_variant_map());

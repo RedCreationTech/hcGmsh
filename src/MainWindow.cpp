@@ -10812,7 +10812,7 @@ void MainWindow::add_item_under_root(QTreeWidgetItem* root) {
   }();
   const QString base = kind.left(kind.size() - 1).toLower();
   QString name;
-  if (!prompt_unique_child_name(root, QString("Add %1").arg(kind),
+  if (!prompt_unique_child_name(root, QString("Add %1").arg(l10n::tr(kind)),
                                 unique_child_name(
                                     root, QString("%1_%2")
                                               .arg(base)
