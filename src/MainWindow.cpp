@@ -5696,7 +5696,7 @@ void MainWindow::build_toolbar() {
     mesh_toolbar->addAction(action_import_exodus_);
   }
   if (action_run_) {
-    action_run_->setIcon(gmp::icons::get("run"));
+    action_run_->setIcon(gmp::icons::get("run_job"));
     job_toolbar->addAction(action_run_);
   }
   if (action_check_) {

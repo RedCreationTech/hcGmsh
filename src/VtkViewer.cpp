@@ -181,7 +181,6 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   auto* left_layout = new QVBoxLayout(left_panel);
   left_layout->setContentsMargins(0, 0, 0, 0);
   left_layout->setSpacing(6);
-  left_layout->addWidget(new QLabel("Variables"));
   array_filter_ = new QComboBox(left_panel);
   array_filter_->addItem("All", "all");
   array_filter_->addItem("Point", "P");

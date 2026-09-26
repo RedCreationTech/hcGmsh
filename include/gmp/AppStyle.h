@@ -62,7 +62,9 @@ inline QString app_style_sheet() {
       // 数值框偏矮、警示按钮高度不一致，根源都是无边一度量基线；
       // 2026-09-26 按反馈整体收矮一档）。
       "QPushButton { padding: 3px 10px; min-height: 18px; }"
-      "QAbstractSpinBox, QLineEdit, QComboBox { min-height: 22px; }");
+      "QAbstractSpinBox, QLineEdit, QComboBox { min-height: 22px; }"
+      // 数值框文字垂直居中（仅撑高不补内边距时文字偏上）。
+      "QAbstractSpinBox { padding-top: 1px; padding-bottom: 2px; }");
 }
 
 } // namespace gmp

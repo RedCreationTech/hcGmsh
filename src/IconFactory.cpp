@@ -20,6 +20,39 @@ QSet<QString> g_warned_keys;
 // 方向视图图标：等轴立方体单面高亮（CAD 惯例，Font Awesome 无此字形，
 // 经 QtAwesome::give 注册自定义绘制器实现）。与下方实心立方体（等轴测）
 // 图标视觉区分。
+// "另存为"图标：软盘 + 右下角加号角标（区别于树节点草图的 pen-to-square）。
+class SaveAsPainter : public fa::QtAwesomeIconPainter {
+ public:
+  void paint(fa::QtAwesome* awesome, QPainter* painter, const QRect& rect,
+             QIcon::Mode /*mode*/, QIcon::State /*state*/,
+             const QVariantMap& options) override {
+    const QColor base =
+        options.value("color").value<QColor>().isValid()
+            ? options.value("color").value<QColor>()
+            : painter->pen().color();
+    painter->save();
+    painter->setRenderHint(QPainter::Antialiasing);
+    const int draw = qRound(rect.height() * 0.86);
+    painter->setPen(base);
+    painter->setFont(awesome->font(fa::fa_solid, draw));
+    painter->drawText(rect, QChar(static_cast<int>(fa::fa_floppy_disk)),
+                      QTextOption(Qt::AlignLeft | Qt::AlignVCenter));
+    // 角标：圆形底 + 加号，表达"另存/副本"。
+    const int badge = qMax(8, qRound(rect.height() * 0.42));
+    const QPointF center(rect.left() + draw * 0.82, rect.bottom() - badge * 0.62);
+    painter->setPen(Qt::NoPen);
+    painter->setBrush(base);
+    painter->drawEllipse(center, badge / 2.0, badge / 2.0);
+    painter->setPen(QColor(255, 255, 255));
+    painter->setFont(awesome->font(fa::fa_solid, qRound(badge * 0.8)));
+    painter->drawText(QRectF(center.x() - badge, center.y() - badge,
+                             badge * 2, badge * 2),
+                      QChar(static_cast<int>(fa::fa_plus)),
+                      QTextOption(Qt::AlignCenter));
+    painter->restore();
+  }
+};
+
 class CubeFacePainter : public fa::QtAwesomeIconPainter {
  public:
   enum Face { Front, Right, Top };
@@ -186,6 +219,7 @@ const QHash<QString, QString>& mapping() {
       {"pick_output", "file-arrow-up"},
       {"load_selected", "file-arrow-up"},
       {"run", "play"},
+      {"run_job", "person-running"},
       {"play", "play"},
       {"stop", "stop"},
       {"open_log", "file-lines"},
@@ -230,7 +264,7 @@ const QHash<QString, QString>& mapping() {
       {"new_project", "file-circle-plus"},
       {"open_project", "folder-open"},
       {"save", "floppy-disk"},
-      {"save_as", "pen-to-square"},
+      {"save_as", "save_as_icon"},
       {"sync_model", "arrows-spin"},
       {"cycle_display", "images"},
       {"pick", "crosshairs"},
@@ -299,6 +333,7 @@ void init(QWidget* paletteAnchor) {
   g_awesome->give("view_front", new CubeFacePainter(CubeFacePainter::Front));
   g_awesome->give("view_right", new CubeFacePainter(CubeFacePainter::Right));
   g_awesome->give("view_top", new CubeFacePainter(CubeFacePainter::Top));
+  g_awesome->give("save_as_icon", new SaveAsPainter());
 
   const QPalette palette =
       paletteAnchor ? paletteAnchor->palette() : QApplication::palette();
