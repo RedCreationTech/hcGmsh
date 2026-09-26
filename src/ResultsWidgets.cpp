@@ -19,6 +19,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMenu>
 #include <QMessageBox>
 #include <QMouseEvent>
 #include <QPainter>
@@ -30,6 +31,7 @@
 #include <QTableWidget>
 #include <QTextStream>
 #include <QToolTip>
+#include <QToolButton>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
@@ -507,28 +509,44 @@ ResultsPlotWidget::ResultsPlotWidget(QWidget* parent) : QWidget(parent) {
   auto* import = new QPushButton("Import CSV...", this);
   import->setIcon(gmp::icons::get("import_csv"));
   import->setObjectName("gmpIcon_import_csv");
-  auto* remove = new QPushButton("Remove selected", this);
-  remove->setIcon(gmp::icons::get("remove_selected"));
-  remove->setObjectName("gmpIcon_remove_selected");
-  auto* edit = new QPushButton("Edit selected", this);
-  edit->setIcon(gmp::icons::get("edit_selected"));
-  edit->setObjectName("gmpIcon_edit_selected");
-  auto* compare = new QPushButton("Compare 2 curves", this);
-  compare->setIcon(gmp::icons::get("compare_curves"));
-  compare->setObjectName("gmpIcon_compare_curves");
-  auto* png = new QPushButton("PNG", this);
-  png->setIcon(gmp::icons::get("export_png"));
+  auto* export_menu = new QMenu(this);
+  auto* export_button = new QToolButton(this);
+  export_button->setObjectName("resultsExportMenuButton");
+  export_button->setText("Export \xe2\x96\xbe");
+  export_button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  export_button->setIcon(gmp::icons::get("export_png"));
+  export_button->setPopupMode(QToolButton::InstantPopup);
+  export_button->setMenu(export_menu);
+  auto* png = export_menu->addAction(gmp::icons::get("export_png"), "PNG");
   png->setObjectName("gmpIcon_export_png");
-  auto* svg = new QPushButton("SVG", this);
-  svg->setIcon(gmp::icons::get("export_svg"));
+  auto* svg = export_menu->addAction(gmp::icons::get("export_svg"), "SVG");
   svg->setObjectName("gmpIcon_export_svg");
-  auto* csv = new QPushButton("CSV", this);
-  csv->setIcon(gmp::icons::get("export_csv"));
+  auto* csv = export_menu->addAction(gmp::icons::get("export_csv"), "CSV");
   csv->setObjectName("gmpIcon_export_csv");
-  auto* copy = new QPushButton("Copy image", this);
-  copy->setIcon(gmp::icons::get("copy_image"));
+  auto* copy =
+      export_menu->addAction(gmp::icons::get("copy_image"), "Copy image");
   copy->setObjectName("gmpIcon_copy_image");
-  for (auto* button : {pin, import, remove, edit, compare, png, svg, csv, copy})
+  auto* curve_menu = new QMenu(this);
+  auto* curve_button = new QToolButton(this);
+  curve_button->setObjectName("resultsCurveMenuButton");
+  curve_button->setText("Curve \xe2\x96\xbe");
+  curve_button->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+  curve_button->setIcon(gmp::icons::get("edit_selected"));
+  curve_button->setPopupMode(QToolButton::InstantPopup);
+  curve_button->setMenu(curve_menu);
+  auto* remove =
+      curve_menu->addAction(gmp::icons::get("remove_selected"), "Remove selected");
+  remove->setObjectName("gmpIcon_remove_selected");
+  auto* edit =
+      curve_menu->addAction(gmp::icons::get("edit_selected"), "Edit selected");
+  edit->setObjectName("gmpIcon_edit_selected");
+  auto* compare = curve_menu->addAction(gmp::icons::get("compare_curves"),
+                                        "Compare 2 curves");
+  compare->setObjectName("gmpIcon_compare_curves");
+  for (QWidget* button : {static_cast<QWidget*>(pin),
+                          static_cast<QWidget*>(import),
+                          static_cast<QWidget*>(export_button),
+                          static_cast<QWidget*>(curve_button)})
     actions->addWidget(button);
   actions->addStretch(1);
   actions->addWidget(new QLabel("Component", this));
@@ -568,18 +586,18 @@ ResultsPlotWidget::ResultsPlotWidget(QWidget* parent) : QWidget(parent) {
                                                      "CSV (*.csv *.txt);;All (*)");
     if (!path.isEmpty()) add_csv(path);
   });
-  connect(remove, &QPushButton::clicked, this, [this]() {
+  connect(remove, &QAction::triggered, this, [this]() {
     const int row = legend_->currentRow();
     if (row >= 0 && row < series_.size()) series_.removeAt(row);
     refresh();
   });
-  connect(edit, &QPushButton::clicked, this,
+  connect(edit, &QAction::triggered, this,
           &ResultsPlotWidget::edit_selected_curve);
-  connect(compare, &QPushButton::clicked, this, &ResultsPlotWidget::compare_curves);
-  connect(png, &QPushButton::clicked, this, &ResultsPlotWidget::export_png);
-  connect(svg, &QPushButton::clicked, this, &ResultsPlotWidget::export_svg);
-  connect(csv, &QPushButton::clicked, this, &ResultsPlotWidget::export_csv);
-  connect(copy, &QPushButton::clicked, this, [this]() {
+  connect(compare, &QAction::triggered, this, &ResultsPlotWidget::compare_curves);
+  connect(png, &QAction::triggered, this, &ResultsPlotWidget::export_png);
+  connect(svg, &QAction::triggered, this, &ResultsPlotWidget::export_svg);
+  connect(csv, &QAction::triggered, this, &ResultsPlotWidget::export_csv);
+  connect(copy, &QAction::triggered, this, [this]() {
     QImage image(canvas_->size() * 2, QImage::Format_ARGB32_Premultiplied);
     image.setDevicePixelRatio(2); QPainter painter(&image); canvas_->paint(painter, canvas_->rect());
     QApplication::clipboard()->setImage(image);
@@ -937,6 +955,18 @@ void ResultsPlotWidget::refresh() {
   warning_->setText(warnings.join(" · "));
   canvas_->warning = warning_->text();
   canvas_->update();
+  if (auto* export_button =
+          findChild<QToolButton*>("resultsExportMenuButton")) {
+    bool has_visible = false;
+    for (const Series& item : series_)
+      if (item.visible) {
+        has_visible = true;
+        break;
+      }
+    export_button->setEnabled(has_visible);
+  }
+  if (auto* curve_button = findChild<QToolButton*>("resultsCurveMenuButton"))
+    curve_button->setEnabled(!series_.isEmpty());
 }
 
 void ResultsPlotWidget::edit_selected_curve() {

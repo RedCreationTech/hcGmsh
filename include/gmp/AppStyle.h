@@ -54,7 +54,10 @@ inline QString app_style_sheet() {
       "border-radius: 2px; }"
       "QSlider::handle:horizontal { width: 14px; height: 14px; "
       "margin: -5px 0; border-radius: 7px; background: #2f6fed; }"
-      "QSlider::handle:horizontal:hover { background: #1d4ed8; }");
+      "QSlider::handle:horizontal:hover { background: #1d4ed8; }"
+      // 破坏性操作警示（如 移到废纸篓）：红字红边，与常规操作区分。
+      "QPushButton[gmpDestructive=\"true\"] { color: #b42318; "
+      "border: 1px solid #e4b6b2; }");
 }
 
 } // namespace gmp

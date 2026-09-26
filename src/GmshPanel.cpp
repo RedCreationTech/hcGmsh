@@ -467,22 +467,30 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
         pick_entities_dialog(dim, "Select Boolean Tools",
                              boolean_tool_ids_->text()));
   });
-  bool_form->addRow("Obj", boolean_obj_ids_);
+  auto* boolean_obj_row = new QHBoxLayout();
+  boolean_obj_row->addWidget(boolean_obj_ids_);
+  boolean_obj_row->addWidget(boolean_obj_pick);
+  auto* boolean_obj_container = new QWidget();
+  boolean_obj_container->setLayout(boolean_obj_row);
+  bool_form->addRow("Obj", boolean_obj_container);
   bind_entity_input_validation(boolean_obj_ids_, boolean_dim_, true);
   boolean_obj_template_ = new QComboBox();
   boolean_obj_template_->setEditable(true);
   boolean_obj_template_->addItem("Templates");
   tune_gmsh_combo(boolean_obj_template_, 110, 160);
   bool_form->addRow("Template", boolean_obj_template_);
-  bool_form->addRow(boolean_obj_pick);
-  bool_form->addRow("Tool", boolean_tool_ids_);
+  auto* boolean_tool_row = new QHBoxLayout();
+  boolean_tool_row->addWidget(boolean_tool_ids_);
+  boolean_tool_row->addWidget(boolean_tool_pick);
+  auto* boolean_tool_container = new QWidget();
+  boolean_tool_container->setLayout(boolean_tool_row);
+  bool_form->addRow("Tool", boolean_tool_container);
   bind_entity_input_validation(boolean_tool_ids_, boolean_dim_, true);
   boolean_tool_template_ = new QComboBox();
   boolean_tool_template_->setEditable(true);
   boolean_tool_template_->addItem("Templates");
   tune_gmsh_combo(boolean_tool_template_, 110, 160);
   bool_form->addRow("Template", boolean_tool_template_);
-  bool_form->addRow(boolean_tool_pick);
   connect(boolean_dim_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           [this]() {
             const int dim = boolean_dim_->currentData().toInt();
@@ -565,8 +573,12 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
     emit physical_group_selected(-1, -1);
     append_log("Physical group stage filter cleared; showing full model.");
   });
-  phys_form->addRow("Groups", phys_group_list_);
-  phys_form->addRow(phys_refresh);
+  auto* phys_list_row = new QHBoxLayout();
+  phys_list_row->addWidget(phys_group_list_);
+  phys_list_row->addWidget(phys_refresh);
+  auto* phys_list_container = new QWidget();
+  phys_list_container->setLayout(phys_list_row);
+  phys_form->addRow("Groups", phys_list_container);
   phys_form->addRow(phys_clear_stage_filter);
 
   phys_group_dim_ = new QComboBox();

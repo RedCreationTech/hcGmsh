@@ -2200,6 +2200,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       new QPushButton("Trash Project Copy...", results_page);
   results_trash_copy->setIcon(gmp::icons::get("trash"));
   results_trash_copy->setObjectName("resultsTrashProjectCopy");
+  results_trash_copy->setProperty("gmpDestructive", true);
   auto* results_relocate = new QPushButton("Relocate...", results_page);
   results_relocate->setIcon(gmp::icons::get("relocate"));
   results_relocate->setObjectName("resultsRelocatePackage");
@@ -2230,11 +2231,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   results_type_filter_->addItem("Solver (.e/.exo)", "e");
   results_type_filter_->addItem("Mesh (.msh)", "msh");
   results_type_filter_->addItem("Text (.txt/.csv/.log/.yaml/.yml)", "txt");
-  // 文件、结果包和视图操作分行，避免窄窗口下按钮挤压。
+  // 结果页操作分三组水平排列：常规 / 查看 / 维护，组间 16px + 细分隔线；
+  // 右端保留「类型: 全部」筛选下拉原位。
   results_file_actions->addWidget(results_open_root);
   results_file_actions->addWidget(results_refresh);
   results_file_actions->addWidget(results_import);
   results_file_actions->addWidget(results_import_package);
+  results_file_actions->addWidget(results_verify_package);
   connect(results_import, &QPushButton::clicked, this, [this]() {
     const QString path = QFileDialog::getOpenFileName(
         this, "Import Result File", QDir::homePath(),
@@ -2423,34 +2426,35 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     }
     import_result_package(path);
   });
+  results_file_actions->addSpacing(16);
+  auto* results_actions_sep1 = new QFrame(results_page);
+  results_actions_sep1->setFrameShape(QFrame::VLine);
+  results_actions_sep1->setFrameShadow(QFrame::Plain);
+  results_actions_sep1->setStyleSheet("QFrame{color:#c8c8c8;}");
+  results_file_actions->addWidget(results_actions_sep1);
+  results_file_actions->addSpacing(16);
+  results_file_actions->addWidget(results_open_view);
+  results_file_actions->addWidget(results_preview_toggle);
+  results_file_actions->addWidget(results_open_text);
+  connect(results_new_compare, &QPushButton::clicked, this,
+          [this]() { create_results_compare_window(); });
+  results_file_actions->addWidget(results_new_compare);
+  results_file_actions->addSpacing(16);
+  auto* results_actions_sep2 = new QFrame(results_page);
+  results_actions_sep2->setFrameShape(QFrame::VLine);
+  results_actions_sep2->setFrameShadow(QFrame::Plain);
+  results_actions_sep2->setStyleSheet("QFrame{color:#c8c8c8;}");
+  results_file_actions->addWidget(results_actions_sep2);
+  results_file_actions->addSpacing(16);
+  results_file_actions->addWidget(results_trash_copy);
+  results_file_actions->addWidget(results_rescan);
+  results_file_actions->addWidget(results_relocate);
   results_file_actions->addStretch(1);
+  results_file_actions->addWidget(results_filter_label);
+  results_file_actions->addWidget(results_type_filter_);
   auto* results_file_row = new QWidget(results_page);
   results_file_row->setLayout(results_file_actions);
   results_layout->addWidget(results_file_row);
-
-  auto* results_package_actions = new QHBoxLayout();
-  results_package_actions->addWidget(results_verify_package);
-  results_package_actions->addWidget(results_rescan);
-  results_package_actions->addWidget(results_relocate);
-  results_package_actions->addWidget(results_trash_copy);
-  results_package_actions->addStretch(1);
-  auto* results_package_row = new QWidget(results_page);
-  results_package_row->setLayout(results_package_actions);
-  results_layout->addWidget(results_package_row);
-
-  auto* results_view_actions = new QHBoxLayout();
-  results_view_actions->addWidget(results_open_view);
-  results_view_actions->addWidget(results_open_text);
-  results_view_actions->addWidget(results_preview_toggle);
-  results_view_actions->addWidget(results_new_compare);
-  connect(results_new_compare, &QPushButton::clicked, this,
-          [this]() { create_results_compare_window(); });
-  results_view_actions->addStretch(1);
-  results_view_actions->addWidget(results_filter_label);
-  results_view_actions->addWidget(results_type_filter_);
-  auto* results_view_row = new QWidget(results_page);
-  results_view_row->setLayout(results_view_actions);
-  results_layout->addWidget(results_view_row);
 
   results_list_ = new QListWidget(results_page);
   results_list_->setSelectionMode(QAbstractItemView::SingleSelection);
