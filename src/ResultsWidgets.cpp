@@ -133,6 +133,8 @@ ResultsTableWidget::ResultsTableWidget(QWidget* parent) : QWidget(parent) {
   table_->setEditTriggers(QAbstractItemView::NoEditTriggers);
   table_->setSortingEnabled(false);
   table_->horizontalHeader()->setSortIndicatorShown(true);
+  // 末列跟随容器宽度拉伸，避免表格按内容定宽后右侧大片留白。
+  table_->horizontalHeader()->setStretchLastSection(true);
   layout->addWidget(table_, 1);
 
   auto* pager = new QHBoxLayout();
@@ -570,6 +572,10 @@ ResultsPlotWidget::ResultsPlotWidget(QWidget* parent) : QWidget(parent) {
   legend_->setHorizontalHeaderLabels({"Visible", "Pinned", "Curve", "Source"});
   legend_->setSelectionBehavior(QAbstractItemView::SelectRows);
   legend_->setMaximumWidth(360);
+  // 横向滚动条关闭：列宽由 resizeColumnsToContents+末列拉伸管理。
+  // 否则横向滚动条挤占高度触发纵向滚动条，两者互相反馈，
+  // 在 可见/固定 列旁残留滚动条残影。
+  legend_->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
   body->addWidget(canvas_, 1);
   body->addWidget(legend_);
   layout->addLayout(body, 1);

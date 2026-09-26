@@ -2174,7 +2174,13 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   results_layout->setSpacing(6);
 
   // 页内标题/描述已删除（P0 审计 C1）：dock 窗口标题即模块名。
-  auto* results_file_actions = new QHBoxLayout();
+  // 结果页操作分三组，两行排列（窄窗不再出现横向滚动条）：
+  // 上行=常规组 + 右端类型筛选；下行=查看组 | 维护组（竖线分隔）。
+  auto* results_file_actions = new QVBoxLayout();
+  results_file_actions->setContentsMargins(0, 0, 0, 0);
+  results_file_actions->setSpacing(6);
+  auto* results_primary_row = new QHBoxLayout();
+  auto* results_secondary_row = new QHBoxLayout();
   auto* results_open_root = new QPushButton("Open Results Root", results_page);
   results_open_root->setIcon(gmp::icons::get("open_root"));
   results_open_root->setObjectName("gmpIcon_open_root");
@@ -2233,11 +2239,11 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   results_type_filter_->addItem("Text (.txt/.csv/.log/.yaml/.yml)", "txt");
   // 结果页操作分三组水平排列：常规 / 查看 / 维护，组间 16px + 细分隔线；
   // 右端保留「类型: 全部」筛选下拉原位。
-  results_file_actions->addWidget(results_open_root);
-  results_file_actions->addWidget(results_refresh);
-  results_file_actions->addWidget(results_import);
-  results_file_actions->addWidget(results_import_package);
-  results_file_actions->addWidget(results_verify_package);
+  results_primary_row->addWidget(results_open_root);
+  results_primary_row->addWidget(results_refresh);
+  results_primary_row->addWidget(results_import);
+  results_primary_row->addWidget(results_import_package);
+  results_primary_row->addWidget(results_verify_package);
   connect(results_import, &QPushButton::clicked, this, [this]() {
     const QString path = QFileDialog::getOpenFileName(
         this, "Import Result File", QDir::homePath(),
@@ -2426,32 +2432,27 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
     }
     import_result_package(path);
   });
-  results_file_actions->addSpacing(16);
-  auto* results_actions_sep1 = new QFrame(results_page);
-  results_actions_sep1->setFrameShape(QFrame::VLine);
-  results_actions_sep1->setFrameShadow(QFrame::Plain);
-  results_actions_sep1->setStyleSheet("QFrame{color:#c8c8c8;}");
-  results_file_actions->addWidget(results_actions_sep1);
-  results_file_actions->addSpacing(16);
-  results_file_actions->addWidget(results_open_view);
-  results_file_actions->addWidget(results_preview_toggle);
-  results_file_actions->addWidget(results_open_text);
+  results_secondary_row->addWidget(results_open_view);
+  results_secondary_row->addWidget(results_preview_toggle);
+  results_secondary_row->addWidget(results_open_text);
   connect(results_new_compare, &QPushButton::clicked, this,
           [this]() { create_results_compare_window(); });
-  results_file_actions->addWidget(results_new_compare);
-  results_file_actions->addSpacing(16);
+  results_secondary_row->addWidget(results_new_compare);
+  results_secondary_row->addSpacing(16);
   auto* results_actions_sep2 = new QFrame(results_page);
   results_actions_sep2->setFrameShape(QFrame::VLine);
   results_actions_sep2->setFrameShadow(QFrame::Plain);
   results_actions_sep2->setStyleSheet("QFrame{color:#c8c8c8;}");
-  results_file_actions->addWidget(results_actions_sep2);
-  results_file_actions->addSpacing(16);
-  results_file_actions->addWidget(results_trash_copy);
-  results_file_actions->addWidget(results_rescan);
-  results_file_actions->addWidget(results_relocate);
-  results_file_actions->addStretch(1);
-  results_file_actions->addWidget(results_filter_label);
-  results_file_actions->addWidget(results_type_filter_);
+  results_secondary_row->addWidget(results_actions_sep2);
+  results_secondary_row->addSpacing(16);
+  results_secondary_row->addWidget(results_trash_copy);
+  results_secondary_row->addWidget(results_rescan);
+  results_secondary_row->addWidget(results_relocate);
+  results_primary_row->addStretch(1);
+  results_primary_row->addWidget(results_filter_label);
+  results_primary_row->addWidget(results_type_filter_);
+  results_file_actions->addLayout(results_primary_row);
+  results_file_actions->addLayout(results_secondary_row);
   auto* results_file_row = new QWidget(results_page);
   results_file_row->setLayout(results_file_actions);
   results_layout->addWidget(results_file_row);

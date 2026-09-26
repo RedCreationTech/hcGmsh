@@ -57,7 +57,11 @@ inline QString app_style_sheet() {
       "QSlider::handle:horizontal:hover { background: #1d4ed8; }"
       // 破坏性操作警示（如 移到废纸篓）：红字红边，与常规操作区分。
       "QPushButton[gmpDestructive=\"true\"] { color: #b42318; "
-      "border: 1px solid #e4b6b2; }");
+      "border: 1px solid #e4b6b2; }"
+      // 统一控件高度：按钮与数值/文本输入、下拉同一基线（用户反馈
+      // 数值框偏矮、警示按钮高度不一致，根源都是无边一度量基线）。
+      "QPushButton { padding: 4px 12px; min-height: 24px; }"
+      "QAbstractSpinBox, QLineEdit, QComboBox { min-height: 24px; }");
 }
 
 } // namespace gmp
