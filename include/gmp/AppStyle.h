@@ -70,7 +70,12 @@ inline QString app_style_sheet() {
       // 选中蓝体系 (#dbe7ff/#1e3a5f) 保持一致；斑马纹由代码侧统一关闭。
       "QListWidget::item, QTreeWidget::item { padding: 3px 4px; }"
       "QListWidget::item:selected, QTreeWidget::item:selected { "
-      "background: #dbe7ff; color: #1e3a5f; }");
+      "background: #dbe7ff; color: #1e3a5f; }"
+      // 嵌套页签（如作业输入文件页的 Generated Input/Custom Blocks/
+      // Generation Report）：小字号、窄内边距，与外层 workspace 页签
+      // 拉开视觉层级。
+      "QTabWidget[gmpNestedTabs=\"true\"] > QTabBar::tab { "
+      "padding: 2px 8px; font-size: 11px; }");
 }
 
 } // namespace gmp

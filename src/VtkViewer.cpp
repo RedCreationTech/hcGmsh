@@ -324,7 +324,7 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   auto* scalar_form = new QFormLayout();
   scalar_form->setContentsMargins(0, 0, 0, 0);
   scalar_form->setSpacing(4);
-  scalar_form->addRow("Scalar", array_combo_);
+  scalar_form->addRow("Variable", array_combo_);
   scalar_form->addRow("Preset", preset_combo_);
   scalar_form->addRow("Repr", repr_combo_);
   scalar_form->addRow("Bar Pos", scalar_bar_pos_combo_);
@@ -360,10 +360,10 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   mesh_dim_ = new QComboBox();
   mesh_dim_->setObjectName("meshDimensionCombo");
   mesh_dim_->addItem("All", -1);
-  mesh_dim_->addItem("0", 0);
-  mesh_dim_->addItem("1", 1);
-  mesh_dim_->addItem("2", 2);
-  mesh_dim_->addItem("3", 3);
+  mesh_dim_->addItem("0 — Point", 0);
+  mesh_dim_->addItem("1 — Curve", 1);
+  mesh_dim_->addItem("2 — Surface", 2);
+  mesh_dim_->addItem("3 — Volume", 3);
   AttachComboPopupFix(mesh_dim_);
   connect(mesh_dim_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this](int) { update_mesh_pipeline(); });
@@ -526,7 +526,7 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   show_outline_->setChecked(false);
   connect(show_outline_, &QCheckBox::toggled, this,
           [this](bool) { update_scene_extras(); });
-  auto* reset_filters = new QPushButton("Reset Filters");
+  auto* reset_filters = new QPushButton("Clear Filters");
   reset_filters->setIcon(gmp::icons::get("reset_filters"));
   reset_filters->setObjectName("gmpIcon_reset_filters");
   connect(reset_filters, &QPushButton::clicked, this, [this]() {
@@ -637,7 +637,6 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
     auto* time_row = new QHBoxLayout();
     time_row->setContentsMargins(0, 0, 0, 0);
     time_row->setSpacing(6);
-    time_row->addWidget(new QLabel("Time"));
     time_row->addWidget(time_slider_, 1);
     time_row->addWidget(time_label_);
     time_layout->addLayout(time_row);
@@ -660,7 +659,7 @@ VtkViewer::VtkViewer(QWidget* parent) : QWidget(parent) {
   deform_layout->addWidget(deform_hint);
 
   // 原 Vector 控制页并入本页作为分组(向量数组/自动同步/Apply)
-  auto* vector_header = new QLabel("Vector Arrays");
+  auto* vector_header = new QLabel("Vector arrays");
   vector_header->setStyleSheet("color: #666;");
   deform_layout->addWidget(vector_header);
   vector_array_combo_ = new QComboBox();
@@ -861,7 +860,7 @@ void VtkViewer::clear_stage_data() {
 
   emit stage_picking_changed(false);
   emit stage_slice_changed(false);
-  emit stage_command_feedback("已清空舞台中的网格/结果显示。");
+  emit stage_command_feedback("已清空视口中的网格/结果显示。");
 }
 
 
@@ -1591,11 +1590,11 @@ void VtkViewer::set_stage_interaction_mode(int mode) {
   }
   if (mode_ == DataMode::None && !sketch_doc_) {
     emit stage_command_feedback(
-        "舞台暂无可交互对象；请先加载 .msh/.e 或进入草图编辑。");
+        "视口暂无可交互对象；请先加载 .msh/.e 或进入草图编辑。");
   } else {
     const QStringList names = {"旋转", "平移", "缩放"};
     emit stage_command_feedback(
-        QString("舞台交互模式：%1（按住左键拖动）")
+        QString("视口交互模式：%1（按住左键拖动）")
             .arg(names.value(qBound(0, mode, 2))));
   }
 #else
@@ -1667,7 +1666,7 @@ void VtkViewer::set_stage_picking(bool enabled) {
       probe_enable_->setChecked(false);
     }
     pick_enable_->setChecked(enabled);
-    emit stage_command_feedback(enabled ? "网格拾取已启用：单击舞台对象。"
+    emit stage_command_feedback(enabled ? "网格拾取已启用：单击视口对象。"
                                         : "网格拾取已关闭。");
     return;
   }
@@ -1676,7 +1675,7 @@ void VtkViewer::set_stage_picking(bool enabled) {
       pick_enable_->setChecked(false);
     }
     probe_enable_->setChecked(enabled);
-    emit stage_command_feedback(enabled ? "结果探针已启用：单击舞台对象。"
+    emit stage_command_feedback(enabled ? "结果探针已启用：单击视口对象。"
                                         : "结果探针已关闭。");
     return;
   }
@@ -1706,10 +1705,10 @@ void VtkViewer::clear_stage_selection() {
     pick_clear_->click();
     emit stage_command_feedback("已清除网格选择。");
   } else {
-    emit stage_command_feedback("当前舞台没有可清除的选择。");
+    emit stage_command_feedback("当前视口没有可清除的选择。");
   }
 #else
-  emit stage_command_feedback("当前构建未启用 VTK 舞台。");
+  emit stage_command_feedback("当前构建未启用 VTK 视口。");
 #endif
 }
 

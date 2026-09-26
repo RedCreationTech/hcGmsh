@@ -549,6 +549,9 @@ MoosePanel::MoosePanel(QWidget* parent) : QWidget(parent) {
 
   auto* input_tabs = new QTabWidget();
   input_tabs->setObjectName("mooseInputDetailTabs");
+  // 嵌套页签：比外层 workspace 页签弱一号，层级一眼可辨（样式见
+  // AppStyle 的 gmpNestedTabs 规则）。
+  input_tabs->setProperty("gmpNestedTabs", true);
   input_editor_ = new QPlainTextEdit();
   input_editor_->setObjectName("mooseGeneratedInputEditor");
   input_editor_->setPlaceholderText(

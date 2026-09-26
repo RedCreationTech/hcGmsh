@@ -4,6 +4,8 @@
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QLabel>
+#include <QList>
 #include <QPushButton>
 #include <QTabWidget>
 #include <QVBoxLayout>
@@ -123,6 +125,33 @@ PartFeaturePanel::PartFeaturePanel(QWidget* parent) : QWidget(parent) {
   sweep_form->addRow("Path sketch:", sweep_path_);
   sweep_form->addRow(sweep_btn);
   feature_tabs->addTab(sweep_group, "Sweep");
+
+  // 四个 TAB 的标签列统一最小宽度（以最宽标签为准），避免切换 TAB 时
+  // 输入框起始位置跳动。
+  auto form_labels = [](QFormLayout* form) {
+    QList<QLabel*> labels;
+    for (int row = 0; row < form->rowCount(); ++row) {
+      if (auto* item = form->itemAt(row, QFormLayout::LabelRole)) {
+        if (auto* label = qobject_cast<QLabel*>(item->widget())) {
+          labels << label;
+        }
+      }
+    }
+    return labels;
+  };
+  const QList<QFormLayout*> forms = {extrude_form, revolve_form, loft_form,
+                                     sweep_form};
+  int label_width = 0;
+  for (auto* form : forms) {
+    for (auto* label : form_labels(form)) {
+      label_width = qMax(label_width, label->sizeHint().width());
+    }
+  }
+  for (auto* form : forms) {
+    for (auto* label : form_labels(form)) {
+      label->setMinimumWidth(label_width);
+    }
+  }
   layout->addWidget(feature_tabs);
 
   connect(extrude_btn, &QPushButton::clicked, this, [this] {

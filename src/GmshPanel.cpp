@@ -128,7 +128,7 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* groups_tabs = new QTabWidget(groups_page);
   groups_tabs->setObjectName("gmshGroupsTabs");
   groups_layout->addWidget(groups_tabs, 1);
-  workspace_tabs->addTab(groups_page, "Groups & Fields");
+  workspace_tabs->addTab(groups_page, "Physical Groups & Fields");
 
   auto* mesh_layout = make_scrolled_page("Mesh", "gmshMeshPage");
   // 弹窗精简：Gmsh 运行日志统一外移到主窗口 Console（append_log 实时
@@ -206,10 +206,10 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* entities_layout = new QVBoxLayout(entities_box);
   entity_dim_ = new QComboBox();
   entity_dim_->addItem("All", -1);
-  entity_dim_->addItem("0", 0);
-  entity_dim_->addItem("1", 1);
-  entity_dim_->addItem("2", 2);
-  entity_dim_->addItem("3", 3);
+  entity_dim_->addItem("0 — Point", 0);
+  entity_dim_->addItem("1 — Curve", 1);
+  entity_dim_->addItem("2 — Surface", 2);
+  entity_dim_->addItem("3 — Volume", 3);
   tune_dim_combo(entity_dim_);
   connect(entity_dim_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, &GmshPanel::on_entity_dim_changed);
@@ -275,9 +275,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   prim_x_->setRange(-1e6, 1e6);
   prim_y_->setRange(-1e6, 1e6);
   prim_z_->setRange(-1e6, 1e6);
-  prim_form->addRow("Origin/Base x", prim_x_);
-  prim_form->addRow("Origin/Base y", prim_y_);
-  prim_form->addRow("Origin/Base z", prim_z_);
+  prim_form->addRow("Origin X", prim_x_);
+  prim_form->addRow("Origin Y", prim_y_);
+  prim_form->addRow("Origin Z", prim_z_);
 
   prim_dx_ = new QDoubleSpinBox();
   prim_dy_ = new QDoubleSpinBox();
@@ -288,9 +288,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   prim_dx_->setValue(1.0);
   prim_dy_->setValue(1.0);
   prim_dz_->setValue(1.0);
-  prim_form->addRow("Size/Axis dx", prim_dx_);
-  prim_form->addRow("Size/Axis dy", prim_dy_);
-  prim_form->addRow("Size/Axis dz", prim_dz_);
+  prim_form->addRow("Size/Axis X", prim_dx_);
+  prim_form->addRow("Size/Axis Y", prim_dy_);
+  prim_form->addRow("Size/Axis Z", prim_dz_);
 
   prim_radius_ = new QDoubleSpinBox();
   prim_radius_->setRange(0.0, 1e6);
@@ -311,10 +311,10 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* xform_form = new QFormLayout(xform_box);
   transform_dim_ = new QComboBox();
   transform_dim_->addItem("All", -1);
-  transform_dim_->addItem("0", 0);
-  transform_dim_->addItem("1", 1);
-  transform_dim_->addItem("2", 2);
-  transform_dim_->addItem("3", 3);
+  transform_dim_->addItem("0 — Point", 0);
+  transform_dim_->addItem("1 — Curve", 1);
+  transform_dim_->addItem("2 — Surface", 2);
+  transform_dim_->addItem("3 — Volume", 3);
   tune_dim_combo(transform_dim_);
   transform_ids_ = new QLineEdit();
   transform_ids_->setPlaceholderText("IDs or dim:tag (e.g. 1,2 or 2:5). Empty = all.");
@@ -365,9 +365,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   trans_btn->setIcon(gmp::icons::get("translate"));
   connect(trans_btn, &QPushButton::clicked, this,
           &GmshPanel::on_apply_translate);
-  xform_form->addRow("dx", trans_dx_);
-  xform_form->addRow("dy", trans_dy_);
-  xform_form->addRow("dz", trans_dz_);
+  xform_form->addRow("Translate X", trans_dx_);
+  xform_form->addRow("Translate Y", trans_dy_);
+  xform_form->addRow("Translate Z", trans_dz_);
   xform_form->addRow(trans_btn);
 
   rot_x_ = new QDoubleSpinBox();
@@ -376,9 +376,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   rot_x_->setRange(-1e6, 1e6);
   rot_y_->setRange(-1e6, 1e6);
   rot_z_->setRange(-1e6, 1e6);
-  xform_form->addRow("Rotate Origin x", rot_x_);
-  xform_form->addRow("Rotate Origin y", rot_y_);
-  xform_form->addRow("Rotate Origin z", rot_z_);
+  xform_form->addRow("Pivot X", rot_x_);
+  xform_form->addRow("Pivot Y", rot_y_);
+  xform_form->addRow("Pivot Z", rot_z_);
 
   rot_ax_ = new QDoubleSpinBox();
   rot_ay_ = new QDoubleSpinBox();
@@ -397,9 +397,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   rot_btn->setIcon(gmp::icons::get("rotate"));
   connect(rot_btn, &QPushButton::clicked, this,
           &GmshPanel::on_apply_rotate);
-  xform_form->addRow("Rotate Axis ax", rot_ax_);
-  xform_form->addRow("Rotate Axis ay", rot_ay_);
-  xform_form->addRow("Rotate Axis az", rot_az_);
+  xform_form->addRow("Axis X", rot_ax_);
+  xform_form->addRow("Axis Y", rot_ay_);
+  xform_form->addRow("Axis Z", rot_az_);
   xform_form->addRow("deg", rot_angle_);
   xform_form->addRow(rot_btn);
 
@@ -409,9 +409,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   scale_cx_->setRange(-1e6, 1e6);
   scale_cy_->setRange(-1e6, 1e6);
   scale_cz_->setRange(-1e6, 1e6);
-  xform_form->addRow("Scale Center x", scale_cx_);
-  xform_form->addRow("Scale Center y", scale_cy_);
-  xform_form->addRow("Scale Center z", scale_cz_);
+  xform_form->addRow("Center X", scale_cx_);
+  xform_form->addRow("Center Y", scale_cy_);
+  xform_form->addRow("Center Z", scale_cz_);
 
   scale_x_ = new QDoubleSpinBox();
   scale_y_ = new QDoubleSpinBox();
@@ -427,9 +427,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   scale_btn->setIcon(gmp::icons::get("scale"));
   connect(scale_btn, &QPushButton::clicked, this,
           &GmshPanel::on_apply_scale);
-  xform_form->addRow("sx", scale_x_);
-  xform_form->addRow("sy", scale_y_);
-  xform_form->addRow("sz", scale_z_);
+  xform_form->addRow("Factor X", scale_x_);
+  xform_form->addRow("Factor Y", scale_y_);
+  xform_form->addRow("Factor Z", scale_z_);
   xform_form->addRow(scale_btn);
   add_scrolled_tool_tab(geometry_tabs, xform_box, "Transform",
                         "gmshTransformPage");
@@ -437,10 +437,10 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* bool_box = new QGroupBox("Boolean");
   auto* bool_form = new QFormLayout(bool_box);
   boolean_dim_ = new QComboBox();
-  boolean_dim_->addItem("3", 3);
-  boolean_dim_->addItem("2", 2);
-  boolean_dim_->addItem("1", 1);
-  boolean_dim_->addItem("0", 0);
+  boolean_dim_->addItem("3 — Volume", 3);
+  boolean_dim_->addItem("2 — Surface", 2);
+  boolean_dim_->addItem("1 — Curve", 1);
+  boolean_dim_->addItem("0 — Point", 0);
   tune_dim_combo(boolean_dim_);
   bool_form->addRow("Dim", boolean_dim_);
   boolean_obj_ids_ = new QLineEdit();
@@ -729,9 +729,9 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   auto* field_box = new QGroupBox("Mesh Fields");
   auto* field_form = new QFormLayout(field_box);
   field_dim_ = new QComboBox();
-  field_dim_->addItem("1", 1);
-  field_dim_->addItem("2", 2);
-  field_dim_->addItem("3", 3);
+  field_dim_->addItem("1 — Curve", 1);
+  field_dim_->addItem("2 — Surface", 2);
+  field_dim_->addItem("3 — Volume", 3);
   tune_dim_combo(field_dim_);
   connect(field_dim_, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
           [this]() {
@@ -818,17 +818,17 @@ GmshPanel::GmshPanel(QWidget* parent) : QWidget(parent) {
   mesh_form->addRow("Mesh Size", mesh_size_);
 
   mesh_dim_ = new QComboBox();
-  mesh_dim_->addItem("Auto", -1);
-  mesh_dim_->addItem("1D", 1);
-  mesh_dim_->addItem("2D", 2);
-  mesh_dim_->addItem("3D", 3);
+  mesh_dim_->addItem("All", -1);
+  mesh_dim_->addItem("1 — Curve", 1);
+  mesh_dim_->addItem("2 — Surface", 2);
+  mesh_dim_->addItem("3 — Volume", 3);
   mesh_form->addRow("Generate Dim", mesh_dim_);
 
   entity_size_dim_ = new QComboBox();
-  entity_size_dim_->addItem("0", 0);
-  entity_size_dim_->addItem("1", 1);
-  entity_size_dim_->addItem("2", 2);
-  entity_size_dim_->addItem("3", 3);
+  entity_size_dim_->addItem("0 — Point", 0);
+  entity_size_dim_->addItem("1 — Curve", 1);
+  entity_size_dim_->addItem("2 — Surface", 2);
+  entity_size_dim_->addItem("3 — Volume", 3);
   tune_dim_combo(entity_size_dim_);
   connect(entity_size_dim_, QOverload<int>::of(&QComboBox::currentIndexChanged),
           this, [this]() {
@@ -3175,7 +3175,7 @@ void GmshPanel::on_physical_group_delete() {
           gmp::l10n::current_language() == gmp::l10n::Language::Chinese;
       phys_group_feedback_->setText(
           chinese
-              ? QString::fromUtf8("已删除物理组 %1:%2；舞台已恢复完整模型。")
+              ? QString::fromUtf8("已删除物理组 %1:%2；视口已恢复完整模型。")
                     .arg(dim)
                     .arg(tag)
               : QString("Deleted physical group %1:%2; restored the full stage.")
@@ -3995,14 +3995,14 @@ QString GmshPanel::pick_entities_dialog(int dim_filter,
   }
   help_text += chinese
                    ? QString::fromUtf8(
-                         " 选择一行后，主舞台会自动转向并用黄色即时高亮对应实体："
+                         " 选择一行后，主视口会自动转向并用黄色即时高亮对应实体："
                          "点显示为放大圆点、边显示为加粗线、面和体显示为不透明表面；"
-                         "选择窗口打开期间仍可直接在主舞台旋转、平移和缩放。")
+                         "选择窗口打开期间仍可直接在主视口旋转、平移和缩放。")
                    : QString(
-                         " Select a row to rotate the main stage and preview "
+                         " Select a row to rotate the main viewport and preview "
                          "the entity in yellow: points use enlarged markers, "
                          "curves use thick lines, and surfaces/volumes use "
-                         "opaque faces; the main stage remains "
+                         "opaque faces; the main viewport remains "
                          "interactive while this window is open.");
   auto* help = new QLabel(help_text, &dialog);
   help->setObjectName("entityPickerHelp");

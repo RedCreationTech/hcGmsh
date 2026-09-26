@@ -603,7 +603,7 @@ ResultsPlotWidget::ResultsPlotWidget(QWidget* parent) : QWidget(parent) {
   legend_ = new QTableWidget(this);
   legend_->setObjectName("resultsCurveLegend");
   legend_->setColumnCount(4);
-  legend_->setHorizontalHeaderLabels({"Visible", "Pinned", "Curve", "Source"});
+  legend_->setHorizontalHeaderLabels({"Visible", "Pinned", "Name", "Source"});
   legend_->setSelectionBehavior(QAbstractItemView::SelectRows);
   legend_->setMinimumWidth(220);
   legend_->setMaximumWidth(640);
@@ -959,7 +959,7 @@ void ResultsPlotWidget::restore_settings(const QVariantList& settings) {
 void ResultsPlotWidget::refresh() {
   const QSignalBlocker blocker(legend_);
   legend_->setHorizontalHeaderLabels(
-      {l10n::tr("Visible"), l10n::tr("Pinned"), l10n::tr("Curve"),
+      {l10n::tr("Visible"), l10n::tr("Pinned"), l10n::tr("Name"),
        l10n::tr("Source")});
   legend_->setRowCount(series_.size());
   for (int row = 0; row < series_.size(); ++row) {
