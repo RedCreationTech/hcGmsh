@@ -6140,7 +6140,9 @@ void MainWindow::build_model_tree() {
   const QStringList root_nodes = project_schema::model_root_nodes();
   for (const auto& name : root_nodes) {
     auto* item = new QTreeWidgetItem(model_tree_);
-    item->setText(0, name);
+    // 根名受控词表显示层翻译（与 ModelTreeAdapter 投影一致）；
+    // l10n::apply 可能在构建之前已执行，此处直接按当前语言写入。
+    item->setText(0, l10n::tr(name));
     item->setExpanded(true);
     item->setData(0, PropertyEditor::kKindRole, name);
     item->setData(0, PropertyEditor::kObjectIdRole,
@@ -6228,7 +6230,8 @@ void MainWindow::build_model_tree() {
                         });
                 menu.addSeparator();
               }
-              auto* add_action = menu.addAction(QString("Add %1").arg(kind));
+              auto* add_action =
+                  menu.addAction(QString("Add %1").arg(l10n::tr(kind)));
               connect(add_action, &QAction::triggered, this,
                       [this, item]() { add_item_under_root(item); });
               if (kind == "Selections") {
