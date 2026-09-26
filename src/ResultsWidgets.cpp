@@ -111,35 +111,44 @@ ResultsTableWidget::ResultsTableWidget(QWidget* parent) : QWidget(parent) {
     edit->setMaximumWidth(92);
     edit->setPlaceholderText("0");
   }
-  // 第二行：四个输入框上方的持久微型标签（输入后仍可辨识各框用途，
-  // 替代原仅靠 placeholder 的方案）。列与下方输入框按 QGridLayout 对齐。
+  // 筛选区：单行「标签在上、控件在下」的字段对排列（列/实体#从/到/
+  // 数值从/到/全部数值 + 清除筛选），整行顶部与底部对齐，视觉整齐。
   const bool zh = l10n::current_language() == l10n::Language::Chinese;
-  auto* filters = new QGridLayout();
+  auto* filters = new QHBoxLayout();
   filters->setContentsMargins(0, 0, 0, 0);
-  filters->setHorizontalSpacing(6);
-  filters->addWidget(new QLabel(l10n::tr("Column"), this), 0, 0);
-  auto* entity_min_label =
-      new QLabel(zh ? QString::fromUtf8("实体#从") : "Entity # from", this);
-  auto* entity_max_label =
-      new QLabel(zh ? QString::fromUtf8("实体#到") : "Entity # to", this);
-  auto* value_min_label =
-      new QLabel(zh ? QString::fromUtf8("数值从") : "Value from", this);
-  auto* value_max_label =
-      new QLabel(zh ? QString::fromUtf8("数值到") : "Value to", this);
-  filters->addWidget(entity_min_label, 0, 1);
-  filters->addWidget(entity_max_label, 0, 2);
-  filters->addWidget(value_min_label, 0, 3);
-  filters->addWidget(value_max_label, 0, 4);
-  filters->addWidget(column_, 1, 0);
-  filters->addWidget(entity_min_, 1, 1);
-  filters->addWidget(entity_max_, 1, 2);
-  filters->addWidget(value_min_, 1, 3);
-  filters->addWidget(value_max_, 1, 4);
-  filters->addWidget(special_, 0, 5, 2, 1);
+  filters->setSpacing(8);
+  auto make_field = [this, zh, filters](const QString& label,
+                                        QWidget* control, int stretch = 0) {
+    auto* box = new QVBoxLayout();
+    box->setContentsMargins(0, 0, 0, 0);
+    box->setSpacing(2);
+    auto* tag = new QLabel(label, this);
+    tag->setStyleSheet("color: #555;");
+    box->addWidget(tag);
+    box->addWidget(control);
+    auto* holder = new QWidget(this);
+    holder->setLayout(box);
+    filters->addWidget(holder, stretch);
+  };
+  make_field(l10n::tr("Column"), column_, 1);
+  make_field(zh ? QString::fromUtf8("实体#从") : "Entity # from", entity_min_);
+  make_field(zh ? QString::fromUtf8("实体#到") : "Entity # to", entity_max_);
+  make_field(zh ? QString::fromUtf8("数值从") : "Value from", value_min_);
+  make_field(zh ? QString::fromUtf8("数值到") : "Value to", value_max_);
+  make_field(zh ? QString::fromUtf8("全部数值") : "All values", special_);
   auto* clear = new QPushButton("Clear filters", this);
   clear->setIcon(gmp::icons::get("clear_filters"));
   clear->setObjectName("gmpIcon_clear_filters");
-  filters->addWidget(clear, 0, 6, 2, 1);
+  {
+    auto* box = new QVBoxLayout();
+    box->setContentsMargins(0, 0, 0, 0);
+    box->setSpacing(2);
+    box->addWidget(new QWidget(this));  // 与标签行同高的占位
+    box->addWidget(clear);
+    auto* holder = new QWidget(this);
+    holder->setLayout(box);
+    filters->addWidget(holder);
+  }
   layout->addLayout(filters);
 
   table_ = new QTableWidget(this);
