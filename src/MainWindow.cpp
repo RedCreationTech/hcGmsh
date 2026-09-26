@@ -19912,7 +19912,8 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                             return;
                           }
                           consistent =
-                              consistent && object->name() == item->text(0) &&
+                              consistent &&
+                              item->text(0) == l10n::tr(object->name()) &&
                               object->kind() ==
                                   item->data(0, PropertyEditor::kKindRole)
                                       .toString() &&
