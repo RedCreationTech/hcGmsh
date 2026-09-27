@@ -172,7 +172,7 @@ class HelpBrowser : public QTextBrowser {
     if (!doc) {
       return;
     }
-    const int max_width = viewport()->width() - 8;
+    const int max_width = viewport()->width() - 16;
     if (max_width <= 0) {
       return;
     }
@@ -204,6 +204,9 @@ class HelpBrowser : public QTextBrowser {
         }
       }
     }
+    // 强制重排：不标记脏区时 idealWidth 不重建，横向滚动条残留。
+    doc->markContentsDirty(0, doc->characterCount());
+    doc->adjustSize();
   }
 
   QHelpEngine* engine_ = nullptr;
