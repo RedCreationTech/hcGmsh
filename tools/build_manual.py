@@ -36,11 +36,12 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 <title>{title}</title>
 <style>
 body {{ font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-       margin: 24px; line-height: 1.65; color: #333; max-width: 900px; }}
+       margin: 24px; line-height: 1.65; color: #333; max-width: 900px;
+       word-wrap: break-word; overflow-wrap: break-word; }}
 h1 {{ font-size: 22px; border-bottom: 2px solid #2f6fed; padding-bottom: 6px; }}
 h2 {{ font-size: 17px; margin-top: 26px; color: #1f3c88; }}
 h3 {{ font-size: 15px; margin-top: 20px; color: #2f4f8f; }}
-img {{ max-width: 100%; border: 1px solid #ddd; border-radius: 4px; }}
+img {{ max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px; }}
 a {{ color: #2f6fed; text-decoration: none; }}
 ul {{ padding-left: 22px; }}
 </style>

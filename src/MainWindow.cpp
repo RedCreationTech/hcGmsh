@@ -20830,11 +20830,11 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   if (!content) {
                     throw std::runtime_error("help content widget is missing");
                   }
-                  // 目录须加载出全部占位章节（当前 3 章）
+                  // 目录须加载出全部章节（手册目录.json 当前 9 章）
                   QAbstractItemModel* toc = content->model();
-                  if (!toc || toc->rowCount() != 3) {
+                  if (!toc || toc->rowCount() != 9) {
                     throw std::runtime_error(
-                        "help TOC must list exactly 3 chapters");
+                        "help TOC must list exactly 9 chapters");
                   }
                   if (!help_browser_ ||
                       help_browser_->document()->isEmpty()) {
