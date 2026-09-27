@@ -1,5 +1,7 @@
 <RCC>
   <qresource prefix="/">
-    <file alias="gmp-manual.qch">../build/manual/gmp-manual.qch</file>
+    <!-- 相对路径基于"生成到构建目录的 gmp-manual.qrc"位置（与 manual/ 子目录
+         同级），因此不依赖构建目录名（build/ 或 build-windows/ 均可）。 -->
+    <file alias="gmp-manual.qch">manual/gmp-manual.qch</file>
   </qresource>
 </RCC>

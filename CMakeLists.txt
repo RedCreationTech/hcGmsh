@@ -271,8 +271,11 @@ else()
     file(WRITE "${GMP_MANUAL_QCH}" "")
   endif()
 endif()
-# manual.qrc 以仓库根相对路径引用 build/manual/gmp-manual.qch（AUTORCC 加载）
-target_sources(gmp_ise PRIVATE resources/manual.qrc)
+# manual.qrc 生成到构建目录并以构建目录相对路径引用 qch（不依赖构建目录
+# 名；Windows CI 使用 build-windows/）。AUTORCC 从构建目录侧加载。
+configure_file(resources/manual.qrc
+               "${CMAKE_CURRENT_BINARY_DIR}/gmp-manual.qrc" COPYONLY)
+target_sources(gmp_ise PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/gmp-manual.qrc")
 
 # TASK-E2E-10: MOOSE 模板库根目录（templates/moose/），运行期可被
 # GMP_MOOSE_TEMPLATES 环境变量覆盖
