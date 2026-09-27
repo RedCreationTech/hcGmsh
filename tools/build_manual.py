@@ -29,6 +29,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+# Windows CI 控制台默认 cp1252，打印中文路径/文案会 UnicodeEncodeError
+# 中断构建；统一按 UTF-8 输出（不可编码字符降级替换）。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 PAGE_TEMPLATE = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
