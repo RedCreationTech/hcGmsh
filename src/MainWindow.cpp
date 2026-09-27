@@ -100,6 +100,7 @@
 #include "gmp/DependencyGraph.h"
 #include "gmp/ProjectStore.h"
 #include "gmp/MoosePanel.h"
+#include "gmp/MooseTemplates.h"
 #include "gmp/PropertyBag.h"
 #include "gmp/OccBridge.h"
 #include "gmp/OperationLog.h"
@@ -5250,17 +5251,10 @@ void MainWindow::build_menu() {
   action_redo_->setEnabled(false);
   tools_menu->addSeparator();
   auto* demo_menu = tools_menu->addMenu("Demos");
-  auto* demo_setup_diff =
-      demo_menu->addAction("Setup Transient Diffusion");
-  auto* demo_run_diff = demo_menu->addAction("Run Transient Diffusion");
-  demo_menu->addSeparator();
-  auto* demo_setup_tm =
-      demo_menu->addAction("Setup Thermo-Mechanics");
-  auto* demo_run_tm = demo_menu->addAction("Run Thermo-Mechanics");
-  demo_menu->addSeparator();
-  auto* demo_setup_nl =
-      demo_menu->addAction("Setup Nonlinear Heat");
-  auto* demo_run_nl = demo_menu->addAction("Run Nonlinear Heat");
+  auto* demo_load_v01 = demo_menu->addAction("Load V01 Uniaxial Tension");
+  demo_load_v01->setObjectName("loadV01DemoAction");
+  auto* demo_run_v01 = demo_menu->addAction("Run V01 Uniaxial Tension");
+  demo_run_v01->setObjectName("runV01DemoAction");
 
   // 设置菜单: 中英文界面切换 (字典式运行时翻译, 见 L10n)
   auto* settings_menu = menuBar()->addMenu("&Settings");
@@ -5614,18 +5608,10 @@ void MainWindow::build_menu() {
     }
     statusBar()->showMessage("Job panel not ready.", 2000);
   });
-  connect(demo_setup_diff, &QAction::triggered, this,
-          [this]() { load_demo_diffusion(false); });
-  connect(demo_run_diff, &QAction::triggered, this,
-          [this]() { load_demo_diffusion(true); });
-  connect(demo_setup_tm, &QAction::triggered, this,
-          [this]() { load_demo_thermo(false); });
-  connect(demo_run_tm, &QAction::triggered, this,
-          [this]() { load_demo_thermo(true); });
-  connect(demo_setup_nl, &QAction::triggered, this,
-          [this]() { load_demo_nonlinear_heat(false); });
-  connect(demo_run_nl, &QAction::triggered, this,
-          [this]() { load_demo_nonlinear_heat(true); });
+  connect(demo_load_v01, &QAction::triggered, this,
+          [this]() { load_v01_demo(false); });
+  connect(demo_run_v01, &QAction::triggered, this,
+          [this]() { load_v01_demo(true); });
 
   update_recent_menu();
 }
@@ -10728,166 +10714,375 @@ void MainWindow::load_demo_diffusion(bool run) {
   }
 }
 
-void MainWindow::load_demo_thermo(bool run) {
-  if (!moose_panel_) {
+// V01 演示内置材料 CSV（与 damASR V01 冻结基线逐字节一致，见
+// templates/moose/cdp-v01/PROVENANCE.md）。载入演示时物化到临时目录。
+struct V01DemoCsv { const char* name; const char* text; };
+static const V01DemoCsv kV01DemoCsvs[] = {
+    {"compression_hardening.csv", R"CSV(stress_pa,inelastic_strain
+8268660.0000000009,0
+11664300,4.9709800000000003e-05
+14410200,0.00010457499999999999
+16512100,0.000181039
+18033500,0.00027696399999999999
+19065000,0.000389312
+19701900,0.00051488399999999996
+20031800,0.00065073699999999997
+20129600,0.00079436399999999999
+19996100,0.00094572999999999999
+19644100,0.0011044099999999999
+19143900,0.00126804
+18550500,0.0014347800000000001
+17905000,0.0016032500000000001
+17236900,0.0017724500000000001
+16566900,0.0019417
+15908600,0.0021105299999999998
+15270800,0.0022786500000000001
+14658900,0.0024458800000000001
+14075900,0.0026121299999999998
+13522800,0.0027773400000000001
+12999900,0.00294152
+12506500,0.0031046899999999998
+12041400,0.0032668799999999998
+11603400,0.00342815
+11190900,0.0035885299999999999
+10802500,0.0037480899999999999
+10436500,0.0039068799999999997
+10091500,0.0040649400000000004
+9458790,0.0043790599999999997
+8893810,0.00469083
+8387470,0.0050005500000000003
+7931900,0.00530847
+7520430,0.0056148300000000003
+7147370,0.0059198100000000002
+6807900,0.0062235900000000002
+6497920,0.0065262799999999998
+6213910,0.0068280199999999997
+5952890,0.0071288999999999996
+5712270,0.0074290099999999998
+5489830,0.0077284299999999997
+5283660,0.0080272099999999999
+5092080,0.00832542
+4913650,0.0086231099999999998
+4747080,0.0089203000000000008
+4591250,0.0092170599999999991
+4445200,0.0095134
+4308030,0.0098093599999999996
+4178989.9999999995,0.010104999999999999
+4057369.9999999995,0.0104002
+3942580,0.0106952
+3834060,0.010989799999999999
+3731320,0.011284199999999999
+3633910,0.0115783
+3541440,0.011872199999999999
+3453540,0.012165799999999999
+3369900,0.0124592
+3290200,0.012752400000000001
+3214180,0.0130454
+3141600,0.0133382
+3072230,0.013630700000000001
+3005860,0.013923100000000001
+2942310,0.0142154
+2881390,0.0145074
+)CSV"},
+    {"compression_damage.csv", R"CSV(damage_c,inelastic_strain
+0,0
+0.0580122,4.9709800000000003e-05
+0.093227699999999997,0.00010457499999999999
+0.13179099999999999,0.000181039
+0.17169799999999999,0.00027696399999999999
+0.21148500000000001,0.000389312
+0.25016500000000003,0.00051488399999999996
+0.28712799999999999,0.00065073699999999997
+0.32203700000000002,0.00079436399999999999
+0.355711,0.00094572999999999999
+0.388571,0.0011044099999999999
+0.42006500000000002,0.00126804
+0.44986999999999999,0.0014347800000000001
+0.47783300000000001,0.0016032500000000001
+0.50391699999999995,0.0017724500000000001
+0.52815900000000005,0.0019417
+0.55063899999999999,0.0021105299999999998
+0.571465,0.0022786500000000001
+0.590754,0.0024458800000000001
+0.608626,0.0026121299999999998
+0.62519800000000003,0.0027773400000000001
+0.64058000000000004,0.00294152
+0.65487799999999996,0.0031046899999999998
+0.66818500000000003,0.0032668799999999998
+0.680589,0.00342815
+0.69216999999999995,0.0035885299999999999
+0.70299900000000004,0.0037480899999999999
+0.71314,0.0039068799999999997
+0.72265199999999996,0.0040649400000000004
+0.73999499999999996,0.0043790599999999997
+0.75538899999999998,0.00469083
+0.76912999999999998,0.0050005500000000003
+0.78146000000000004,0.00530847
+0.79257699999999998,0.0056148300000000003
+0.80264599999999997,0.0059198100000000002
+0.81180399999999997,0.0062235900000000002
+0.82016699999999998,0.0065262799999999998
+0.82783099999999998,0.0068280199999999997
+0.83487800000000001,0.0071288999999999996
+0.84137899999999999,0.0074290099999999998
+0.84739399999999998,0.0077284299999999997
+0.85297400000000001,0.0080272099999999999
+0.85816400000000004,0.00832542
+0.86300299999999996,0.0086231099999999998
+0.86752499999999999,0.0089203000000000008
+0.87175999999999998,0.0092170599999999991
+0.87573400000000001,0.0095134
+0.87946999999999997,0.0098093599999999996
+0.882988,0.010104999999999999
+0.88630799999999998,0.0104002
+0.88944500000000004,0.0106952
+0.89241300000000001,0.010989799999999999
+0.89522599999999997,0.011284199999999999
+0.89789600000000003,0.0115783
+0.90043300000000004,0.011872199999999999
+0.90284699999999996,0.012165799999999999
+0.90514600000000001,0.0124592
+0.90733900000000001,0.012752400000000001
+0.90943200000000002,0.0130454
+0.91143300000000005,0.0133382
+0.91334700000000002,0.013630700000000001
+0.91517899999999996,0.013923100000000001
+0.91693499999999994,0.0142154
+0.91861999999999999,0.0145074
+)CSV"},
+    {"tension_stiffening.csv", R"CSV(stress_pa,cracking_strain
+2057770,0
+1920750,5.0681399999999999e-05
+1716710,7.6721600000000001e-05
+1528420,0.000102233
+1369980,0.00012674100000000001
+1239410,0.000150314
+1131670,0.00017312
+1041970.0000000001,0.00019531999999999999
+966453,0.000217044
+902150,0.00023839099999999999
+846800,0.000259437
+798680,0.00028024000000000001
+756469,0.000300845
+719136,0.00032128499999999998
+685876,0.00034158799999999998
+656047,0.00036177600000000001
+629134,0.000381865
+604721,0.00040187000000000003
+582465,0.000421803
+562085,0.00044167099999999998
+543347,0.00046148499999999998
+526052,0.00048125000000000002
+510035,0.00050097100000000001
+495153,0.00052065399999999995
+481286,0.00054030300000000001
+468329,0.00055991999999999999
+456192,0.00057950999999999999
+444795,0.000599074
+434071,0.000618616
+423958,0.00063813699999999999
+414404,0.00065763799999999999
+405360,0.00067712200000000005
+396786,0.00069658999999999997
+388644,0.00071604299999999997
+380901,0.00073548199999999998
+373525,0.00075490900000000001
+366492,0.00077432399999999995
+359775,0.00079372700000000004
+353353,0.00081312099999999998
+347206,0.00083250499999999999
+341316,0.00085187999999999995
+335666,0.000871246
+330241,0.00089060500000000004
+325027,0.00090995599999999996
+320011,0.00092929999999999998
+315181,0.000948637
+310528,0.00096796800000000004
+306040,0.00098729299999999998
+301709,0.00100661
+297526,0.00102593
+293483,0.00104524
+289573,0.0010645400000000001
+285789,0.00108384
+282125,0.0011031400000000001
+278574,0.00112243
+275132,0.00114171
+)CSV"},
+    {"tension_damage.csv", R"CSV(damage_t,cracking_strain
+0,0
+0.25174600000000003,5.0681399999999999e-05
+0.34507700000000002,7.6721600000000001e-05
+0.42194500000000001,0.000102233
+0.48402299999999998,0.00012674100000000001
+0.53440900000000002,0.000150314
+0.57580799999999999,0.00017312
+0.61029299999999997,0.00019531999999999999
+0.63940300000000005,0.000217044
+0.66427700000000001,0.00023839099999999999
+0.68576599999999999,0.000259437
+0.70451399999999997,0.00028024000000000001
+0.72101400000000004,0.000300845
+0.73564700000000005,0.00032128499999999998
+0.74871799999999999,0.00034158799999999998
+0.76046400000000003,0.00036177600000000001
+0.77108100000000002,0.000381865
+0.780725,0.00040187000000000003
+0.78952699999999998,0.000421803
+0.79759500000000005,0.00044167099999999998
+0.80501699999999998,0.00046148499999999998
+0.81186999999999998,0.00048125000000000002
+0.818218,0.00050097100000000001
+0.82411599999999996,0.00052065399999999995
+0.82961200000000002,0.00054030300000000001
+0.83474499999999996,0.00055991999999999999
+0.83955199999999996,0.00057950999999999999
+0.84406300000000001,0.000599074
+0.848306,0.000618616
+0.85230399999999995,0.00063813699999999999
+0.85607800000000001,0.00065763799999999999
+0.85964700000000005,0.00067712200000000005
+0.86302800000000002,0.00069658999999999997
+0.86623600000000001,0.00071604299999999997
+0.86928300000000003,0.00073548199999999998
+0.87218300000000004,0.00075490900000000001
+0.87494499999999997,0.00077432399999999995
+0.877579,0.00079372700000000004
+0.88009499999999996,0.00081312099999999998
+0.88250099999999998,0.00083250499999999999
+0.88480300000000001,0.00085187999999999995
+0.88700800000000002,0.000871246
+0.889123,0.00089060500000000004
+0.89115299999999997,0.00090995599999999996
+0.89310400000000001,0.00092929999999999998
+0.89497899999999997,0.000948637
+0.89678400000000003,0.00096796800000000004
+0.89852200000000004,0.00098729299999999998
+0.90019700000000002,0.00100661
+0.90181299999999998,0.00102593
+0.90337199999999995,0.00104524
+0.90487899999999999,0.0010645400000000001
+0.90633399999999997,0.00108384
+0.90774200000000005,0.0011031400000000001
+0.90910400000000002,0.00112243
+0.91042299999999998,0.00114171
+)CSV"},
+};
+
+void MainWindow::load_v01_demo(bool run) {
+  // V01 单轴拉伸演示：与巡览合同 cdp_v01_structured_reproduction_contract
+  // 同一套结构化对象组成，网格/CSV 来自 templates/moose/cdp-v01 冻结基线。
+  if (!moose_panel_ || !model_tree_ || !viewer_) {
     return;
   }
-  clear_model_tree_children();
+  const QString mesh =
+      QDir(moose_templates_root()).filePath(
+          "cdp-v01/uniaxial_compression_mesh.e");
+  if (!QFileInfo::exists(mesh)) {
+    statusBar()->showMessage("V01 demo mesh is unavailable: " + mesh, 4000);
+    return;
+  }
 
-  auto* functions = find_root_item("Functions");
-  add_child_item(functions, "heat_src", "Functions",
+  // 四张材料 CSV 以内置文本物化到临时目录（与 damASR V01 基线逐字节一致）。
+  const QString csv_dir =
+      QDir::temp().filePath("gmp_v01_demo_material_csv");
+  QDir().mkpath(csv_dir);
+  for (const auto& csv : kV01DemoCsvs) {
+    QFile file(QDir(csv_dir).filePath(QString::fromLatin1(csv.name)));
+    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+      file.write(csv.text);
+    }
+  }
+
+  clear_model_tree_children();
+  set_active_app_profile("DamSafetyApp-opt", /*mark_dirty=*/false);
+
+  if (!import_exodus_mesh(mesh)) {
+    statusBar()->showMessage("V01 demo Exodus import failed.", 4000);
+    return;
+  }
+
+  QVariantMap material{
+      {"type", "AbaqusCDP"},
+      {"youngs_modulus", "29791500000"},
+      {"poissons_ratio", "0.2"},
+      {"dilation_angle", "36"},
+      {"eccentricity", "0.1"},
+      {"biaxial_to_uniaxial_compression_ratio", "1.16"},
+      {"tensile_meridian_ratio", "0.667"},
+      {"viscosity", "5e-4"},
+      {"tension_recovery", "0"},
+      {"compression_recovery", "1"},
+      {"maximum_substeps", "256"},
+      {"maximum_strain_increment", "2.5e-5"},
+      {"enable_performance_diagnostics", "true"},
+      {"unit_factor_stress", "1000000"}};
+  for (const QString& name :
+       {QString("compression_hardening"), QString("compression_damage"),
+        QString("tension_stiffening"), QString("tension_damage")}) {
+    material.insert(name + "_file",
+                    QDir(csv_dir).filePath(name + ".csv"));
+  }
+  add_child_item(find_root_item("Materials"), "concrete", "Materials",
+                 material);
+  add_child_item(find_root_item("Sections"), "concrete_section", "Sections",
+                 {{"type", "SolidSection"},
+                  {"material", "concrete"},
+                  {"block", "concrete_cube__concrete"}});
+
+  QVariantMap physics = default_params_for_kind("Physics");
+  physics.insert("block", "concrete_cube__concrete");
+  add_child_item(find_root_item("Physics"), "concrete", "Physics", physics);
+  add_child_item(find_root_item("Functions"), "top_displacement", "Functions",
                  {{"type", "ParsedFunction"},
-                  {"expression",
-                   "50.0*exp(-t)*sin(3.14159*x)*sin(3.14159*y)"}});
+                  {"expression", "2.5e-05*t"}});
+  auto add_bc = [this](const QString& name, const QVariantMap& params) {
+    add_child_item(find_root_item("BC"), name, "BC", params);
+  };
+  add_bc("bottom_z", {{"type", "DirichletBC"},
+                      {"variable", "disp_z"},
+                      {"boundary", "bottom"},
+                      {"value", "0"}});
+  add_bc("top_x_gauge", {{"type", "DirichletBC"},
+                         {"variable", "disp_x"},
+                         {"boundary", "top"},
+                         {"value", "0"}});
+  add_bc("top_y_gauge", {{"type", "DirichletBC"},
+                         {"variable", "disp_y"},
+                         {"boundary", "top"},
+                         {"value", "0"}});
+  add_bc("top_z", {{"type", "FunctionDirichletBC"},
+                   {"variable", "disp_z"},
+                   {"boundary", "top"},
+                   {"function", "top_displacement"}});
+  add_child_item(find_root_item("Steps"), "step_v01", "Steps",
+                 default_params_for_kind("Steps"));
 
-  auto* variables = find_root_item("Variables");
-  add_child_item(variables, "T", "Variables",
-                 {{"order", "FIRST"},
-                  {"family", "LAGRANGE"},
-                  {"initial_condition", "300"}});
-  add_child_item(variables, "disp_x", "Variables",
-                 {{"order", "FIRST"}, {"family", "LAGRANGE"}});
-  add_child_item(variables, "disp_y", "Variables",
-                 {{"order", "FIRST"}, {"family", "LAGRANGE"}});
+  QVariantMap outputs = default_params_for_kind("Outputs");
+  outputs.insert(
+      "field_outputs",
+      "DamageC DamageT kappa_c kappa_t local_iterations "
+      "accepted_substeps jacobian_fallbacks "
+      "integration_microseconds");
+  outputs.insert("history_profile", "cdp_uniaxial_z");
+  outputs.insert("times_enabled", "true");
+  outputs.insert("file_base", "uniaxial_tension_single");
+  add_child_item(find_root_item("Outputs"), "v01_outputs", "Outputs",
+                 outputs);
 
-  auto* materials = find_root_item("Materials");
-  add_child_item(materials, "thcond", "Materials",
-                 {{"type", "GenericConstantMaterial"},
-                  {"prop_names", "thermal_conductivity"},
-                  {"prop_values", "1.0"}});
-  add_child_item(materials, "elastic", "Materials",
-                 {{"type", "ComputeElasticityTensor"},
-                  {"fill_method", "symmetric_isotropic"},
-                  {"C_ijkl", "2.1e5 0.8e5"}});
-  add_child_item(materials, "strain", "Materials",
-                 {{"type", "ComputeSmallStrain"},
-                  {"displacements", "disp_x disp_y"},
-                  {"eigenstrain_names", "eigenstrain"}});
-  add_child_item(materials, "stress", "Materials",
-                 {{"type", "ComputeLinearElasticStress"}});
-  add_child_item(materials, "thermal_strain", "Materials",
-                 {{"type", "ComputeThermalExpansionEigenstrain"},
-                  {"thermal_expansion_coeff", "1e-5"},
-                  {"temperature", "T"},
-                  {"stress_free_temperature", "300"},
-                  {"eigenstrain_name", "eigenstrain"}});
-
-  auto* bcs = find_root_item("BC");
-  add_child_item(bcs, "temp_left", "BC",
-                 {{"type", "DirichletBC"},
-                  {"variable", "T"},
-                  {"boundary", "left"},
-                  {"value", "400"}});
-  add_child_item(bcs, "temp_right", "BC",
-                 {{"type", "DirichletBC"},
-                  {"variable", "T"},
-                  {"boundary", "right"},
-                  {"value", "300"}});
-  add_child_item(bcs, "fix_x", "BC",
-                 {{"type", "DirichletBC"},
-                  {"variable", "disp_x"},
-                  {"boundary", "left"},
-                  {"value", "0"}});
-  add_child_item(bcs, "fix_y", "BC",
-                 {{"type", "DirichletBC"},
-                  {"variable", "disp_y"},
-                  {"boundary", "bottom"},
-                  {"value", "0"}});
-
-  auto* loads = find_root_item("Loads");
-  add_child_item(loads, "htcond", "Loads",
-                 {{"type", "HeatConduction"}, {"variable", "T"}});
-  add_child_item(loads, "TensorMechanics", "Loads",
-                 {{"type", "TensorMechanics"},
-                  {"displacements", "disp_x disp_y"}});
-  add_child_item(loads, "Q_function", "Loads",
-                 {{"type", "BodyForce"},
-                  {"variable", "T"},
-                  {"function", "heat_src"}});
-
-  auto* outputs = find_root_item("Outputs");
-  add_child_item(outputs, "exodus", "Outputs",
-                 {{"type", "Exodus"}, {"exodus", "true"}, {"csv", "true"}});
-
-  auto* steps = find_root_item("Steps");
-  add_child_item(steps, "transient", "Steps",
-                 {{"type", "Transient"},
-                  {"scheme", "bdf2"},
-                  {"dt", "0.05"},
-                  {"end_time", "0.5"},
-                  {"solve_type", "PJFNK"},
-                  {"nl_max_its", "10"},
-                  {"l_max_its", "30"},
-                  {"nl_abs_tol", "1e-8"},
-                  {"l_tol", "1e-4"}});
-
-  moose_panel_->set_template_by_key("tm_generated", true);
-  sync_model_to_input();
-
-  statusBar()->showMessage("Demo loaded: Thermo-Mechanics", 2000);
-  gmp::log_operation("project", "Demo loaded: Thermo-Mechanics");
   if (run) {
+    // 运行入口：先无副作用预检，再同步模型到输入，最后本地运行。
+    if (!validate_workflow_for_submit(false)) {
+      return;
+    }
+    sync_model_to_input();
     moose_panel_->run_job();
-  }
-}
-
-void MainWindow::load_demo_nonlinear_heat(bool run) {
-  if (!moose_panel_) {
+    statusBar()->showMessage("Demo running: V01 Uniaxial Tension", 4000);
+    gmp::log_operation("project", "Demo running: V01 Uniaxial Tension");
     return;
   }
-  clear_model_tree_children();
-
-  auto* variables = find_root_item("Variables");
-  add_child_item(variables, "T", "Variables",
-                 {{"order", "FIRST"},
-                  {"family", "LAGRANGE"},
-                  {"initial_condition", "300"}});
-
-  auto* materials = find_root_item("Materials");
-  add_child_item(materials, "k_T", "Materials",
-                 {{"type", "ParsedMaterial"},
-                  {"property_name", "thermal_conductivity"},
-                  {"coupled_variables", "T"},
-                  {"expression", "1 + 0.01*T"}});
-
-  auto* bcs = find_root_item("BC");
-  add_child_item(bcs, "temp_left", "BC",
-                 {{"type", "DirichletBC"},
-                  {"variable", "T"},
-                  {"boundary", "left"},
-                  {"value", "500"}});
-  add_child_item(bcs, "temp_right", "BC",
-                 {{"type", "DirichletBC"},
-                  {"variable", "T"},
-                  {"boundary", "right"},
-                  {"value", "300"}});
-
-  auto* loads = find_root_item("Loads");
-  add_child_item(loads, "T_dt", "Loads",
-                 {{"type", "TimeDerivative"}, {"variable", "T"}});
-  add_child_item(loads, "T_cond", "Loads",
-                 {{"type", "HeatConduction"}, {"variable", "T"}});
-
-  auto* outputs = find_root_item("Outputs");
-  add_child_item(outputs, "exodus", "Outputs",
-                 {{"type", "Exodus"}, {"exodus", "true"}, {"csv", "true"}});
-
-  auto* steps = find_root_item("Steps");
-  add_child_item(steps, "transient", "Steps",
-                 {{"type", "Transient"},
-                  {"solve_type", "NEWTON"},
-                  {"scheme", "bdf2"},
-                  {"dt", "0.02"},
-                  {"end_time", "0.5"}});
-
-  moose_panel_->set_template_by_key("heat_generated", true);
   sync_model_to_input();
-
-  statusBar()->showMessage("Demo loaded: Nonlinear Heat", 2000);
-  gmp::log_operation("project", "Demo loaded: Nonlinear Heat");
-  if (run) {
-    moose_panel_->run_job();
-  }
+  statusBar()->showMessage("Demo loaded: V01 Uniaxial Tension", 4000);
+  gmp::log_operation("project", "Demo loaded: V01 Uniaxial Tension");
 }
 
 QTreeWidgetItem* MainWindow::create_selection_from_group(
@@ -18736,6 +18931,156 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   if (!restored) {
                     throw std::runtime_error(
                         "V01 could not restore the tour project");
+                  }
+                  if (!failure.isEmpty()) {
+                    throw std::runtime_error(failure.toStdString());
+                  }
+                },
+                this});
+  steps.append({"v01_demo_menu_contract",
+                [this, dir]() {
+                  // V01 演示菜单合同：与 cdp_v01_structured_reproduction_contract
+                  // 相同的组成，但走真实菜单 action（载入 V01 单轴拉伸），
+                  // 证明用户可见入口能一次生成可同步的完整 V01 模型。
+                  auto* action = findChild<QAction*>("loadV01DemoAction");
+                  auto* run_action = findChild<QAction*>("runV01DemoAction");
+                  if (!action || !run_action || !moose_panel_ || !viewer_) {
+                    throw std::runtime_error(
+                        "V01 demo menu actions are missing");
+                  }
+                  const QString restore_path =
+                      QDir::tempPath() + "/gmp_tour_v01_menu_restore.gmp.yaml";
+                  if (!save_project(restore_path)) {
+                    throw std::runtime_error(
+                        "V01 menu demo could not save the restore fixture");
+                  }
+                  auto restore = [this, &restore_path]() {
+                    const bool ok = load_project(restore_path);
+                    QFile::remove(restore_path);
+                    QDir(QFileInfo(restore_path).absolutePath() +
+                         "/.work/case/gmp_tour_v01_menu_restore")
+                        .removeRecursively();
+                    return ok;
+                  };
+
+                  action->trigger();
+
+                  QString failure;
+                  auto* materials = find_root_item("Materials");
+                  auto* steps_root = find_root_item("Steps");
+                  auto* mesh_root = find_root_item("Mesh");
+                  if (!materials || materials->childCount() == 0 ||
+                      materials->child(0)->text(0) != "concrete" ||
+                      materials->child(0)
+                              ->data(0, PropertyEditor::kParamsRole)
+                              .toMap()
+                              .value("type")
+                              .toString() != "AbaqusCDP") {
+                    failure = "V01 menu demo did not create the CDP material";
+                  } else if (!steps_root || steps_root->childCount() == 0 ||
+                             steps_root->child(0)->text(0) != "step_v01") {
+                    failure = "V01 menu demo did not create the step node";
+                  } else if (!mesh_root || mesh_root->childCount() == 0) {
+                    failure = "V01 menu demo did not register the mesh node";
+                  } else if (mesh_snapshot_.mesh_dim != 3 ||
+                             !mesh_snapshot_.has_group(
+                                 "concrete_cube__concrete", 3) ||
+                             !mesh_snapshot_.has_group("bottom", 2) ||
+                             !mesh_snapshot_.has_group("top", 2)) {
+                    failure =
+                        "V01 menu demo mesh manifest groups are missing";
+                  } else {
+                    const QString input = moose_panel_->input_text();
+                    const QStringList markers{
+                        "[Physics/SolidMechanics/QuasiStatic/concrete]",
+                        "block = concrete_cube__concrete",
+                        "[Mesh/file]",
+                        "file_base = uniaxial_tension_single"};
+                    for (const auto& marker : markers) {
+                      if (!input.contains(marker)) {
+                        failure =
+                            "V01 menu demo input is missing: " + marker;
+                        break;
+                      }
+                    }
+                  }
+                  // 手册截图采集（仅 GMP_TOUR_MANUAL_SHOTS=1 时）：主窗口与
+                  // 同步后的 Generated Input 编辑器。
+                  if (failure.isEmpty() &&
+                      qEnvironmentVariableIsSet("GMP_TOUR_MANUAL_SHOTS")) {
+                    // 主窗口须在 restore() 之前采集（自动步截图发生在
+                    // activate 返回后，已经是恢复后的状态）。
+                    grab().save(dir + "/v01_demo_main_window.png");
+                    if (auto* editor = moose_panel_->findChild<
+                            QPlainTextEdit*>("mooseGeneratedInputEditor")) {
+                      editor->grab().save(dir + "/v01_demo_input_editor.png");
+                    }
+                    // 演示菜单展开态：macOS 菜单栏是系统原生组件无法 grab，
+                    // 但 QMenu::popup 以 Qt 部件渲染，可离屏截取同一菜单。
+                    if (auto* tools_menu_w =
+                            findChild<QMenu*>("toolsMenu")) {
+                      for (auto* menu_action : tools_menu_w->actions()) {
+                        if (QMenu* demo = menu_action->menu()) {
+                          const QPoint at = mapToGlobal(QPoint(160, 60));
+                          demo->popup(at);
+                          qApp->processEvents();
+                          demo->grab().save(dir + "/v01_demo_menu_open.png");
+                          demo->close();
+                          break;
+                        }
+                      }
+                    }
+                    // 曲线页：把模板库真实加速度时程作为固定曲线注入结果
+                    // 曲线页后截取（仅在无既有固定曲线时，避免丢失用户曲线；
+                    // derived: 源不会被 settings() 持久化）。
+                    const QString curve_csv =
+                        QDir(moose_templates_root())
+                            .absoluteFilePath(
+                                "tpl-dam-2d-dyn-cdp/"
+                                "dam_2d_full_acceleration.csv");
+                    QVariantList curve_points;
+                    QFile curve_file(curve_csv);
+                    if (curve_file.open(QIODevice::ReadOnly |
+                                        QIODevice::Text)) {
+                      QTextStream in(&curve_file);
+                      while (!in.atEnd()) {
+                        const QStringList parts =
+                            in.readLine().split(QLatin1Char(','));
+                        if (parts.size() < 2) {
+                          continue;
+                        }
+                        bool ok_x = false, ok_y = false;
+                        const double x = parts.at(0).toDouble(&ok_x);
+                        const double y = parts.at(1).toDouble(&ok_y);
+                        if (ok_x && ok_y) {
+                          curve_points << QVariant(QVariantList{x, y});
+                        }
+                      }
+                    }
+                    if (results_plot_widget_ &&
+                        results_plot_widget_->settings().isEmpty() &&
+                        !curve_points.isEmpty()) {
+                      QVariantMap entry{
+                          {"name", "dam_2d acceleration"},
+                          {"source", "derived:v01-manual-shot"},
+                          {"x_name", "time"},
+                          {"y_name", "accel"},
+                          {"x_unit", "s"},
+                          {"y_unit", "m/s^2"},
+                          {"pinned", true},
+                          {"visible", true},
+                          {"points", curve_points}};
+                      results_plot_widget_->restore_settings(
+                          {QVariant(entry)});
+                      results_plot_widget_->grab().save(
+                          dir + "/v01_demo_results_plot.png");
+                      results_plot_widget_->restore_settings({});
+                    }
+                  }
+                  const bool restored = restore();
+                  if (!restored) {
+                    throw std::runtime_error(
+                        "V01 menu demo could not restore the tour project");
                   }
                   if (!failure.isEmpty()) {
                     throw std::runtime_error(failure.toStdString());

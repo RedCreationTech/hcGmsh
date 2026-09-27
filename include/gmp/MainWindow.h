@@ -241,8 +241,7 @@ class MainWindow : public QMainWindow {
   QString build_generation_report() const;
   bool sync_model_to_input(const QString& project_path_override = QString());
   void load_demo_diffusion(bool run);
-  void load_demo_thermo(bool run);
-  void load_demo_nonlinear_heat(bool run);
+  void load_v01_demo(bool run);
   void refresh_module_node_list(QListWidget* list,
                                const QString& root_name,
                                const QString& empty_text) const;

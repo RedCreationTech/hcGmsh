@@ -231,6 +231,8 @@ set(GMP_MANUAL_QCH "${CMAKE_CURRENT_BINARY_DIR}/manual/gmp-manual.qch")
 if(Python3_Interpreter_FOUND)
   file(GLOB GMP_MANUAL_MD CONFIGURE_DEPENDS
        "${CMAKE_CURRENT_SOURCE_DIR}/doc/manual/src/*.md")
+  file(GLOB GMP_MANUAL_IMAGES CONFIGURE_DEPENDS
+       "${CMAKE_CURRENT_SOURCE_DIR}/doc/manual/images/*.png")
   add_custom_command(
     OUTPUT "${GMP_MANUAL_QCH}"
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/build_manual.py"
@@ -239,6 +241,7 @@ if(Python3_Interpreter_FOUND)
     DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/build_manual.py"
             "${CMAKE_CURRENT_SOURCE_DIR}/doc/manual/手册目录.json"
             ${GMP_MANUAL_MD}
+            ${GMP_MANUAL_IMAGES}
     COMMENT "构建软件内用户手册（Markdown -> qch）"
     VERBATIM)
   add_custom_target(gmp_manual_qch DEPENDS "${GMP_MANUAL_QCH}")
