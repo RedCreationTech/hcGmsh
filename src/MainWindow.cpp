@@ -172,7 +172,29 @@ class HelpBrowser : public QTextBrowser {
     if (!doc) {
       return;
     }
-    const int max_width = viewport()->width() - 16;
+    // 左侧留白实测：Qt 的 CSS 子集会忽略手册模板 body{margin:24px}
+    // （实证：documentMargin 保持默认 4px，图片片段布局 x=4），左空隙
+    // 实即 documentMargin；仍取首个图片片段所在块的布局 x 坐标实测，
+    // 兼容未来模板/块缩进变化。max-width 按“视口宽 - 左侧留白 - 8”
+    // 收敛，右侧固定 8px 呼吸，左右留白视觉对称（旧固定 -16 使右缝
+    // 比左缝宽 3 倍）。
+    qreal left_gap = doc->documentMargin();
+    for (QTextBlock block = doc->begin(); block != doc->end();
+         block = block.next()) {
+      bool has_image = false;
+      for (QTextBlock::iterator it = block.begin(); !it.atEnd(); ++it) {
+        if (it.fragment().isValid() &&
+            it.fragment().charFormat().isImageFormat()) {
+          has_image = true;
+          break;
+        }
+      }
+      if (has_image) {
+        left_gap = doc->documentLayout()->blockBoundingRect(block).left();
+        break;
+      }
+    }
+    const int max_width = viewport()->width() - qRound(left_gap) - 8;
     if (max_width <= 0) {
       return;
     }
@@ -999,6 +1021,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
   module_work_window_ =
       new QDockWidget("Module Workspace", nullptr, Qt::Tool);
   module_work_window_->setObjectName("moduleWorkspaceWindow");
+  module_work_window_->setProperty("gmpWorkWindow", true);
   module_work_window_->setFeatures(QDockWidget::DockWidgetClosable |
                                    QDockWidget::DockWidgetMovable |
                                    QDockWidget::DockWidgetFloatable);
@@ -1032,6 +1055,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
                                         const QSize& initial_size) {
     auto* workspace = new QDockWidget(title, nullptr, Qt::Tool);
     workspace->setObjectName(object_name);
+    workspace->setProperty("gmpWorkWindow", true);
     workspace->setFeatures(QDockWidget::DockWidgetClosable |
                            QDockWidget::DockWidgetMovable |
                            QDockWidget::DockWidgetFloatable);
@@ -4849,6 +4873,28 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
       qobject_cast<QDockWidget*>(watched)) {
     force_native_relayout();
   }
+  // ---- 顶层工作窗标题栏双击守卫 ----
+  // 手册/模块/网格/作业/可视化/结果等工作窗借用 QDockWidget 作 Qt::Tool
+  // 顶层窗。实测（Qt 6.11.1, macOS）：这类窗口带原生标题栏（styleMask
+  // 含 miniaturizable），标题栏双击走 macOS zoom/尺寸改写路径，会让窗
+  // 口停在半最大化异常尺寸，标题栏与窗口按钮丢失后无法恢复。凡 Qt 侧
+  // 能收到的标题栏区域 MouseButtonDblClick 一律吞掉，保留单击拖动与
+  // 按钮交互。所有顶层工作窗创建时打 gmpWorkWindow 标记（见各
+  // build/create_*_work_window），此处统一处理。
+  if (event && event->type() == QEvent::MouseButtonDblClick && watched &&
+      qobject_cast<QDockWidget*>(watched) &&
+      watched->property("gmpWorkWindow").toBool()) {
+    auto* mouse_event = static_cast<QMouseEvent*>(event);
+    auto* dock = static_cast<QDockWidget*>(watched);
+    if (mouse_event->button() == Qt::LeftButton && dock->layout()) {
+      // 标题栏带 = dock 布局顶边距（内绘标题栏行高），兜底 24px。
+      const int title_band =
+          qMax(dock->layout()->contentsMargins().top(), 24);
+      if (mouse_event->position().toPoint().y() <= title_band) {
+        return true;
+      }
+    }
+  }
   return QMainWindow::eventFilter(watched, event);
 }
 
@@ -5693,6 +5739,7 @@ void MainWindow::apply_language_to_windows() {
 void MainWindow::build_help_work_window() {
   auto* workspace = new QDockWidget("User Manual", nullptr, Qt::Tool);
   workspace->setObjectName("helpWorkspaceWindow");
+  workspace->setProperty("gmpWorkWindow", true);
   workspace->setFeatures(QDockWidget::DockWidgetClosable |
                          QDockWidget::DockWidgetMovable |
                          QDockWidget::DockWidgetFloatable);
@@ -9810,6 +9857,7 @@ QDockWidget* MainWindow::create_results_compare_window() {
 
   auto* window = new QDockWidget(base_title, nullptr, Qt::Tool);
   window->setObjectName(QString("resultsCompareWindow%1").arg(index));
+  window->setProperty("gmpWorkWindow", true);
   window->setProperty("gmpGeometryKey", geometry_key);
   window->setFeatures(QDockWidget::DockWidgetClosable |
                       QDockWidget::DockWidgetMovable |
@@ -20799,6 +20847,63 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                 },
                 this});
+  // 手册标题栏双击守卫回归：向标题栏区域投递完整双击序列 + 原生双击事
+  // 件，断言窗口仍可见、flags 与尺寸不被改写（macOS 标题栏双击事故）。
+  // 放在 maximize 自终止步骤之前，保证全量巡览覆盖。
+  steps.append({"user_manual_titlebar_dblclick",
+                [this]() {
+                  if (!help_work_window_) {
+                    throw std::runtime_error(
+                        "help work window was not created");
+                  }
+                  show_user_manual();
+                  auto* window = help_work_window_;
+                  const Qt::WindowFlags flags_before = window->windowFlags();
+                  const QSize size_before = window->size();
+                  const QRect frame_before = window->frameGeometry();
+                  if (frame_before.size().isEmpty()) {
+                    throw std::runtime_error(
+                        "help work window has empty frame before dblclick");
+                  }
+                  const QPoint title_pos(window->width() / 2, 4);
+                  const QPoint global = window->mapToGlobal(title_pos);
+                  const auto post = [&](QEvent::Type type,
+                                        Qt::MouseButtons buttons) {
+                    QMouseEvent event(type, title_pos, global, Qt::LeftButton,
+                                      buttons, Qt::NoModifier);
+                    QApplication::sendEvent(window, &event);
+                    qApp->processEvents();
+                  };
+                  post(QEvent::MouseButtonPress, Qt::LeftButton);
+                  post(QEvent::MouseButtonRelease, Qt::NoButton);
+                  post(QEvent::MouseButtonPress, Qt::LeftButton);
+                  post(QEvent::MouseButtonDblClick, Qt::LeftButton);
+                  post(QEvent::MouseButtonRelease, Qt::NoButton);
+                  QEventLoop settle;
+                  QTimer::singleShot(300, &settle, &QEventLoop::quit);
+                  settle.exec();
+                  if (!window->isVisible()) {
+                    throw std::runtime_error(
+                        "help work window hidden after titlebar dblclick");
+                  }
+                  if (window->windowFlags() != flags_before) {
+                    throw std::runtime_error(
+                        "help work window flags rewritten after titlebar "
+                        "dblclick");
+                  }
+                  if (window->frameGeometry().size().isEmpty() ||
+                      window->frameGeometry().size().isNull()) {
+                    throw std::runtime_error(
+                        "help work window frame collapsed after titlebar "
+                        "dblclick");
+                  }
+                  if (window->size() != size_before) {
+                    throw std::runtime_error(
+                        "help work window size rewritten after titlebar "
+                        "dblclick");
+                  }
+                },
+                help_work_window_});
   steps.append({"main_window_maximize_expands",
                 [this]() {
                   // 最大化和浮动窗交互后的普通缩放都必须让中央区域充满。

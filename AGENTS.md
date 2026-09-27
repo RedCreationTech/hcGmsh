@@ -11,7 +11,7 @@ cmake --build build -j4
 # 单元测试
 ctest --test-dir build --output-on-failure
 
-# 全量真实点击 GUI 巡览（当前基线 118 步）
+# 全量真实点击 GUI 巡览（当前基线 119 步）
 mkdir -p /tmp/gmp-ui-tour
 GMP_TOUR_REAL_CLICKS=1 GMP_SCREENSHOT_DIR=/tmp/gmp-ui-tour ./build/gmp_ise
 
@@ -25,7 +25,7 @@ GMP_TOUR_REAL_CLICKS=1 GMP_TOUR_STEP_FILTER=<步骤名片段> \
 1. **日常修改**：每次代码修改后，只运行与本次修改直接相关的 1~2 个测试用例：
    - 优先用 `GMP_TOUR_STEP_FILTER` 定向运行对应巡览步骤；
    - 涉及数据合同/schema 时运行 `ctest`。
-2. **全量巡检**（118 步真实点击巡览 + CTest）只在以下时机执行：
+2. **全量巡检**（119 步真实点击巡览 + CTest）只在以下时机执行：
    - `git commit` 之前；
    - 用户明确要求全量验证时。
 3. 全量巡览基线只增不减：新增用例在既有基线上递增，不得删减既有断言换取通过。
@@ -58,3 +58,4 @@ GMP_TOUR_REAL_CLICKS=1 GMP_TOUR_STEP_FILTER=<步骤名片段> \
 | V01 演示菜单合同（载入 V01 单轴拉伸，真实菜单 action） | `v01_demo_menu_contract` |
 | 模块弹窗样式采集（42 张逐 TAB 截图，需 GMP_UI_AUDIT=1） | `audit_`（如 `audit_form`、`audit_mesh`） |
 | 用户手册窗口合同（F1/目录加载） | `user_manual` |
+| 手册标题栏双击保护（标题栏双击后窗口/flags/尺寸不被改写） | `user_manual_titlebar_dblclick` |
