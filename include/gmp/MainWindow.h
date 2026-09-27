@@ -175,6 +175,9 @@ class MainWindow : public QMainWindow {
   QDockWidget* create_results_compare_window();
   void populate_results_compare_list(QListWidget* list) const;
   void refresh_results_navigation();
+  // 语言切换后按数据键（kKindRole / kNavigationKindRole）重设模型树与
+  // 结果导航树顶层显示文本，不依赖显示文本反查字典。
+  void refresh_tree_root_labels();
   // 结果导航树条目 → 模型树条目（path 优先、名称为辅的匹配）。
   QTreeWidgetItem* model_item_for_navigation(QTreeWidgetItem* nav_item) const;
   // 构建结果导航树右键菜单（根/子节点、Jobs/Results 分流），供巡览断言。

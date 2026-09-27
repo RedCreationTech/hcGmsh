@@ -5856,6 +5856,9 @@ void MainWindow::apply_language_to_windows() {
       l10n::apply(compare_window);
     }
   }
+  // 两棵树的顶层根节点显示文本不随字典反查，统一按数据键重设，
+  // 保证中文期写入的中文根名在切英文时也能还原。
+  refresh_tree_root_labels();
 }
 
 void MainWindow::build_help_work_window() {
@@ -7904,6 +7907,30 @@ void MainWindow::refresh_tree_statuses() {
                                              : QString());
 }
 
+void MainWindow::refresh_tree_root_labels() {
+  if (model_tree_) {
+    for (int i = 0; i < model_tree_->topLevelItemCount(); ++i) {
+      auto* root = model_tree_->topLevelItem(i);
+      if (!root) {
+        continue;
+      }
+      const QString kind =
+          root->data(0, PropertyEditor::kKindRole).toString();
+      root->setText(0, l10n::tr(kind.isEmpty() ? root->text(0) : kind));
+    }
+  }
+  if (results_navigation_tree_) {
+    for (int i = 0; i < results_navigation_tree_->topLevelItemCount(); ++i) {
+      auto* root = results_navigation_tree_->topLevelItem(i);
+      if (!root) {
+        continue;
+      }
+      const QString kind = root->data(0, kNavigationKindRole).toString();
+      root->setText(0, l10n::tr(kind.isEmpty() ? root->text(0) : kind));
+    }
+  }
+}
+
 void MainWindow::refresh_results_navigation() {
   if (!results_navigation_tree_ || !model_tree_) {
     return;
@@ -7926,7 +7953,7 @@ void MainWindow::refresh_results_navigation() {
   for (const QString& kind : {QString("Jobs"), QString("Results")}) {
     auto* source_root = find_root_item(kind);
     auto* nav_root = new QTreeWidgetItem(results_navigation_tree_);
-    nav_root->setText(0, kind);
+    nav_root->setText(0, l10n::tr(kind));
     nav_root->setData(0, kNavigationKindRole, kind);
     nav_root->setFlags(nav_root->flags() & ~Qt::ItemIsEditable);
     nav_root->setIcon(0, gmp::icons::get(kind == "Jobs" ? "tree_jobs"
@@ -17044,8 +17071,42 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       !latest_btn || !job_state_filter_) {
                     throw std::runtime_error("V-02 l10n fixture is missing");
                   }
+                  // 树顶层根标签合同：数据键（kKindRole/kNavigationKindRole）
+                  // 驱动的语言往返，不依赖显示文本反查字典。
+                  auto check_tree_roots =
+                      [this](const QString& first_root,
+                             const QString& materials,
+                             const QString& jobs, const QString& results) {
+                        if (!model_tree_ || !results_navigation_tree_) {
+                          throw std::runtime_error(
+                              "V-02 tree root fixture is missing");
+                        }
+                        QStringList model_roots;
+                        for (int i = 0; i < model_tree_->topLevelItemCount();
+                             ++i) {
+                          model_roots << model_tree_->topLevelItem(i)->text(0);
+                        }
+                        if (model_tree_->topLevelItem(0)->text(0) !=
+                                first_root ||
+                            !model_roots.contains(materials)) {
+                          throw std::runtime_error(
+                              "V-02 model tree root label contract failed");
+                        }
+                        if (results_navigation_tree_->topLevelItemCount() < 2 ||
+                            results_navigation_tree_->topLevelItem(0)->text(0) !=
+                                jobs ||
+                            results_navigation_tree_->topLevelItem(1)->text(0) !=
+                                results) {
+                          throw std::runtime_error(
+                              "V-02 results nav root label contract failed");
+                        }
+                      };
                   l10n::set_language(l10n::Language::Chinese);
                   apply_language_to_windows();
+                  check_tree_roots(QString::fromUtf8("部件"),
+                                   QString::fromUtf8("材料"),
+                                   QString::fromUtf8("作业"),
+                                   QString::fromUtf8("结果"));
                   if (!file_menu->title().contains("文件") ||
                       import_btn->text() != "导入结果文件..." ||
                       verify_btn->text() != "验证结果包" ||
@@ -17057,6 +17118,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   l10n::set_language(l10n::Language::English);
                   apply_language_to_windows();
+                  check_tree_roots("Parts", "Materials", "Jobs", "Results");
                   if (!file_menu->title().contains("File") ||
                       import_btn->text() != "Import Result File..." ||
                       verify_btn->text() != "Verify Package" ||
@@ -17068,6 +17130,10 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   l10n::set_language(l10n::Language::Chinese);
                   apply_language_to_windows();
+                  check_tree_roots(QString::fromUtf8("部件"),
+                                   QString::fromUtf8("材料"),
+                                   QString::fromUtf8("作业"),
+                                   QString::fromUtf8("结果"));
                   if (!file_menu->title().contains("文件") ||
                       import_btn->text() != "导入结果文件...") {
                     throw std::runtime_error("V-02 restore translation contract failed");
