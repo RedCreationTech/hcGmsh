@@ -90,7 +90,9 @@
 #include <QHelpContentWidget>
 #include <QHelpIndexWidget>
 #include <QTemporaryFile>
+#include <QTextBlock>
 #include <QTextBrowser>
+#include <QTextFragment>
 #endif
 
 #include "gmp/GmshPanel.h"
@@ -135,7 +137,12 @@ namespace {
 class HelpBrowser : public QTextBrowser {
  public:
   explicit HelpBrowser(QHelpEngine* engine, QWidget* parent = nullptr)
-      : QTextBrowser(parent), engine_(engine) {}
+      : QTextBrowser(parent), engine_(engine) {
+    // 换页后文档重建，需重新按视口收敛图片宽度。
+    connect(this, &QTextBrowser::sourceChanged, this,
+            [this](const QUrl&) { clampImagesToViewport(); },
+            Qt::QueuedConnection);
+  }
 
   QVariant loadResource(int type, const QUrl& url) override {
     const QString scheme = url.scheme();
@@ -150,7 +157,55 @@ class HelpBrowser : public QTextBrowser {
     return QTextBrowser::loadResource(type, url);
   }
 
+ protected:
+  void resizeEvent(QResizeEvent* event) override {
+    QTextBrowser::resizeEvent(event);
+    // QTextDocument 的 CSS 子集不支持 img 的 max-width:100%，
+    // 图片按原始分辨率撑宽文档产生横向滚动条。这里按视口宽度实时
+    // 收敛图片格式：宽图等比缩放到视口内，天然宽度保持不变。
+    clampImagesToViewport();
+  }
+
  private:
+  void clampImagesToViewport() {
+    QTextDocument* doc = document();
+    if (!doc) {
+      return;
+    }
+    const int max_width = viewport()->width() - 8;
+    if (max_width <= 0) {
+      return;
+    }
+    for (QTextBlock block = doc->begin(); block != doc->end();
+         block = block.next()) {
+      {
+        // 作用域仅用于保持缩进
+        for (QTextBlock::iterator it = block.begin(); !it.atEnd(); ++it) {
+          QTextFragment fragment = it.fragment();
+          if (!fragment.isValid() ||
+              !fragment.charFormat().isImageFormat()) {
+            continue;
+          }
+          QTextImageFormat image = fragment.charFormat().toImageFormat();
+          const qreal intrinsic = image.width();
+          if (intrinsic > max_width) {
+            const qreal scale = max_width / intrinsic;
+            QTextCharFormat updated = image;
+            updated.setProperty(QTextFormat::ImageWidth,
+                                qRound(intrinsic * scale));
+            updated.setProperty(QTextFormat::ImageHeight,
+                                qRound(image.height() * scale));
+            QTextCursor cursor(block);
+            cursor.setPosition(fragment.position());
+            cursor.setPosition(fragment.position() + fragment.length(),
+                               QTextCursor::KeepAnchor);
+            cursor.setCharFormat(updated);
+          }
+        }
+      }
+    }
+  }
+
   QHelpEngine* engine_ = nullptr;
 };
 #endif
