@@ -58,4 +58,4 @@ GMP_TOUR_REAL_CLICKS=1 GMP_TOUR_STEP_FILTER=<步骤名片段> \
 | V01 演示菜单合同（载入 V01 单轴拉伸，真实菜单 action） | `v01_demo_menu_contract` |
 | 模块弹窗样式采集（42 张逐 TAB 截图，需 GMP_UI_AUDIT=1） | `audit_`（如 `audit_form`、`audit_mesh`） |
 | 用户手册窗口合同（F1/目录加载 + 详情页无横向滚动条断言：ch1/ch2 idealWidth ≤ 视口） | `user_manual` |
-| 手册标题栏双击 zoom 合同（Qt::Window 窗，双击后 isMaximized 可往返且 flags/标题栏完好） | `user_manual_titlebar_dblclick` |
+| 手册标题栏双击 zoom 合同（Qt::Window 窗；Qt 合成双击 + 原生 NSWindow -zoom: swizzle 两路断言 isMaximized 可往返且 flags/标题栏完好，见 src/MacWindowZoomFix.mm） | `user_manual_titlebar_dblclick` |

@@ -18,12 +18,18 @@
 #include "gmp/OperationLog.h"
 #include "gmp/AppStyle.h"
 #include "gmp/IconFactory.h"
+#include "gmp/MacWindowZoomFix.h"
 
 int main(int argc, char** argv) {
 #ifdef GMP_ENABLE_VTK_VIEWER
   QSurfaceFormat::setDefaultFormat(QVTKOpenGLNativeWidget::defaultFormat());
 #endif
   QApplication app(argc, argv);
+
+  // macOS：标题栏真实双击在 AppKit 层被 NSWindow 消费（Qt eventFilter
+  // 收不到），原生 zoom 对手册工作窗异常；swizzle -zoom: 分流到 Qt
+  // toggle。须在 QApplication 构造后、任何 NSWindow 创建前装一次。
+  gmp::install_mac_window_zoom_fix();
 
   // 全局统一样式须设在 QApplication 级：主窗口样式表不覆盖独立顶级
   // 工作窗/浮动表单（Sketch/Mesh/Job/表单均为无父对象工具窗），

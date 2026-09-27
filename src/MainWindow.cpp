@@ -1,5 +1,6 @@
 #include "gmp/MainWindow.h"
 #include "gmp/L10n.h"
+#include "gmp/MacWindowZoomFix.h"
 
 #include <QFileDialog>
 #include <QFile>
@@ -4813,9 +4814,10 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
   // 能收到的标题栏区域 MouseButtonDblClick 一律吞掉，保留单击拖动与
   // 按钮交互。所有顶层工作窗创建时打 gmpWorkWindow 标记（见各
   // build/create_*_work_window），此处统一处理。
-  // 例外：手册窗（helpWorkspaceWindow）是 Qt::Window 普通顶层窗，
-  // 原生标题栏双击 zoom 正常；Qt 侧收到的双击（合成事件/边缘路径）
-  // 显式 toggle 最大化，行为与主窗口一致且可往返。
+  // 例外：手册窗（helpWorkspaceWindow）是 Qt::Window 普通顶层窗。真实
+  // 双击在 AppKit 层由 NSWindow -zoom: 消费（eventFilter 收不到），由
+  // MacWindowZoomFix 的 swizzle 分流到 Qt toggle（showMaximized/
+  // showNormal，可往返）；eventFilter 分支只兜 Qt 侧收到的合成双击。
   if (event && event->type() == QEvent::MouseButtonDblClick && watched &&
       qobject_cast<QDockWidget*>(watched) &&
       watched->property("gmpWorkWindow").toBool()) {
@@ -5679,9 +5681,10 @@ void MainWindow::apply_language_to_windows() {
 }
 
 void MainWindow::build_help_work_window() {
-  // Qt::Window（与主窗口同级的普通顶层窗，无父对象）：标题栏双击走
-  // macOS 原生 zoom 适配屏幕。旧 Qt::Tool 的 zoom 会把窗口改写成
-  // 半最大化异常尺寸并丢标题栏；其余工作窗仍用 Qt::Tool + 吞双击防护。
+  // Qt::Window（与主窗口同级的普通顶层窗，无父对象）。旧 Qt::Tool 的
+  // zoom 会把窗口改写成半最大化异常尺寸并丢标题栏；即改 Qt::Window 后
+  // macOS 原生 zoom 状态机在此窗口仍异常（标题栏消失无法恢复），故
+  // MacWindowZoomFix swizzle NSWindow -zoom: 分流到 Qt toggle。
   auto* workspace = new QDockWidget("User Manual", nullptr, Qt::Window);
   workspace->setObjectName("helpWorkspaceWindow");
   workspace->setProperty("gmpWorkWindow", true);
@@ -20794,9 +20797,9 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                 this});
   // 手册标题栏双击合同（Qt::Window 普通顶层窗）：投递完整双击序列后期望
   // isMaximized 可往返（双击最大化、再双击还原）且窗口 flags/标题栏不被
-  // 改写。真实使用走 macOS 原生 zoom；Qt 侧收到的双击由 eventFilter 显式
-  // toggle（见 eventFilter 的 helpWorkspaceWindow 分支）。放在 maximize
-  // 自终止步骤之前，保证全量巡览覆盖。
+  // 改写；随后直接对原生 NSWindow 发 -zoom:（真实双击的 AppKit 入口，
+  // MacWindowZoomFix swizzle 分流到同一 Qt toggle）断言同样往返。放在
+  // maximize 自终止步骤之前，保证全量巡览覆盖。
   steps.append({"user_manual_titlebar_dblclick",
                 [this]() {
                   if (!help_work_window_) {
@@ -20883,6 +20886,63 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     throw std::runtime_error(
                         "help work window size not restored after second "
                         "titlebar dblclick");
+                  }
+                  // 原生路径验证：不经 Qt 合成事件，直接对 NSWindow 发
+                  // -zoom:（AppKit 标题栏双击的真实入口）。swizzle
+                  // （gmp::install_mac_window_zoom_fix）把该窗口的 -zoom:
+                  // 分流到 Qt toggle；断言 isMaximized 往返且 flags/标题栏
+                  // 几何完好。非 macOS 或缺原生窗口时降级跳过。
+                  if (gmp::trigger_help_window_native_zoom()) {
+                    settle_ms(400);
+                    qApp->processEvents();
+                    if (!window->isVisible()) {
+                      throw std::runtime_error(
+                          "help work window hidden after native NSWindow "
+                          "zoom:");
+                    }
+                    if (!window->isMaximized()) {
+                      throw std::runtime_error(
+                          "help work window not maximized after native "
+                          "NSWindow zoom:");
+                    }
+                    if (window->windowFlags() != flags_before) {
+                      throw std::runtime_error(
+                          "help work window flags rewritten after native "
+                          "NSWindow zoom:");
+                    }
+                    if (window->frameGeometry().size().isEmpty() ||
+                        window->frameGeometry().size().isNull()) {
+                      throw std::runtime_error(
+                          "help work window frame collapsed after native "
+                          "NSWindow zoom:");
+                    }
+                    if (!gmp::trigger_help_window_native_zoom()) {
+                      throw std::runtime_error(
+                          "help work window NSWindow lost before restore "
+                          "zoom:");
+                    }
+                    settle_ms(400);
+                    qApp->processEvents();
+                    if (window->isMaximized()) {
+                      throw std::runtime_error(
+                          "help work window still maximized after restore "
+                          "NSWindow zoom:");
+                    }
+                    if (window->windowFlags() != flags_before) {
+                      throw std::runtime_error(
+                          "help work window flags rewritten after restore "
+                          "NSWindow zoom:");
+                    }
+                    if (window->frameGeometry().size().isEmpty() ||
+                        window->frameGeometry().size().isNull()) {
+                      throw std::runtime_error(
+                          "help work window frame collapsed after restore "
+                          "NSWindow zoom:");
+                    }
+                    qInfo("[tour] help work window native NSWindow zoom: "
+                          "round-trip OK");
+                  } else {
+                    qInfo("[tour] native NSWindow zoom: unavailable; skipped");
                   }
                 },
                 help_work_window_});

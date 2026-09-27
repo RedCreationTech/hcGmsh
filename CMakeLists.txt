@@ -213,6 +213,16 @@ target_include_directories(gmp_ise PRIVATE include
   external/QtAwesome/QtAwesome)
 target_link_libraries(gmp_ise PRIVATE hc_simulation hc_mesh Qt6::Widgets Qt6::Network Qt6::Concurrent Qt6::Svg)
 
+# macOS：原生标题栏双击修复（NSWindow -zoom: swizzle，见
+# include/gmp/MacWindowZoomFix.h）。非 Apple 平台头文件提供空实现。
+if(APPLE)
+  enable_language(OBJCXX)
+  set(CMAKE_OBJCXX_STANDARD 17)
+  target_sources(gmp_ise PRIVATE src/MacWindowZoomFix.mm
+                                 include/gmp/MacWindowZoomFix.h)
+  target_link_libraries(gmp_ise PRIVATE "-framework AppKit")
+endif()
+
 # ===== 软件内用户手册（doc/ref/软件内用户手册设计.md，地基步） =====
 # Qt Help 库缺失时手册窗口退化为占位页，构建继续。
 find_package(Qt6 QUIET COMPONENTS Help)
