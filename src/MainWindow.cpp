@@ -4814,30 +4814,47 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
   // 能收到的标题栏区域 MouseButtonDblClick 一律吞掉，保留单击拖动与
   // 按钮交互。所有顶层工作窗创建时打 gmpWorkWindow 标记（见各
   // build/create_*_work_window），此处统一处理。
-  // 例外：手册窗（helpWorkspaceWindow）是 Qt::Window 普通顶层窗。真实
-  // 双击在 AppKit 层由 NSWindow -zoom: 消费（eventFilter 收不到），由
-  // MacWindowZoomFix 的 swizzle 分流到 Qt toggle（showMaximized/
-  // showNormal，可往返）；eventFilter 分支只兜 Qt 侧收到的合成双击。
+  // 例外：手册窗（helpWorkspaceWindow）是普通 Qt::Window 顶层 QWidget，
+  // 原生标题栏双击由 AppKit -zoom: 正常消费（与普通 QWidget 窗一致，
+  // 无 dock 改造品的 zoom 状态机异常）；eventFilter 只兜 Qt 侧收到的
+  // 合成双击（frame 顶部 24px 判为标题栏带），分流到 Qt toggle 保持
+  // isMaximized 可往返。
   if (event && event->type() == QEvent::MouseButtonDblClick && watched &&
-      qobject_cast<QDockWidget*>(watched) &&
+      watched->isWidgetType() &&
+      static_cast<QWidget*>(watched)->isWindow() &&
       watched->property("gmpWorkWindow").toBool()) {
     auto* mouse_event = static_cast<QMouseEvent*>(event);
-    auto* dock = static_cast<QDockWidget*>(watched);
-    if (mouse_event->button() == Qt::LeftButton && dock->layout()) {
-      // 标题栏带 = dock 布局顶边距（内绘标题栏行高），兜底 24px。
-      const int title_band =
-          qMax(dock->layout()->contentsMargins().top(), 24);
-      if (mouse_event->position().toPoint().y() <= title_band) {
-        if (dock->objectName() == QLatin1String("helpWorkspaceWindow")) {
-          if (dock->isMaximized()) {
-            dock->showNormal();
-          } else {
-            dock->showMaximized();
-          }
+    auto* window = static_cast<QWidget*>(watched);
+    if (mouse_event->button() == Qt::LeftButton) {
+      if (auto* dock = qobject_cast<QDockWidget*>(window)) {
+        // dock 工作窗：标题栏带 = dock 布局顶边距（内绘标题栏行高），
+        // 兜底 24px；只吞事件，不做尺寸改写。
+        if (!dock->layout()) {
+          return QMainWindow::eventFilter(watched, event);
+        }
+        const int title_band =
+            qMax(dock->layout()->contentsMargins().top(), 24);
+        if (mouse_event->position().toPoint().y() <= title_band) {
+          return true;
+        }
+      } else if (mouse_event->position().toPoint().y() <= 24) {
+        // 普通顶层 QWidget（手册窗）：合成双击按 frame 顶部 24px 标题栏
+        // 带处理，走 Qt toggle（showMaximized/showNormal 可往返）。
+        if (window->isMaximized()) {
+          window->showNormal();
+        } else {
+          window->showMaximized();
         }
         return true;
       }
     }
+  }
+  // 手册窗 View 菜单 action 的 checked 状态跟随窗口实际显隐（用户经
+  // 标题栏关闭按钮关窗时菜单态同步取消勾选）。
+  if (watched == help_work_window_ && help_window_view_action_ &&
+      (event->type() == QEvent::Show ||
+       event->type() == QEvent::Hide)) {
+    help_window_view_action_->setChecked(event->type() == QEvent::Show);
   }
   return QMainWindow::eventFilter(watched, event);
 }
@@ -5666,12 +5683,19 @@ void MainWindow::build_menu() {
 
 void MainWindow::apply_language_to_windows() {
   l10n::apply(this);
-  for (QDockWidget* workspace : {module_work_window_, mesh_work_window_,
-                                 job_work_window_, visualization_work_window_,
-                                 results_work_window_, help_work_window_}) {
+  for (QWidget* workspace : {static_cast<QWidget*>(module_work_window_),
+                             static_cast<QWidget*>(mesh_work_window_),
+                             static_cast<QWidget*>(job_work_window_),
+                             static_cast<QWidget*>(visualization_work_window_),
+                             static_cast<QWidget*>(results_work_window_),
+                             help_work_window_}) {
     if (workspace) {
       l10n::apply(workspace);
     }
+  }
+  if (help_work_window_) {
+    // 普通顶层窗标题不在 l10n::apply 的控件树遍历内，显式重设。
+    help_work_window_->setWindowTitle(l10n::tr("User Manual"));
   }
   for (QDockWidget* compare_window : results_compare_windows_) {
     if (compare_window) {
@@ -5681,19 +5705,21 @@ void MainWindow::apply_language_to_windows() {
 }
 
 void MainWindow::build_help_work_window() {
-  // Qt::Window（与主窗口同级的普通顶层窗，无父对象）。旧 Qt::Tool 的
-  // zoom 会把窗口改写成半最大化异常尺寸并丢标题栏；即改 Qt::Window 后
-  // macOS 原生 zoom 状态机在此窗口仍异常（标题栏消失无法恢复），故
-  // MacWindowZoomFix swizzle NSWindow -zoom: 分流到 Qt toggle。
-  auto* workspace = new QDockWidget("User Manual", nullptr, Qt::Window);
+  // 普通 Qt::Window 顶层 QWidget（与主窗口同族），不是 QDockWidget 改造
+  // 品。历史：旧实现借 QDockWidget(Qt::Window) 承载，macOS 原生标题栏
+  // 双击 zoom 状态机在此类窗口上异常（标题栏消失无法恢复，三轮未根治）；
+  // 浮动工具组这类普通顶层窗无此问题，故重构为 QWidget + 零边距
+  // QVBoxLayout 直装 splitter。
+  auto* workspace = new QWidget(nullptr, Qt::Window);
   workspace->setObjectName("helpWorkspaceWindow");
   workspace->setProperty("gmpWorkWindow", true);
-  workspace->setFeatures(QDockWidget::DockWidgetClosable |
-                         QDockWidget::DockWidgetMovable |
-                         QDockWidget::DockWidgetFloatable);
+  workspace->setWindowTitle(l10n::tr("User Manual"));
   workspace->setMinimumSize(520, 360);
   workspace->resize(920, 620);
-  workspace->setAllowedAreas(Qt::NoDockWidgetArea);
+
+  auto* window_layout = new QVBoxLayout(workspace);
+  window_layout->setContentsMargins(0, 0, 0, 0);
+  window_layout->setSpacing(0);
 
   auto* splitter = new QSplitter(Qt::Horizontal, workspace);
   splitter->setObjectName("helpSplitter");
@@ -5774,12 +5800,27 @@ void MainWindow::build_help_work_window() {
   add_placeholder();
 #endif
 
-  workspace->setWidget(splitter);
+  window_layout->addWidget(splitter);
   workspace->hide();
   if (view_menu_) {
-    auto* toggle = workspace->toggleViewAction();
-    toggle->setText("User Manual");
+    // 普通 QWidget 没有 toggleViewAction：自管理 checkable action，
+    // checked 状态与窗口实际显隐在 eventFilter（Show/Hide）中同步。
+    auto* toggle = new QAction(l10n::tr("User Manual"), workspace);
+    toggle->setObjectName("helpWindowViewAction");
+    toggle->setCheckable(true);
+    toggle->setChecked(false);
+    connect(toggle, &QAction::triggered, this, [this](bool checked) {
+      if (!help_work_window_) {
+        return;
+      }
+      if (checked) {
+        show_user_manual();
+      } else {
+        help_work_window_->hide();
+      }
+    });
     view_menu_->addAction(toggle);
+    help_window_view_action_ = toggle;
   }
   help_work_window_ = workspace;
 }
@@ -20795,11 +20836,12 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                 },
                 this});
-  // 手册标题栏双击合同（Qt::Window 普通顶层窗）：投递完整双击序列后期望
-  // isMaximized 可往返（双击最大化、再双击还原）且窗口 flags/标题栏不被
-  // 改写；随后直接对原生 NSWindow 发 -zoom:（真实双击的 AppKit 入口，
-  // MacWindowZoomFix swizzle 分流到同一 Qt toggle）断言同样往返。放在
-  // maximize 自终止步骤之前，保证全量巡览覆盖。
+  // 手册标题栏双击合同（Qt::Window 普通顶层 QWidget，与主窗口同族）：
+  // 投递完整双击序列（Qt 合成事件，走 eventFilter 的 gmpWorkWindow 标题
+  // 栏守卫分流到 Qt toggle）后期望 isMaximized 可往返（双击最大化、再双击
+  // 还原）且窗口 flags/标题栏不被改写；随后直接对原生 NSWindow 发 -zoom:
+  // （真实双击的 AppKit 入口，普通窗原生 zoom 正常，无需分流）断言同样
+  // 往返。放在 maximize 自终止步骤之前，保证全量巡览覆盖。
   steps.append({"user_manual_titlebar_dblclick",
                 [this]() {
                   if (!help_work_window_) {
@@ -20888,9 +20930,9 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         "titlebar dblclick");
                   }
                   // 原生路径验证：不经 Qt 合成事件，直接对 NSWindow 发
-                  // -zoom:（AppKit 标题栏双击的真实入口）。swizzle
-                  // （gmp::install_mac_window_zoom_fix）把该窗口的 -zoom:
-                  // 分流到 Qt toggle；断言 isMaximized 往返且 flags/标题栏
+                  // -zoom:（AppKit 标题栏双击的真实入口）。手册窗已重构为
+                  // 普通 Qt::Window 顶层 QWidget，原生 zoom 不经分流直接走
+                  // AppKit/Qt 正常路径；断言 isMaximized 往返且 flags/标题栏
                   // 几何完好。非 macOS 或缺原生窗口时降级跳过。
                   if (gmp::trigger_help_window_native_zoom()) {
                     settle_ms(400);
@@ -21457,7 +21499,7 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
     // GMP_UI_AUDIT=1：替换为 UI 样式采集步骤——自动打开 13 个模块的工作窗/
     // 弹窗并逐 TAB 截图，供后续样式统一分析。要求同时设置 GMP_SCREENSHOT_DIR。
     steps.clear();
-    auto reveal = [](QDockWidget* workspace) {
+    auto reveal = [](QWidget* workspace) {
       if (!workspace) {
         throw std::runtime_error("audit workspace window is null");
       }

@@ -1,6 +1,10 @@
-// macOS：swizzle NSWindow -zoom:，把手册工作窗（helpWorkspaceWindow）的
-// 原生 zoom（标题栏双击在 AppKit 层的真实入口）分流到 Qt
-// showMaximized/showNormal。其余窗口调用原实现。
+// macOS：swizzle NSWindow -zoom: 的统一挂点。历史：手册工作窗
+// （helpWorkspaceWindow）曾是 QDockWidget(Qt::Window) 改造品，原生 zoom
+// 状态机异常（标题栏消失无法恢复），此处把它的 -zoom: 分流到 Qt
+// showMaximized/showNormal。2026-09-27 手册窗重构为普通 Qt::Window 顶层
+// QWidget 后原生 zoom 正常，分流判断已移除；swizzle 框架保留（幂等安装、
+// 原实现保存），gmp::trigger_help_window_native_zoom 仍可从真实 AppKit
+// 入口（-zoom:）触发手册窗 zoom 供巡览合同断言。
 // 见 include/gmp/MacWindowZoomFix.h 头文件注释。
 
 #include "gmp/MacWindowZoomFix.h"
@@ -48,54 +52,10 @@ NSWindow* resolve_help_nswindow() {
 
 IMP g_original_zoom = nullptr;
 
-// 重入护栏：分流分支里调 Qt toggle 会重入 -zoom:。正常情况下重入调用
-// 因 Qt/AppKit 两态错开而命中"放行"分支，此 flag 只是兜底，防止状态
-// 意外一致时无限递归。主线程专属，普通 bool 即可。
-bool g_inside_qt_toggle = false;
-struct QtToggleGuard {
-  QtToggleGuard() { g_inside_qt_toggle = true; }
-  ~QtToggleGuard() { g_inside_qt_toggle = false; }
-};
-
 // NSWindow -zoom: 的替换实现（方法签名 (void)(id, SEL, id)）。
-// 每次调用实时解析目标窗口（顶层窗数量极小，开销可忽略），避免缓存
-// 悬垂指针。
-//
-// 分流判据 = Qt 状态与 AppKit isZoomed 是否一致（实测 Qt 6.11
-// setWindowStates 先更新 QWindow 状态再调平台层，QCocoaWindow 的
-// 注释"状态尚未更新"已过时）：
-//   Qt=0 AppKit=0  → AppKit 发起 maximize（真实双击/green 按钮）→ 分流
-//   Qt=1 AppKit=1  → AppKit 发起 restore → 分流
-//   Qt=1 AppKit=0  → Qt showMaximized 自己发起的 zoom: → 放行原实现
-//   Qt=0 AppKit=1  → Qt showNormal 自己发起的 zoom: → 放行原实现
-// 分流走 Qt toggle 后，Qt 会先置自身状态再重入 zoom:（两态错开），
-// 重入经 guard 命中"放行"分支，最终由 AppKit 原生 zoom 在 Qt 状态机
-// 内完成——与 Qt 自用的稳定路径完全一致；而 AppKit 直接发起的原生
-// zoom（用户双击的真实路径）正是状态机错位、把窗口改写成异常尺寸并
-// 丢标题栏（用户两次确认）的路径，被 swizzle 接管。
+// 手册窗重构为普通顶层 QWidget 后无分流需求，直接走原实现；框架保留
+// 作为全局 zoom 观测/未来分流的统一挂点。
 void gmp_swizzled_zoom(id self, SEL cmd, id sender) {
-  NSWindow* help_window = resolve_help_nswindow();
-  if (help_window && (NSWindow*)self == help_window &&
-      !g_inside_qt_toggle) {
-    if (QWidget* widget = find_help_widget()) {
-      const bool qt_maximized = widget->isMaximized();
-      const bool appkit_zoomed =
-          [static_cast<NSWindow*>(self) isZoomed];
-      if (qt_maximized == appkit_zoomed) {
-        qInfo("[maczoom] NSWindow -zoom: routed to Qt %s for "
-              "helpWorkspaceWindow (qt=%d zoomed=%d)",
-              qt_maximized ? "showNormal" : "showMaximized",
-              int(qt_maximized), int(appkit_zoomed));
-        const QtToggleGuard guard;
-        if (qt_maximized) {
-          widget->showNormal();
-        } else {
-          widget->showMaximized();
-        }
-        return;
-      }
-    }
-  }
   if (g_original_zoom) {
     reinterpret_cast<void (*)(id, SEL, id)>(g_original_zoom)(self, cmd,
                                                              sender);
@@ -121,7 +81,7 @@ void install_mac_window_zoom_fix() {
   g_original_zoom = method_getImplementation(method);
   method_setImplementation(method,
                            reinterpret_cast<IMP>(gmp_swizzled_zoom));
-  qInfo("[maczoom] NSWindow -zoom: swizzled for helpWorkspaceWindow");
+  qInfo("[maczoom] NSWindow -zoom: swizzled (passthrough)");
 }
 
 bool trigger_help_window_native_zoom() {
@@ -129,8 +89,9 @@ bool trigger_help_window_native_zoom() {
   if (!window) {
     return false;
   }
-  // 真实 AppKit 入口：标题栏双击与绿色 zoom 按钮最终都走这条消息，
-  // 因此命中 swizzle 分流（修复后的行为），未修复时则复现原生 bug。
+  // 真实 AppKit 入口：标题栏双击与绿色 zoom 按钮最终都走这条消息。
+  // 手册窗是普通 Qt::Window 顶层 QWidget，原生 zoom 走 AppKit/Qt 正常
+  // 路径（isZoomed 与 Qt isMaximized 往返一致）。
   [window zoom:nil];
   return true;
 }

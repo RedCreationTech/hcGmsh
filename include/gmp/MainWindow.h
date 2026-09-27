@@ -287,7 +287,12 @@ class MainWindow : public QMainWindow {
   QDockWidget* job_work_window_ = nullptr;
   QDockWidget* visualization_work_window_ = nullptr;
   QDockWidget* results_work_window_ = nullptr;
-  QDockWidget* help_work_window_ = nullptr;
+  // 手册窗是普通 Qt::Window 顶层 QWidget（与主窗口同族，非 QDockWidget
+  // 改造品）：macOS 原生标题栏双击 zoom 状态机在 dock 改造品上异常（标题栏
+  // 消失，三轮未根治），普通顶层窗无此问题。
+  QWidget* help_work_window_ = nullptr;
+  // View 菜单找回手册窗的自管理 checkable action（无 toggleViewAction 可用）。
+  QAction* help_window_view_action_ = nullptr;
   QToolBar* display_tool_group_ = nullptr;
   QTabWidget* results_work_tabs_ = nullptr;
   QList<QDockWidget*> results_compare_windows_;
