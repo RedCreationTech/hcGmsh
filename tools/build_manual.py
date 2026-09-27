@@ -35,13 +35,19 @@ PAGE_TEMPLATE = """<!DOCTYPE html>
 <meta charset="utf-8">
 <title>{title}</title>
 <style>
+<!-- Qt QTextDocument CSS 子集实证结论（独立探针，Qt 6.11）：
+     body 的 margin/max-width/word-wrap/overflow-wrap 不被正确支持：
+     margin:24px 会让 idealWidth 恒等于视口+48px，横向滚动条常驻并
+     反吃视口宽度，文本折行宽度比视口窄 48px（右侧大留白事故）。
+     左右留白由 HelpBrowser 的 documentMargin 控制（保证严格对称）。
+     长拉丁词无需处理：默认 WrapAtWordBoundaryOrAnywhere 可中途折断。
+     img 的 max-width:100% Qt 认识：超宽图自动等比收敛并随视口重缩放。 -->
 body {{ font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-       margin: 24px; line-height: 1.65; color: #333; max-width: 900px;
-       word-wrap: break-word; overflow-wrap: break-word; }}
-h1 {{ font-size: 22px; border-bottom: 2px solid #2f6fed; padding-bottom: 6px; }}
+       line-height: 1.65; color: #333; }}
+h1 {{ font-size: 22px; color: #2f6fed; }}
 h2 {{ font-size: 17px; margin-top: 26px; color: #1f3c88; }}
 h3 {{ font-size: 15px; margin-top: 20px; color: #2f4f8f; }}
-img {{ max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 4px; }}
+img {{ max-width: 100%; height: auto; }}
 a {{ color: #2f6fed; text-decoration: none; }}
 ul {{ padding-left: 22px; }}
 </style>
@@ -58,9 +64,11 @@ INDEX_TEMPLATE = """<!DOCTYPE html>
 <meta charset="utf-8">
 <title>{title}</title>
 <style>
+<!-- 同 PAGE_TEMPLATE：body 外边距交由 HelpBrowser documentMargin 控制。
+     Qt 对 body margin 的误用会让目录页出现横向滚动条。 -->
 body {{ font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
-       margin: 24px; line-height: 1.65; color: #333; max-width: 900px; }}
-h1 {{ font-size: 22px; border-bottom: 2px solid #2f6fed; padding-bottom: 6px; }}
+       line-height: 1.65; color: #333; }}
+h1 {{ font-size: 22px; color: #2f6fed; }}
 a {{ color: #2f6fed; text-decoration: none; }}
 ul {{ padding-left: 22px; line-height: 1.9; }}
 </style>

@@ -90,9 +90,8 @@
 #include <QHelpContentWidget>
 #include <QHelpIndexWidget>
 #include <QTemporaryFile>
-#include <QTextBlock>
 #include <QTextBrowser>
-#include <QTextFragment>
+#include <QTextDocument>
 #endif
 
 #include "gmp/GmshPanel.h"
@@ -138,10 +137,16 @@ class HelpBrowser : public QTextBrowser {
  public:
   explicit HelpBrowser(QHelpEngine* engine, QWidget* parent = nullptr)
       : QTextBrowser(parent), engine_(engine) {
-    // 换页后文档重建，需重新按视口收敛图片宽度。
-    connect(this, &QTextBrowser::sourceChanged, this,
-            [this](const QUrl&) { clampImagesToViewport(); },
-            Qt::QueuedConnection);
+    // 横向滚动条直接关闭：手册页在构造上不应横向溢出（图片 max-width:100%
+    // 自动收敛、长词可中途折断），保留滚动条反而会在图片异步加载完成触发
+    // 重排的瞬态里出现横滚条、视口被吃掉 17px 且不回收（右侧死白边）。
+    // 溢出防御交给 user_manual_window_contract 的 idealWidth ≤ 视口断言。
+    setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    // 整页留白统一由 documentMargin 控制：QTextDocument 对 body margin
+    // 的 CSS 支持是坏的（margin:24px 会让 idealWidth 恒等于视口+48px，
+    // 横向滚动条常驻并反吃视口），手册模板已不再写 body margin，这里给
+    // 左右严格对称的内边距（textWidth = 视口 - 2*margin，图文同宽）。
+    document()->setDocumentMargin(16);
   }
 
   QVariant loadResource(int type, const QUrl& url) override {
@@ -157,80 +162,7 @@ class HelpBrowser : public QTextBrowser {
     return QTextBrowser::loadResource(type, url);
   }
 
- protected:
-  void resizeEvent(QResizeEvent* event) override {
-    QTextBrowser::resizeEvent(event);
-    // QTextDocument 的 CSS 子集不支持 img 的 max-width:100%，
-    // 图片按原始分辨率撑宽文档产生横向滚动条。这里按视口宽度实时
-    // 收敛图片格式：宽图等比缩放到视口内，天然宽度保持不变。
-    clampImagesToViewport();
-  }
-
  private:
-  void clampImagesToViewport() {
-    QTextDocument* doc = document();
-    if (!doc) {
-      return;
-    }
-    // 左侧留白实测：Qt 的 CSS 子集会忽略手册模板 body{margin:24px}
-    // （实证：documentMargin 保持默认 4px，图片片段布局 x=4），左空隙
-    // 实即 documentMargin；仍取首个图片片段所在块的布局 x 坐标实测，
-    // 兼容未来模板/块缩进变化。max-width 按“视口宽 - 左侧留白 - 8”
-    // 收敛，右侧固定 8px 呼吸，左右留白视觉对称（旧固定 -16 使右缝
-    // 比左缝宽 3 倍）。
-    qreal left_gap = doc->documentMargin();
-    for (QTextBlock block = doc->begin(); block != doc->end();
-         block = block.next()) {
-      bool has_image = false;
-      for (QTextBlock::iterator it = block.begin(); !it.atEnd(); ++it) {
-        if (it.fragment().isValid() &&
-            it.fragment().charFormat().isImageFormat()) {
-          has_image = true;
-          break;
-        }
-      }
-      if (has_image) {
-        left_gap = doc->documentLayout()->blockBoundingRect(block).left();
-        break;
-      }
-    }
-    const int max_width = viewport()->width() - qRound(left_gap) - 8;
-    if (max_width <= 0) {
-      return;
-    }
-    for (QTextBlock block = doc->begin(); block != doc->end();
-         block = block.next()) {
-      {
-        // 作用域仅用于保持缩进
-        for (QTextBlock::iterator it = block.begin(); !it.atEnd(); ++it) {
-          QTextFragment fragment = it.fragment();
-          if (!fragment.isValid() ||
-              !fragment.charFormat().isImageFormat()) {
-            continue;
-          }
-          QTextImageFormat image = fragment.charFormat().toImageFormat();
-          const qreal intrinsic = image.width();
-          if (intrinsic > max_width) {
-            const qreal scale = max_width / intrinsic;
-            QTextCharFormat updated = image;
-            updated.setProperty(QTextFormat::ImageWidth,
-                                qRound(intrinsic * scale));
-            updated.setProperty(QTextFormat::ImageHeight,
-                                qRound(image.height() * scale));
-            QTextCursor cursor(block);
-            cursor.setPosition(fragment.position());
-            cursor.setPosition(fragment.position() + fragment.length(),
-                               QTextCursor::KeepAnchor);
-            cursor.setCharFormat(updated);
-          }
-        }
-      }
-    }
-    // 强制重排：不标记脏区时 idealWidth 不重建，横向滚动条残留。
-    doc->markContentsDirty(0, doc->characterCount());
-    doc->adjustSize();
-  }
-
   QHelpEngine* engine_ = nullptr;
 };
 #endif
@@ -4874,13 +4806,16 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
     force_native_relayout();
   }
   // ---- 顶层工作窗标题栏双击守卫 ----
-  // 手册/模块/网格/作业/可视化/结果等工作窗借用 QDockWidget 作 Qt::Tool
+  // 模块/网格/作业/可视化/结果等工作窗借用 QDockWidget 作 Qt::Tool
   // 顶层窗。实测（Qt 6.11.1, macOS）：这类窗口带原生标题栏（styleMask
   // 含 miniaturizable），标题栏双击走 macOS zoom/尺寸改写路径，会让窗
   // 口停在半最大化异常尺寸，标题栏与窗口按钮丢失后无法恢复。凡 Qt 侧
   // 能收到的标题栏区域 MouseButtonDblClick 一律吞掉，保留单击拖动与
   // 按钮交互。所有顶层工作窗创建时打 gmpWorkWindow 标记（见各
   // build/create_*_work_window），此处统一处理。
+  // 例外：手册窗（helpWorkspaceWindow）是 Qt::Window 普通顶层窗，
+  // 原生标题栏双击 zoom 正常；Qt 侧收到的双击（合成事件/边缘路径）
+  // 显式 toggle 最大化，行为与主窗口一致且可往返。
   if (event && event->type() == QEvent::MouseButtonDblClick && watched &&
       qobject_cast<QDockWidget*>(watched) &&
       watched->property("gmpWorkWindow").toBool()) {
@@ -4891,6 +4826,13 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event) {
       const int title_band =
           qMax(dock->layout()->contentsMargins().top(), 24);
       if (mouse_event->position().toPoint().y() <= title_band) {
+        if (dock->objectName() == QLatin1String("helpWorkspaceWindow")) {
+          if (dock->isMaximized()) {
+            dock->showNormal();
+          } else {
+            dock->showMaximized();
+          }
+        }
         return true;
       }
     }
@@ -5737,7 +5679,10 @@ void MainWindow::apply_language_to_windows() {
 }
 
 void MainWindow::build_help_work_window() {
-  auto* workspace = new QDockWidget("User Manual", nullptr, Qt::Tool);
+  // Qt::Window（与主窗口同级的普通顶层窗，无父对象）：标题栏双击走
+  // macOS 原生 zoom 适配屏幕。旧 Qt::Tool 的 zoom 会把窗口改写成
+  // 半最大化异常尺寸并丢标题栏；其余工作窗仍用 Qt::Tool + 吞双击防护。
+  auto* workspace = new QDockWidget("User Manual", nullptr, Qt::Window);
   workspace->setObjectName("helpWorkspaceWindow");
   workspace->setProperty("gmpWorkWindow", true);
   workspace->setFeatures(QDockWidget::DockWidgetClosable |
@@ -20847,9 +20792,11 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                 },
                 this});
-  // 手册标题栏双击守卫回归：向标题栏区域投递完整双击序列 + 原生双击事
-  // 件，断言窗口仍可见、flags 与尺寸不被改写（macOS 标题栏双击事故）。
-  // 放在 maximize 自终止步骤之前，保证全量巡览覆盖。
+  // 手册标题栏双击合同（Qt::Window 普通顶层窗）：投递完整双击序列后期望
+  // isMaximized 可往返（双击最大化、再双击还原）且窗口 flags/标题栏不被
+  // 改写。真实使用走 macOS 原生 zoom；Qt 侧收到的双击由 eventFilter 显式
+  // toggle（见 eventFilter 的 helpWorkspaceWindow 分支）。放在 maximize
+  // 自终止步骤之前，保证全量巡览覆盖。
   steps.append({"user_manual_titlebar_dblclick",
                 [this]() {
                   if (!help_work_window_) {
@@ -20858,6 +20805,10 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   }
                   show_user_manual();
                   auto* window = help_work_window_;
+                  if (window->isMaximized()) {
+                    window->showNormal();
+                    qApp->processEvents();
+                  }
                   const Qt::WindowFlags flags_before = window->windowFlags();
                   const QSize size_before = window->size();
                   const QRect frame_before = window->frameGeometry();
@@ -20874,17 +20825,25 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                     QApplication::sendEvent(window, &event);
                     qApp->processEvents();
                   };
+                  const auto settle_ms = [](int milliseconds) {
+                    QEventLoop loop;
+                    QTimer::singleShot(milliseconds, &loop, &QEventLoop::quit);
+                    loop.exec();
+                  };
                   post(QEvent::MouseButtonPress, Qt::LeftButton);
                   post(QEvent::MouseButtonRelease, Qt::NoButton);
                   post(QEvent::MouseButtonPress, Qt::LeftButton);
                   post(QEvent::MouseButtonDblClick, Qt::LeftButton);
                   post(QEvent::MouseButtonRelease, Qt::NoButton);
-                  QEventLoop settle;
-                  QTimer::singleShot(300, &settle, &QEventLoop::quit);
-                  settle.exec();
+                  settle_ms(300);
                   if (!window->isVisible()) {
                     throw std::runtime_error(
                         "help work window hidden after titlebar dblclick");
+                  }
+                  if (!window->isMaximized()) {
+                    throw std::runtime_error(
+                        "help work window not maximized after titlebar "
+                        "dblclick");
                   }
                   if (window->windowFlags() != flags_before) {
                     throw std::runtime_error(
@@ -20897,10 +20856,33 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                         "help work window frame collapsed after titlebar "
                         "dblclick");
                   }
+                  // 再双击一次还原：isMaximized 可往返，几何与 flags 恢复。
+                  post(QEvent::MouseButtonPress, Qt::LeftButton);
+                  post(QEvent::MouseButtonRelease, Qt::NoButton);
+                  post(QEvent::MouseButtonPress, Qt::LeftButton);
+                  post(QEvent::MouseButtonDblClick, Qt::LeftButton);
+                  post(QEvent::MouseButtonRelease, Qt::NoButton);
+                  settle_ms(300);
+                  if (window->isMaximized()) {
+                    throw std::runtime_error(
+                        "help work window still maximized after second "
+                        "titlebar dblclick");
+                  }
+                  if (window->windowFlags() != flags_before) {
+                    throw std::runtime_error(
+                        "help work window flags rewritten after restore "
+                        "dblclick");
+                  }
+                  if (window->frameGeometry().size().isEmpty() ||
+                      window->frameGeometry().size().isNull()) {
+                    throw std::runtime_error(
+                        "help work window frame collapsed after restore "
+                        "dblclick");
+                  }
                   if (window->size() != size_before) {
                     throw std::runtime_error(
-                        "help work window size rewritten after titlebar "
-                        "dblclick");
+                        "help work window size not restored after second "
+                        "titlebar dblclick");
                   }
                 },
                 help_work_window_});
@@ -21003,6 +20985,38 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                       help_browser_->document()->isEmpty()) {
                     throw std::runtime_error(
                         "help browser home page is not displayed");
+                  }
+                  // 详情页排版合同：整页内容（段落/标题/图片）左右留白由
+                  // documentMargin 严格对称，任何页不得出现横向滚动条。
+                  // 历史事故：body{margin:24px} 让 idealWidth 恒等于视口
+                  // +48px，横滚条常驻并反吃视口（右侧大留白）。
+                  const QStringList detail_pages = {
+                      "qthelp://gmp-ise.manual/manual/ch2-quickstart.html",
+                      "qthelp://gmp-ise.manual/manual/ch1-intro.html"};
+                  for (const QString& page : detail_pages) {
+                    help_browser_->setSource(QUrl(page));
+                    qApp->processEvents();
+                    QEventLoop settle;
+                    QTimer::singleShot(200, &settle, &QEventLoop::quit);
+                    settle.exec();
+                    QTextDocument* doc = help_browser_->document();
+                    const int viewport_width = help_browser_->viewport()->width();
+                    const qreal ideal = doc->idealWidth();
+                    const int hmax =
+                        help_browser_->horizontalScrollBar()->maximum();
+                    qInfo("[tour] manual page %s idealWidth=%f viewport=%d "
+                          "hscroll_max=%d",
+                          qPrintable(page), ideal, viewport_width, hmax);
+                    if (ideal > viewport_width || hmax > 0) {
+                      throw std::runtime_error(
+                          QString("manual page %1 overflows horizontally "
+                                  "(idealWidth=%2 viewport=%3 hscroll_max=%4)")
+                              .arg(page)
+                              .arg(ideal)
+                              .arg(viewport_width)
+                              .arg(hmax)
+                              .toStdString());
+                    }
                   }
 #endif
                 },
