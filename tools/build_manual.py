@@ -151,6 +151,35 @@ def render_markdown(md_text):
     return "\n".join(blocks), sections
 
 
+# ---------------------------------------------------------------- 搜索数据
+
+def html_to_plain_text(html_body):
+    """HTML 正文去标签纯文本：script/style 剥离、块级标签换行、
+    连续空白压缩为单个空格。"""
+    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html_body,
+                  flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def write_search_data(out_dir, namespace, virtual_folder, chapters):
+    """全文搜索数据：[{url, title, text}]，随 qch 打包（虚拟目录下）。
+
+    text = 该章 HTML 去标签纯文本（压缩空白）；图片不入数据。
+    """
+    entries = []
+    for chapter in chapters:
+        html_text = (out_dir / chapter["html"]).read_text(encoding="utf-8")
+        entries.append({
+            "url": f"qthelp://{namespace}/{virtual_folder}/{chapter['html']}",
+            "title": chapter["title"],
+            "text": html_to_plain_text(html_text),
+        })
+    (out_dir / "searchdata.json").write_text(
+        json.dumps(entries, ensure_ascii=False), encoding="utf-8")
+
+
 # ---------------------------------------------------------------- qhelpgenerator
 
 def find_qhelpgenerator(explicit=None):
@@ -196,8 +225,11 @@ def write_qhp(out_dir, catalog, chapters):
         for p in (out_dir / "images").glob("**/*") if p.is_file()
     ) if (out_dir / "images").is_dir() else []
     html_files = ["index.html"] + [c["html"] for c in chapters]
+    # searchdata.json 是运行时全文搜索的唯一数据源，必须登记进 qhp，
+    # qhelpgenerator 才会把它打进 qch 虚拟目录。
     file_entries = "\n".join(f"      <file>{name}</file>"
-                             for name in html_files + image_files)
+                             for name in html_files + image_files +
+                             ["searchdata.json"])
     toc = "\n".join(toc_sections)
     kws = "\n".join(keyword_entries)
     qhp = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -305,6 +337,11 @@ def main():
     (out_dir / "index.html").write_text(
         INDEX_TEMPLATE.format(title=title, intro="目录", items=items),
         encoding="utf-8")
+
+    # 全文搜索数据（Q-S1 纯子串匹配的数据源）
+    write_search_data(out_dir, namespace,
+                      catalog.get("virtualFolder", "manual"), chapters)
+    print("[manual] searchdata.json 生成（全文纯文本子串搜索数据源）")
 
     # Qt Help 工程
     write_qhp(out_dir, catalog, chapters)

@@ -84,6 +84,8 @@
 #include <QProgressDialog>
 #include <QtConcurrent>
 #include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <yaml-cpp/yaml.h>
 
 #ifdef GMP_ENABLE_QT_HELP
@@ -165,6 +167,158 @@ class HelpBrowser : public QTextBrowser {
 
  private:
   QHelpEngine* engine_ = nullptr;
+};
+
+// 手册全文搜索页（设计文档 Q-S1：全文纯文本子串搜索，不做中文分词）。
+// 数据源 = 构建期生成的 searchdata.json（[{url,title,text}]，text 为 HTML
+// 去标签纯文本），打进 qch 虚拟目录，运行时经 QHelpEngine::fileData 读取；
+// 仅首次搜索解析一次并缓存，输入 300ms 防抖后按命中数降序列出结果。
+class HelpSearchPage : public QWidget {
+ public:
+  explicit HelpSearchPage(QHelpEngine* engine, QWidget* parent = nullptr)
+      : QWidget(parent), engine_(engine) {
+    auto* layout = new QVBoxLayout(this);
+    layout->setContentsMargins(8, 8, 8, 8);
+    layout->setSpacing(6);
+    input_ = new QLineEdit(this);
+    input_->setObjectName("helpSearchEdit");
+    input_->setPlaceholderText(l10n::tr("Search manual pages..."));
+    input_->setClearButtonEnabled(true);
+    hint_ = new QLabel(l10n::tr("Type a keyword to search the manual."), this);
+    hint_->setObjectName("helpSearchHint");
+    hint_->setWordWrap(true);
+    results_ = new QListWidget(this);
+    results_->setObjectName("helpSearchResults");
+    layout->addWidget(input_);
+    layout->addWidget(hint_);
+    layout->addWidget(results_, 1);
+    debounce_ = new QTimer(this);
+    debounce_->setSingleShot(true);
+    debounce_->setInterval(300);
+    connect(input_, &QLineEdit::textChanged, this,
+            [this](const QString&) { debounce_->start(); });
+    connect(debounce_, &QTimer::timeout, this, [this]() { runSearch(); });
+    connect(results_, &QListWidget::itemClicked, this,
+            [this](QListWidgetItem* item) { openResult(item); });
+  }
+
+  void setBrowser(QTextBrowser* browser) { browser_ = browser; }
+
+ private:
+  struct Entry {
+    QString url;
+    QString title;
+    QString text;
+  };
+
+  // 首次搜索时才读 qch 内 searchdata.json 并缓存；qch 随构建静态，
+  // 运行期不会失效，无需按输入重复解析。
+  bool ensureDataLoaded() {
+    if (loaded_) {
+      return !entries_.isEmpty();
+    }
+    loaded_ = true;
+    if (!engine_) {
+      return false;
+    }
+    const QByteArray raw = engine_->fileData(QUrl(QStringLiteral(
+        "qthelp://gmp-ise.manual/manual/searchdata.json")));
+    const QJsonArray array = QJsonDocument::fromJson(raw).array();
+    for (const QJsonValue& value : array) {
+      const QJsonObject object = value.toObject();
+      Entry entry{object.value(QStringLiteral("url")).toString(),
+                  object.value(QStringLiteral("title")).toString(),
+                  object.value(QStringLiteral("text")).toString()};
+      if (!entry.url.isEmpty() && !entry.text.isEmpty()) {
+        entries_.append(entry);
+      }
+    }
+    return !entries_.isEmpty();
+  }
+
+  void runSearch() {
+    const QString keyword = input_->text().trimmed();
+    results_->clear();
+    if (keyword.isEmpty()) {
+      hint_->setText(l10n::tr("Type a keyword to search the manual."));
+      return;
+    }
+    if (!ensureDataLoaded()) {
+      hint_->setText(l10n::tr("Search data is not available."));
+      return;
+    }
+    struct Hit {
+      const Entry* entry;
+      int count;
+      int first;
+    };
+    QList<Hit> hits;
+    for (const Entry& entry : entries_) {
+      int count = 0;
+      int first = -1;
+      for (int from = 0;;) {
+        const int pos = entry.text.indexOf(keyword, from, Qt::CaseInsensitive);
+        if (pos < 0) {
+          break;
+        }
+        if (first < 0) {
+          first = pos;
+        }
+        ++count;
+        from = pos + keyword.size();
+      }
+      if (count > 0) {
+        hits.append({&entry, count, first});
+      }
+    }
+    std::sort(hits.begin(), hits.end(),
+              [](const Hit& a, const Hit& b) { return a.count > b.count; });
+    if (hits.isEmpty()) {
+      hint_->setText(l10n::tr("No results found."));
+      return;
+    }
+    hint_->setText(l10n::tr("%1 page(s) matched.").arg(hits.size()));
+    for (const Hit& hit : hits) {
+      const QString& text = hit.entry->text;
+      const int start = qMax(0, hit.first - 30);
+      const int end =
+          qMin(text.size(), hit.first + keyword.size() + 30);
+      QString snippet = text.mid(start, end - start).trimmed();
+      if (start > 0) {
+        snippet.prepend(QStringLiteral("…"));
+      }
+      if (end < text.size()) {
+        snippet.append(QStringLiteral("…"));
+      }
+      auto* item = new QListWidgetItem(
+          QStringLiteral("%1（%2）— %3")
+              .arg(hit.entry->title,
+                   l10n::tr("%1 hits").arg(hit.count), snippet),
+          results_);
+      item->setData(Qt::UserRole, hit.entry->url);
+      item->setToolTip(hit.entry->url);
+    }
+  }
+
+  void openResult(QListWidgetItem* item) {
+    if (!browser_ || !item) {
+      return;
+    }
+    browser_->setSource(QUrl(item->data(Qt::UserRole).toString()));
+    const QString keyword = input_->text().trimmed();
+    if (!keyword.isEmpty()) {
+      browser_->find(keyword);  // 高亮首个命中（大小写不敏感）
+    }
+  }
+
+  QHelpEngine* engine_ = nullptr;
+  QTextBrowser* browser_ = nullptr;
+  QLineEdit* input_ = nullptr;
+  QLabel* hint_ = nullptr;
+  QListWidget* results_ = nullptr;
+  QTimer* debounce_ = nullptr;
+  QList<Entry> entries_;
+  bool loaded_ = false;
 };
 #endif
 
@@ -5769,17 +5923,15 @@ void MainWindow::build_help_work_window() {
     content->setObjectName("helpContentWidget");
     auto* index = help_engine_->indexWidget();
     index->setObjectName("helpIndexWidget");
-    auto* search_page =
-        new QLabel(l10n::tr("Search is not available in this version."),
-                   side_tabs);
-    search_page->setAlignment(Qt::AlignCenter);
-    search_page->setWordWrap(true);
+    auto* search_page = new HelpSearchPage(help_engine_, side_tabs);
+    search_page->setObjectName("helpSearchPage");
     side_tabs->addTab(content, l10n::tr("Contents"));
     side_tabs->addTab(index, l10n::tr("Index"));
     side_tabs->addTab(search_page, l10n::tr("Search"));
 
     help_browser_ = new HelpBrowser(help_engine_, splitter);
     help_browser_->setObjectName("helpBrowser");
+    search_page->setBrowser(help_browser_);
     connect(content, &QHelpContentWidget::linkActivated, this,
             [this](const QUrl& url) { help_browser_->setSource(url); });
     connect(index, &QHelpIndexWidget::linkActivated, this,
@@ -21120,6 +21272,58 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                               .toStdString());
                     }
                   }
+                  // 全文纯文本子串搜索合同（Q-S1）：真实数据 "材料" 应命中
+                  // 多页且按命中数降序（ch5 命中最多居首），无结果词应给出
+                  // 空列表 + 无结果提示。setText 走 300ms 防抖，须等超时。
+                  auto* search_edit =
+                      help_work_window_->findChild<QLineEdit*>(
+                          "helpSearchEdit");
+                  auto* search_results =
+                      help_work_window_->findChild<QListWidget*>(
+                          "helpSearchResults");
+                  auto* search_hint = help_work_window_->findChild<QLabel*>(
+                      "helpSearchHint");
+                  if (!search_edit || !search_results || !search_hint) {
+                    throw std::runtime_error(
+                        "help search page widgets are missing");
+                  }
+                  auto wait_debounce = []() {
+                    QEventLoop settle;
+                    QTimer::singleShot(500, &settle, &QEventLoop::quit);
+                    settle.exec();
+                  };
+                  search_edit->setText(QString::fromUtf8("材料"));
+                  wait_debounce();
+                  if (search_results->count() == 0) {
+                    throw std::runtime_error(
+                        "manual full-text search returned no results for "
+                        "\"材料\"");
+                  }
+                  QListWidgetItem* top = search_results->item(0);
+                  if (!top->text().contains(QString::fromUtf8("材料")) ||
+                      !top->text().contains(QString::fromUtf8("命中"))) {
+                    throw std::runtime_error(
+                        "top manual search result is not the expected "
+                        "chapter with hit count");
+                  }
+                  // 先取走文本：第二次搜索会 clear() 结果列表，item 指针随之失效
+                  const QString top_text = top->text();
+                  search_edit->setText(QString::fromUtf8("不存在的词xyz"));
+                  wait_debounce();
+                  if (search_results->count() != 0) {
+                    throw std::runtime_error(
+                        "manual full-text search should return nothing for "
+                        "a nonexistent keyword");
+                  }
+                  if (search_hint->text() !=
+                      l10n::tr("No results found.")) {
+                    throw std::runtime_error(
+                        "manual search hint does not show the no-results "
+                        "message");
+                  }
+                  qInfo("[tour] manual full-text search contract OK "
+                        "(top=%s)",
+                        qPrintable(top_text));
 #endif
                 },
                 help_work_window_});

@@ -59,7 +59,12 @@ const QHash<QString, QString>& zh_dict() {
       {"User Manual", "用户手册"},
       {"Contents", "目录"},
       {"Search", "搜索"},
-      {"Search is not available in this version.", "搜索功能将在后续版本提供。"},
+      {"Search manual pages...", "搜索手册内容…"},
+      {"Type a keyword to search the manual.", "输入关键词以搜索手册全文。"},
+      {"No results found.", "未找到匹配结果。"},
+      {"Search data is not available.", "搜索数据不可用。"},
+      {"%1 hits", "命中 %1 次"},
+      {"%1 page(s) matched.", "匹配到 %1 个页面"},
       {"The user manual is not available in this build "
        "(Qt Help missing or manual not generated).",
        "当前构建未包含用户手册（缺少 Qt Help 或手册未生成）。"},
