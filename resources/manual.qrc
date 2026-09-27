@@ -1,0 +1,5 @@
+<RCC>
+  <qresource prefix="/">
+    <file alias="gmp-manual.qch">../build/manual/gmp-manual.qch</file>
+  </qresource>
+</RCC>

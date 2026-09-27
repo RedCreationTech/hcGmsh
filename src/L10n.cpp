@@ -60,6 +60,13 @@ const QHash<QString, QString>& zh_dict() {
       {"Tools", "工具"},
       {"Help", "帮助"},
       {"About GMP-ISE", "关于 GMP-ISE"},
+      {"User Manual", "用户手册"},
+      {"Contents", "目录"},
+      {"Search", "搜索"},
+      {"Search is not available in this version.", "搜索功能将在后续版本提供。"},
+      {"The user manual is not available in this build "
+       "(Qt Help missing or manual not generated).",
+       "当前构建未包含用户手册（缺少 Qt Help 或手册未生成）。"},
       {"Language", "语言"},
       {"Chinese", "中文"},
       {"English", "English"},

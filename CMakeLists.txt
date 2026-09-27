@@ -213,6 +213,54 @@ target_include_directories(gmp_ise PRIVATE include
   external/QtAwesome/QtAwesome)
 target_link_libraries(gmp_ise PRIVATE hc_simulation hc_mesh Qt6::Widgets Qt6::Network Qt6::Concurrent Qt6::Svg)
 
+# ===== 软件内用户手册（doc/ref/软件内用户手册设计.md，地基步） =====
+# Qt Help 库缺失时手册窗口退化为占位页，构建继续。
+find_package(Qt6 QUIET COMPONENTS Help)
+if(TARGET Qt6::Help)
+  target_link_libraries(gmp_ise PRIVATE Qt6::Help)
+  target_compile_definitions(gmp_ise PRIVATE GMP_ENABLE_QT_HELP)
+else()
+  message(WARNING "未找到 Qt6 Help：用户手册工作窗将显示占位内容（构建继续）")
+endif()
+
+# 手册 qch：md -> HTML -> qhelpgenerator。用独立目标 + add_dependencies 保证
+# qch 先于 gmp_ise 的编译（含 manual.qrc 的 rcc）生成；找不到
+# qhelpgenerator 时脚本只警告并产出空占位 qch，构建不失败。
+find_package(Python3 COMPONENTS Interpreter QUIET)
+set(GMP_MANUAL_QCH "${CMAKE_CURRENT_BINARY_DIR}/manual/gmp-manual.qch")
+if(Python3_Interpreter_FOUND)
+  file(GLOB GMP_MANUAL_MD CONFIGURE_DEPENDS
+       "${CMAKE_CURRENT_SOURCE_DIR}/doc/manual/src/*.md")
+  add_custom_command(
+    OUTPUT "${GMP_MANUAL_QCH}"
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/build_manual.py"
+            --root "${CMAKE_CURRENT_SOURCE_DIR}"
+            --out "${CMAKE_CURRENT_BINARY_DIR}/manual"
+    DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/build_manual.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/doc/manual/手册目录.json"
+            ${GMP_MANUAL_MD}
+    COMMENT "构建软件内用户手册（Markdown -> qch）"
+    VERBATIM)
+  add_custom_target(gmp_manual_qch DEPENDS "${GMP_MANUAL_QCH}")
+  add_dependencies(gmp_ise gmp_manual_qch)
+  find_program(GMP_QHELPGENERATOR_EXECUTABLE NAMES qhelpgenerator
+    HINTS "$ENV{QT_BIN_DIR}"
+    PATHS /usr/local/opt/qttools/share/qt/libexec
+          /opt/homebrew/opt/qttools/share/qt/libexec)
+  if(NOT GMP_QHELPGENERATOR_EXECUTABLE)
+    message(WARNING "未找到 qhelpgenerator（可设 QT_BIN_DIR 指向 Qt bin）："
+                    "手册 qch 将为空占位，窗口显示降级提示（构建继续）")
+  endif()
+else()
+  message(WARNING "未找到 python3：跳过用户手册构建，使用空占位 qch")
+  file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/manual")
+  if(NOT EXISTS "${GMP_MANUAL_QCH}")
+    file(WRITE "${GMP_MANUAL_QCH}" "")
+  endif()
+endif()
+# manual.qrc 以仓库根相对路径引用 build/manual/gmp-manual.qch（AUTORCC 加载）
+target_sources(gmp_ise PRIVATE resources/manual.qrc)
+
 # TASK-E2E-10: MOOSE 模板库根目录（templates/moose/），运行期可被
 # GMP_MOOSE_TEMPLATES 环境变量覆盖
 target_compile_definitions(gmp_ise PRIVATE

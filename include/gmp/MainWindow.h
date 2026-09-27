@@ -44,6 +44,9 @@ class QCheckBox;
 class QTimer;
 class QSlider;
 class QSpinBox;
+class QTextBrowser;
+class QTemporaryFile;
+class QHelpEngine;
 
 namespace gmp {
 
@@ -78,6 +81,11 @@ class MainWindow : public QMainWindow {
  private:
   void build_menu();
   void build_toolbar();
+  // 用户手册工作窗（F1 / Help 菜单，doc/ref/软件内用户手册设计.md 地基步）。
+  // 构造期创建：QHelpEngine 从 :/gmp-manual.qch 落盘临时文件后加载；
+  // Qt Help 不可用或 qch 未生成时右栏退化为占位提示页。
+  void build_help_work_window();
+  void show_user_manual();
   void apply_language_to_windows();
   // 创建并接线一个工具组（顶部停靠、紧凑尺寸、浮动恢复）；复位时
   // 也用同一入口重建被拖出的工具组。
@@ -280,6 +288,7 @@ class MainWindow : public QMainWindow {
   QDockWidget* job_work_window_ = nullptr;
   QDockWidget* visualization_work_window_ = nullptr;
   QDockWidget* results_work_window_ = nullptr;
+  QDockWidget* help_work_window_ = nullptr;
   QToolBar* display_tool_group_ = nullptr;
   QTabWidget* results_work_tabs_ = nullptr;
   QList<QDockWidget*> results_compare_windows_;
@@ -405,6 +414,11 @@ class MainWindow : public QMainWindow {
   QSlider* playback_slider_ = nullptr;        // 播放进度（可拖动定位）
   QTimer* playback_timer_ = nullptr;
   QAction* action_reset_tool_layout_ = nullptr;
+  QAction* action_user_manual_ = nullptr;
+  QHelpEngine* help_engine_ = nullptr;
+  QTextBrowser* help_browser_ = nullptr;
+  // qch 落盘的临时文件：QtHelp 不支持 qrc 直读，文件须存活到引擎销毁
+  QTemporaryFile* help_qch_file_ = nullptr;
   QPushButton* job_run_button_ = nullptr;
   QPushButton* job_stop_button_ = nullptr;
   QPushButton* job_retry_button_ = nullptr;

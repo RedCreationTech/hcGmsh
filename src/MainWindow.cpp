@@ -85,6 +85,14 @@
 #include <QJsonArray>
 #include <yaml-cpp/yaml.h>
 
+#ifdef GMP_ENABLE_QT_HELP
+#include <QHelpEngine>
+#include <QHelpContentWidget>
+#include <QHelpIndexWidget>
+#include <QTemporaryFile>
+#include <QTextBrowser>
+#endif
+
 #include "gmp/GmshPanel.h"
 #include "gmp/FloatingPropertyForm.h"
 #include "gmp/ModelTreeAdapter.h"
@@ -117,6 +125,34 @@ QString translate_moose_type(const QString& type);
 }
 
 namespace {
+
+#ifdef GMP_ENABLE_QT_HELP
+// 手册正文浏览器：qthelp:// 资源经 QHelpEngine 提供（Qt Help 不自带
+// 公开浏览器控件，Assistant 的 QHelpBrowser 即同款做法）；外链交系统浏览器。
+// Qt6 的 QTextBrowser::setSource 不可覆写（非 virtual），外链统一在
+// loadResource 拦截跳转。
+class HelpBrowser : public QTextBrowser {
+ public:
+  explicit HelpBrowser(QHelpEngine* engine, QWidget* parent = nullptr)
+      : QTextBrowser(parent), engine_(engine) {}
+
+  QVariant loadResource(int type, const QUrl& url) override {
+    const QString scheme = url.scheme();
+    if (scheme == QLatin1String("http") ||
+        scheme == QLatin1String("https")) {
+      QDesktopServices::openUrl(url);
+      return QVariant();
+    }
+    if (scheme == QLatin1String("qthelp") && engine_) {
+      return engine_->fileData(url);
+    }
+    return QTextBrowser::loadResource(type, url);
+  }
+
+ private:
+  QHelpEngine* engine_ = nullptr;
+};
+#endif
 
 QList<int> volume_tags_from_params(const QVariantMap& params) {
   QList<int> tags;
@@ -960,6 +996,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
       "Results Workspace", "resultsWorkspaceWindow", QSize(720, 400));
   mesh_work_window_ = make_floating_workspace(
       "Mesh Workspace", "meshWorkspaceWindow", QSize(760, 520));
+  build_help_work_window();
 
   main_split->addWidget(tree_panel);
   main_split->addWidget(center_panel);
@@ -5271,6 +5308,15 @@ void MainWindow::build_menu() {
 
   auto* help_menu = menuBar()->addMenu("&Help");
   help_menu->setObjectName("helpMenu");
+  action_user_manual_ = help_menu->addAction("User Manual");
+  action_user_manual_->setObjectName("userManualAction");
+  action_user_manual_->setIcon(gmp::icons::get("manual"));
+  // F1 与菜单共触发：action 快捷键即 F1 入口（主窗口 WindowShortcut 作用域）
+  action_user_manual_->setShortcut(QKeySequence(Qt::Key_F1));
+  action_user_manual_->setShortcutContext(Qt::WindowShortcut);
+  connect(action_user_manual_, &QAction::triggered, this,
+          [this]() { show_user_manual(); });
+  help_menu->addSeparator();
   auto* about_action = help_menu->addAction("About GMP-ISE");
   connect(about_action, &QAction::triggered, this, [this]() {
     QMessageBox::about(
@@ -5588,7 +5634,7 @@ void MainWindow::apply_language_to_windows() {
   l10n::apply(this);
   for (QDockWidget* workspace : {module_work_window_, mesh_work_window_,
                                  job_work_window_, visualization_work_window_,
-                                 results_work_window_}) {
+                                 results_work_window_, help_work_window_}) {
     if (workspace) {
       l10n::apply(workspace);
     }
@@ -5598,6 +5644,115 @@ void MainWindow::apply_language_to_windows() {
       l10n::apply(compare_window);
     }
   }
+}
+
+void MainWindow::build_help_work_window() {
+  auto* workspace = new QDockWidget("User Manual", nullptr, Qt::Tool);
+  workspace->setObjectName("helpWorkspaceWindow");
+  workspace->setFeatures(QDockWidget::DockWidgetClosable |
+                         QDockWidget::DockWidgetMovable |
+                         QDockWidget::DockWidgetFloatable);
+  workspace->setMinimumSize(520, 360);
+  workspace->resize(920, 620);
+  workspace->setAllowedAreas(Qt::NoDockWidgetArea);
+
+  auto* splitter = new QSplitter(Qt::Horizontal, workspace);
+  splitter->setObjectName("helpSplitter");
+  splitter->setChildrenCollapsible(false);
+
+  auto add_placeholder = [this, splitter]() {
+    auto* placeholder = new QLabel(
+        l10n::tr("The user manual is not available in this build "
+                 "(Qt Help missing or manual not generated)."),
+        splitter);
+    placeholder->setObjectName("helpPlaceholder");
+    placeholder->setAlignment(Qt::AlignCenter);
+    placeholder->setWordWrap(true);
+    splitter->addWidget(placeholder);
+  };
+
+#ifdef GMP_ENABLE_QT_HELP
+  // QtHelp 不支持 qrc 直读：把 :/gmp-manual.qch 落盘到临时文件再加载。
+  // Qt6 引擎以集合(.qhc)为入口且默认只读：先建临时集合，setReadOnly(false)
+  // 初始化后再把 qch 注册进集合（直接传 .qch 不会自动注册，目录/正文全空）。
+  // 临时文件挂到 MainWindow 下，保证存活期覆盖 QHelpEngine 的全部读取。
+  QFile qch_resource(":/gmp-manual.qch");
+  if (qch_resource.open(QIODevice::ReadOnly) &&
+      qch_resource.size() > 0) {
+    help_qch_file_ = new QTemporaryFile(
+        QDir::tempPath() + "/gmp-ise-manual-XXXXXX.qch", this);
+    auto* qhc_file = new QTemporaryFile(
+        QDir::tempPath() + "/gmp-ise-manual-col-XXXXXX.qhc", this);
+    if (help_qch_file_->open() && qhc_file->open()) {
+      help_qch_file_->write(qch_resource.readAll());
+      help_qch_file_->flush();
+      help_engine_ = new QHelpEngine(qhc_file->fileName(), this);
+      help_engine_->setReadOnly(false);
+      if (!help_engine_->setupData() ||
+          !help_engine_->registerDocumentation(help_qch_file_->fileName())) {
+        qWarning() << "[manual] QHelpEngine 初始化失败:" << help_engine_->error();
+        delete help_engine_;
+        help_engine_ = nullptr;
+      }
+    }
+  }
+
+  if (help_engine_) {
+    auto* side_tabs = new QTabWidget(splitter);
+    side_tabs->setObjectName("helpSideTabs");
+    auto* content = help_engine_->contentWidget();
+    content->setObjectName("helpContentWidget");
+    auto* index = help_engine_->indexWidget();
+    index->setObjectName("helpIndexWidget");
+    auto* search_page =
+        new QLabel(l10n::tr("Search is not available in this version."),
+                   side_tabs);
+    search_page->setAlignment(Qt::AlignCenter);
+    search_page->setWordWrap(true);
+    side_tabs->addTab(content, l10n::tr("Contents"));
+    side_tabs->addTab(index, l10n::tr("Index"));
+    side_tabs->addTab(search_page, l10n::tr("Search"));
+
+    help_browser_ = new HelpBrowser(help_engine_, splitter);
+    help_browser_->setObjectName("helpBrowser");
+    connect(content, &QHelpContentWidget::linkActivated, this,
+            [this](const QUrl& url) { help_browser_->setSource(url); });
+    connect(index, &QHelpIndexWidget::linkActivated, this,
+            [this](const QUrl& url, const QString&) {
+              help_browser_->setSource(url);
+            });
+    splitter->addWidget(side_tabs);
+    splitter->addWidget(help_browser_);
+    splitter->setStretchFactor(0, 0);
+    splitter->setStretchFactor(1, 1);
+    // 首页：手册目录页
+    help_browser_->setSource(QUrl(QStringLiteral(
+        "qthelp://gmp-ise.manual/manual/index.html")));
+  } else {
+    add_placeholder();
+  }
+#else
+  add_placeholder();
+#endif
+
+  workspace->setWidget(splitter);
+  workspace->hide();
+  if (view_menu_) {
+    auto* toggle = workspace->toggleViewAction();
+    toggle->setText("User Manual");
+    view_menu_->addAction(toggle);
+  }
+  help_work_window_ = workspace;
+}
+
+void MainWindow::show_user_manual() {
+  if (!help_work_window_) {
+    return;
+  }
+  clamp_window_to_screen(help_work_window_);
+  help_work_window_->show();
+  help_work_window_->raise();
+  help_work_window_->activateWindow();
 }
 
 QToolBar* MainWindow::make_tool_group(const QString& title,
@@ -20298,6 +20453,52 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   });
                 },
                 nullptr});
+  steps.append({"user_manual_window_contract",
+                [this]() {
+                  // 菜单 action 存在且绑定 F1（菜单与 F1 同一触发路径）
+                  auto* action = findChild<QAction*>("userManualAction");
+                  if (!action) {
+                    throw std::runtime_error(
+                        "user manual menu action is missing");
+                  }
+                  if (action->shortcut() != QKeySequence(Qt::Key_F1)) {
+                    throw std::runtime_error(
+                        "user manual action is not bound to F1");
+                  }
+                  if (!help_work_window_) {
+                    throw std::runtime_error(
+                        "help work window was not created");
+                  }
+                  show_user_manual();
+                  if (!help_work_window_->isVisible()) {
+                    throw std::runtime_error(
+                        "user manual window did not open");
+                  }
+#ifdef GMP_ENABLE_QT_HELP
+                  if (!help_engine_) {
+                    throw std::runtime_error(
+                        "QHelpEngine did not load :/gmp-manual.qch");
+                  }
+                  auto* content =
+                      help_work_window_->findChild<QHelpContentWidget*>(
+                          "helpContentWidget");
+                  if (!content) {
+                    throw std::runtime_error("help content widget is missing");
+                  }
+                  // 目录须加载出全部占位章节（当前 3 章）
+                  QAbstractItemModel* toc = content->model();
+                  if (!toc || toc->rowCount() != 3) {
+                    throw std::runtime_error(
+                        "help TOC must list exactly 3 chapters");
+                  }
+                  if (!help_browser_ ||
+                      help_browser_->document()->isEmpty()) {
+                    throw std::runtime_error(
+                        "help browser home page is not displayed");
+                  }
+#endif
+                },
+                help_work_window_});
   // 该步骤自带退出逻辑，放入独立执行路径
   if (qEnvironmentVariableIsSet("GMP_TOUR_MAXIMIZE_ONLY")) {
     decltype(steps) only;
@@ -20910,6 +21111,17 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
     // QApplication::quit()（GMP_TOUR_STEP_FILTER 只跑部分步骤时表单不会被
     // audit_done 关闭，仍需能正常退出）。
     audit_form->setWindowModality(Qt::NonModal);
+    if (help_work_window_ &&
+        help_work_window_->findChild<QTabWidget*>("helpSideTabs")) {
+      steps.append({"audit_user_manual",
+                    [this, reveal, tabs_of]() {
+                      reveal(help_work_window_);
+                      tabs_of(help_work_window_, "helpSideTabs")
+                          ->setCurrentIndex(0);
+                      qApp->processEvents();
+                    },
+                    help_work_window_});
+    }
     const char* form_tab_steps[] = {
         "audit_form_general", "audit_form_parameters", "audit_form_validation",
         "audit_form_preview"};

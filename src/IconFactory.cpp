@@ -119,6 +119,7 @@ const QHash<QString, QString>& mapping() {
   static const QHash<QString, QString> kMap = {
       // ---- 项目 / 文件 ----
       {"open_root", "folder-tree"},
+      {"manual", "book-open"},
       {"open_parts_root", "folder-tree"},
       {"open_selected", "folder-open"},
       {"rename", "pen"},

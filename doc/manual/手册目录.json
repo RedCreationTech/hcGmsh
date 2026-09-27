@@ -1,0 +1,25 @@
+{
+  "title": "GMP-ISE 用户手册",
+  "namespace": "gmp-ise.manual",
+  "virtualFolder": "manual",
+  "chapters": [
+    {
+      "id": "ch1",
+      "title": "简介与界面总览",
+      "keywords": ["简介", "界面", "总览", "模块"],
+      "file": "ch1-intro.md"
+    },
+    {
+      "id": "ch2",
+      "title": "快速上手",
+      "keywords": ["快速上手", "演示", "算例", "入门"],
+      "file": "ch2-quickstart.md"
+    },
+    {
+      "id": "ch3",
+      "title": "常见问题",
+      "keywords": ["FAQ", "常见问题", "故障", "帮助"],
+      "file": "ch3-faq.md"
+    }
+  ]
+}

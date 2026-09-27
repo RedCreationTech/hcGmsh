@@ -1,4 +1,5 @@
 /build/
+/build/manual/
 /out/
 *.gmp.yaml
 !tests/fixtures/*.gmp.yaml
