@@ -12,3 +12,5 @@ bug/logs_*/
 /.env
 # UI 样式采集的过程截图，可用 GMP_UI_AUDIT=1 重新生成（见 doc/ref/模块弹窗样式现状摸底与统一优化建议.md 附录）
 doc/ref/images/ui-audit
+# 计算节点下载的 MOOSE 资格验证输入/结果，仅作本地人工对照。
+/examples/hcMooseApp/qualification/

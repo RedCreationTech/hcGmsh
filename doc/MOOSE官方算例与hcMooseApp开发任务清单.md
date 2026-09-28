@@ -1,7 +1,7 @@
 # MOOSE 官方算例与 hcMooseApp 开发任务清单
 
 > 编制日期：2026-09-28
-> 当前状态：Round A 已验收；Round B / TASK-MOOSECASE-006 已通过远端准出
+> 当前状态：Round A 已验收；Round B 基础路由已完成，MC01～MC05 CAE 闭环待开发
 > 本地仓库基线：`main@2dda489fbacd4621dbe817cbf8c1a9b47d065615`
 > 计算节点：`kevin@192.168.0.138`（2026-09-28 由 `192.168.0.121` 切换，同一物理节点）
 > 任务轨道：`TASK-MOOSECASE-*`
@@ -96,13 +96,13 @@ CONTACT         := yes
 - 节点当前可用空间约 166 GB；现有完整构建环境约 5.4 GB。
 - MC01～MC05 候选输入在该 MOOSE commit 中均真实存在；因此先以此 commit 做 Baseline v1 资格验证，不先升级 upstream。
 
-### 2.3 当前远端执行约束
+### 2.3 Round B 开工前的远端执行约束
 
-- C06 Agent 当前每次启动只加载一个 `AGENT_SOLVER`，不是多求解器注册表。
-- 已有 `dam-safety-app` 和 `blackbear` 两个启动画像，但切换画像需要重启 Agent。
-- Agent 实际执行命令来自服务端配置；manifest 中的程序名只做白名单校验，不能据此按 Job 切换二进制。
+- C06 Agent 当时每次启动只加载一个 `AGENT_SOLVER`，不是多求解器注册表。
+- 当时切换 `dam-safety-app` 与 `blackbear` 需要重启 Agent。
+- Agent 当时不能根据 manifest 按 Job 切换二进制。
 - 因此“编译出 `hc_moose-opt`”与“GMP-ISE 可选择并提交 `hc_moose-opt`”是两个独立准出项。
-- GMP-ISE 下拉列表来自本地 `templates/moose/profiles/*.json`；显示某个 profile 只代表客户端声明了该应用档案，不证明当前计算节点已经构建或注册同名二进制。
+- 上述路由约束已由 TASK-MOOSECASE-006 解决；当前状态见第 13 节。
 
 ## 3. 范围与红线
 
@@ -191,7 +191,7 @@ modules:
 ### TASK-MOOSECASE-006 远端求解器接入与身份握手
 
 - **目标**：让 GMP-ISE 选择 `hc_moose-opt` 后，服务端实际执行同一二进制并返回可核对身份。
-- **现状差距**：C06 Agent 是单活动求解器模型；需先确认采用多求解器注册表还是临时启动画像。
+- **原始差距（已解决）**：C06 Agent 原为单活动求解器模型；Round B B0 已改为服务端多求解器注册表。
 - **最低安全合同**：客户端只能提交注册表中的 solver id；服务端决定真实 argv；路径不由客户端传入；Job 固化实际 app/MOOSE/binary/node 身份；身份不匹配时阻止 production 提交。
 - **兼容合同**：新增显式 `solver_id` 作为求解器选择参数；已有调用方未提供 `solver_id` 时继续解析为配置中的 `default_solver_id = dam-safety-app`，保持当前默认行为并记录 `selection_mode = legacy_default`。新 GMP-ISE profile 必须显式提交 `hc_moose-opt`；未知 id 返回 422，不允许回退到默认求解器。
 - **审计合同**：Job 同时记录 requested/resolved solver id 和实际 solver identity；manifest 中的展示命令不再拥有选择二进制的权力，也不接受客户端传入可执行路径。
@@ -223,10 +223,22 @@ modules:
 - 先完成整个 MC01 Gap，再合并为最小产品任务。
 - 优先复用已有 FunctionDirichletBC、Transient、输出和 FileMesh 能力。
 - 不因缺一个底层 Object 就创建通用编辑器。
+- 2026-09-28 已按当前 CAE 界面走查 MC01，冻结五个缺口：
+
+  | Gap ID | 缺口 | 最小产品结果 |
+  |---|---|---|
+  | `MC01-GEO-01` | 无二维矩形面网格通路 | 仅增加本例需要的 `2 x 1 / 10 x 10` 可参数化二维矩形网格能力，不建设整套 MeshGenerator UI |
+  | `MC01-PHY-01` | 缺 `HeatConductionMaterial` 和 `HeatConductionTimeDerivative`；现有 Loads 切换到 `HeatConduction` 时残留 `BodyForce.value=0` | 在 HC 独立 mapping/profile 中增加专用类型和参数表单，复用已有 `HeatConduction`，切换类型时自动清理不相容键 |
+  | `MC01-STEP-01` | Transient 默认带入 `IterationAdaptiveDT`、非线性控制、PETSc LU/MUMPS 和 SMP，与本例固定 `dt=1` 不一致；现有校验仍报 `No issues`；高级表删除后快捷表单仍显示旧值 | 让 MC01 预设只生成 `start_time/end_time/dt`必要语义（`implicit-euler` 可显式保留），对不等价的自适应配置给出校验提示，并保证快捷/高级/预览三处同步 |
+  | `MC01-VPP-01` | 无 `LineValueSampler` 结构化入口；2026-09-28 实测的场/历史输出仅有 CDP 诊断量和结构反力/位移/极值 | 增加一个中心线采样表单，支持变量、起终点、点数和排序 |
+  | `MC01-OUT-01` | 现有 Outputs 可见 Exodus、CSV、`file_base`，但无法单独表达 `CSV(execute_on=final)`；开启 CSV 也不会生成线采样数据 | 增加 Exodus + final-only CSV，支持本例 `file_base`，不要求用户启用无关的 CDP History/Times 套餐 |
+
+- 详细的当前可操作路径、阻断位置和开发后操作见 Round B 手册第 4 节 `TEST-MOOSE-B-MC01-01`。
+- 2026-09-28 已完成 MC01 修复前的人工走查和结构化 `.i` 同步。当前输入缺 `HeatConductionTimeDerivative`、`HeatConductionMaterial`、`LineValueSampler` 和 Outputs，Mesh 仍是 macOS 绝对路径下的 Round A 诊断结果网格；决策为不提交远端、不用手工 `.i` 绕过，待五项 Gap 统一修复后重新验证。
 
 ### TASK-MOOSECASE-040 最小功能补齐
 
-- 只实现 MC01 真正缺少的 Thermal Physics、Temperature、Thermal Material、Initial Temperature 及必要结果表达。
+- 只实现 `MC01-GEO-01`、`MC01-PHY-01`、`MC01-STEP-01`、`MC01-VPP-01`、`MC01-OUT-01` 五项已冻结缺口；复用现有 Variable 高级参数、ParsedFunction、DirichletBC/FunctionDirichletBC、Remote Job 和 Results 能力。
 - 新建独立 `templates/moose/mapping-hcmoose-v1.json`，不扩散到现有 production profile。
 - 新建 `templates/moose/profiles/hc_moose-opt.json`，初始始终为 `prototype`。
 
@@ -279,7 +291,7 @@ modules:
 | M0 | Round A 关键决策确认 | ✅ 完成 |
 | M1 | `hc_moose-opt` 远端构建与身份冻结 | ✅ 完成 |
 | M2 | MC01～MC05 Baseline v1 资格验证 | ✅ 完成 |
-| M3 | 远端接入与身份握手 | ✅ 完成（待提交） |
+| M3 | 远端接入与身份握手 | ✅ 完成并已提交推送 |
 | M4 | MC01 达 D | 未开始 |
 | M5 | MC02 达 D | 未开始 |
 | M6 | MC03 达 D | 未开始 |
@@ -402,9 +414,16 @@ flowchart TB
 - **备选**：把所有五例输入、gold、文档和截图都放进 `hcMooseApp`；目录集中，但会让求解器仓库承担桌面产品文档与素材，并重复 MOOSE submodule 已有内容。
 - **决策**：✅ 已确认（2026-09-28）。采用推荐的双仓库所有权边界：Application 与 Round A 资格证据归 `hcMooseApp`；GMP-ISE profile/mapping、GUI 合同、五份人工操作文档和验收材料归 `Gmsh-moose-parview`；官方输入/gold 不重复 vendor，大体量结果不入 Git。
 
+### Q-MOOSE-11 Round B 的完成口径
+
+- **用户澄清**：Round B 的预期产物是用人工方式在 CAE 中对 Round A 的 MC01～MC05 进行一比一复刻，包括预处理、结构化生成 `.i`、通过 Job 提交计算、LIMS 下载结果，以及 CAE 导入和后处理。
+- **范围修正**：TASK-MOOSECASE-006 只是 Round B 的 B0 基础设施，完成它不等于 Round B 完成。Round B 必须在 M4～M8 全部达 D 后才能收口。
+- **文档策略**：先用一份五例主手册冻结公共流程、每例参数、阻断闸门和验收表；随各 MCxx 实现和真实操作，再拆分并回填最终的五份独立用户文档。
+- **决策**：✅ 已确认（2026-09-28）。采用上述五例 CAE 端到端完成口径，不再把单独的路由验收称为 Round B 最终产物。
+
 ## 11. 决策收口与后续闸门
 
-Q-MOOSE-01～10 已全部确认。Round A 的构建、提交后重建、应用测试、五例资格验证和身份冻结均已完成，并于 2026-09-28 由用户确认验收。Round B 已启动。
+Q-MOOSE-01～11 已全部确认。Round A 的构建、提交后重建、应用测试、五例资格验证和身份冻结均已完成，并于 2026-09-28 由用户确认验收。Round B 已启动，当前已完成 B0 路由基础设施，未完成五例 CAE 闭环。
 
 以下事项不阻塞 Round A，只在对应阶段到达后确认：
 
@@ -456,10 +475,10 @@ Round A 至此收口。2026-09-28，用户明确确认“Round A 已经完成”
 
 ### 13.1 开工状态
 
-- TASK-MOOSECASE-006 已开始实施。
+- TASK-MOOSECASE-006 已实施、远端准出并提交推送。
 - 实施边界保持已确认合同：C06 以服务端 Solver Registry 解析 `solver_id`；未提供时使用 `default_solver_id = dam-safety-app`；未知 id 返回 422；客户端不得提供可执行文件路径。
 - 涉及三个现有仓库：C06 Agent 负责求解器解析与执行身份；LIMS 负责验证 manifest 原样透传；GMP-ISE 负责从 Application Profile 显式提交 `solver_id`。
-- Round B 新代码的 commit/push 继续等待用户在验证结果后单独授权。
+- 用户已授权三个仓库按 C06 Agent -> LIMS -> GMP-ISE 顺序提交和推送，已完成。
 
 ### 13.2 实施结果
 
@@ -481,7 +500,7 @@ Round A 至此收口。2026-09-28，用户明确确认“Round A 已经完成”
 | GMP-ISE 合同 | `gmp_ise_phase0` | 1/1 passed |
 | LIMS 回归文件 | Python 语法编译 | PASS；本地 `api/.venv` 未安装 pytest，未执行 pytest |
 
-138 上线前已确认 `queued/preparing/running` 均为空。C06 首次从 PID `97370` 受控重启，制品 manifest 身份字段补齐后再次确认无活跃作业并重启；最终 PID 为 `218941`。健康接口返回 `status=ok`、`default_solver_id=dam-safety-app`及三个注册求解器身份。
+138 上线前已确认 `queued/preparing/running` 均为空。C06 首次从 PID `97370` 受控重启，制品 manifest 身份字段补齐后再次确认无活跃作业并重启；最后一次人工确认时运行 PID 为 `221294`。健康接口返回 `status=ok`、`default_solver_id=dam-safety-app`及三个注册求解器身份。
 
 | 验收路由 | Job | 选择记录 | 实际二进制 SHA-256 | 结果 |
 |---|---|---|---|---|
@@ -491,4 +510,12 @@ Round A 至此收口。2026-09-28，用户明确确认“Round A 已经完成”
 
 为选取一个既有 DamSafetyApp 可运行的短验证输入，曾将 MC01 和 MC03 用于旧请求路由预检；由于 DamSafetyApp 未注册 `HeatConduction` / `[Contact]` 语法，留下三条预期的 `check_input_failed` 记录：`job_20260928_105427_d5thdq`、`job_20260928_105436_jqg7k7`、`job_20260928_105449_vatyte`。这三条记录的实际命令均指向 DamSafetyApp，不是路由串用；正向准出改用已知成功的 DamSafetyApp CDP 短算例。
 
-TASK-MOOSECASE-006 的远端准出条件已满足：HcMooseApp 与旧 DamSafetyApp 作业互不串用二进制，并且 Job 可根据 requested/resolved id、commit 和 binary SHA-256 审计。三个仓库的 Round B 变更均未提交、未推送，等待用户授权。
+TASK-MOOSECASE-006 的远端准出条件已满足：HcMooseApp 与旧 DamSafetyApp 作业互不串用二进制，并且 Job 可根据 requested/resolved id、commit 和 binary SHA-256 审计。三个仓库的相关变更已提交并推送。
+
+### 13.4 Round B 范围澄清与下一阶段
+
+- 2026-09-28，用户明确 Round B 必须覆盖 MC01～MC05 的 CAE 一比一复刻、Job 实算、LIMS 下载和 CAE 后处理。
+- B0 提交已推送：C06 Agent `74c83647cca05ef9220c25ae2d129e255fa4ca8f`，LIMS `83ba369`，GMP-ISE `e2ba1f9`。
+- 原“Round B 求解器路由人工验收手册”已改写为五例闭环主手册；路由验收作为其公共基础流程。
+- 当前五例都尚有结构化 UI/mapping 阻断项，手册已标明停止闸门，不允许用手改 `.i` 绕过。
+- 后续从 MC01 开始执行 TASK-MOOSECASE-010～110；MC01 达 D 后再进入 MC02，依次完成到 MC05。
