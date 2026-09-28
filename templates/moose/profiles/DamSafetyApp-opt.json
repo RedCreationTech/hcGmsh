@@ -5,6 +5,7 @@
   "status": "production",
   "status_note": "",
   "solver_program": "DamSafetyApp-opt",
+  "solver_id": "dam-safety-app",
   "compute_environment": "linux-x86_64-gnu-mpi",
   "physics": [
     {

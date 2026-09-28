@@ -1,10 +1,16 @@
 # MOOSE 官方算例与 hcMooseApp 开发任务清单
 
 > 编制日期：2026-09-28
-> 当前状态：Round A 已完成并推送；`hcMooseApp` 身份和五例资格结果已冻结
+> 当前状态：Round A 已验收；Round B / TASK-MOOSECASE-006 已通过远端准出
 > 本地仓库基线：`main@2dda489fbacd4621dbe817cbf8c1a9b47d065615`
 > 计算节点：`kevin@192.168.0.138`（2026-09-28 由 `192.168.0.121` 切换，同一物理节点）
 > 任务轨道：`TASK-MOOSECASE-*`
+
+Round A 的产出物边界、五个算例说明和人工验证步骤见：
+[MOOSE 官方算例 Round A 产出物说明与人工验证](MOOSE官方算例RoundA产出物说明与人工验证.md)。
+
+Round B 的 CAE 逐项人工准出见：
+[MOOSE 官方算例 Round B CAE 人工验证手册](MOOSE官方算例RoundB-CAE人工验证手册.md)。
 
 ## 1. 目标
 
@@ -273,7 +279,7 @@ modules:
 | M0 | Round A 关键决策确认 | ✅ 完成 |
 | M1 | `hc_moose-opt` 远端构建与身份冻结 | ✅ 完成 |
 | M2 | MC01～MC05 Baseline v1 资格验证 | ✅ 完成 |
-| M3 | 远端接入与身份握手 | 方案已确认，待 M1/M2 后实施 |
+| M3 | 远端接入与身份握手 | ✅ 完成（待提交） |
 | M4 | MC01 达 D | 未开始 |
 | M5 | MC02 达 D | 未开始 |
 | M6 | MC03 达 D | 未开始 |
@@ -398,7 +404,7 @@ flowchart TB
 
 ## 11. 决策收口与后续闸门
 
-Q-MOOSE-01～10 已全部确认。Round A 的构建、提交后重建、应用测试、五例资格验证和身份冻结均已完成。
+Q-MOOSE-01～10 已全部确认。Round A 的构建、提交后重建、应用测试、五例资格验证和身份冻结均已完成，并于 2026-09-28 由用户确认验收。Round B 已启动。
 
 以下事项不阻塞 Round A，只在对应阶段到达后确认：
 
@@ -444,4 +450,45 @@ Git commit/push 仍遵循仓库约定，必须获得用户明确授权；“方�
 
 首次提交后已执行 `make clean`、重新构建应用、复跑 `run_tests` 和 `scripts/qualify.sh`。最终结果仍为应用测试 `1 passed, 0 failed`、MC01～MC05 全部通过；节点工作树干净，`HEAD == origin/main == 2a51c4ece428a2ff74cc2d32e18b1d94f506298c`。
 
-Round A 至此收口。TASK-MOOSECASE-006、GMP-ISE profile/mapping 和产品代码尚未开始，必须在用户完成人工验证并反馈后进入 Round B。
+Round A 至此收口。2026-09-28，用户明确确认“Round A 已经完成”，同意进入 Round B。
+
+## 13. Round B 执行记录（2026-09-28）
+
+### 13.1 开工状态
+
+- TASK-MOOSECASE-006 已开始实施。
+- 实施边界保持已确认合同：C06 以服务端 Solver Registry 解析 `solver_id`；未提供时使用 `default_solver_id = dam-safety-app`；未知 id 返回 422；客户端不得提供可执行文件路径。
+- 涉及三个现有仓库：C06 Agent 负责求解器解析与执行身份；LIMS 负责验证 manifest 原样透传；GMP-ISE 负责从 Application Profile 显式提交 `solver_id`。
+- Round B 新代码的 commit/push 继续等待用户在验证结果后单独授权。
+
+### 13.2 实施结果
+
+- C06 Agent 新增 `deploy/solver-registry.json`，注册 `dam-safety-app`、`blackbear-opt`、`hc_moose-opt`；默认仍为 `dam-safety-app`。
+- C06 启动时校验注册二进制存在且 SHA-256 与声明一致；Job 记录 `solver_selection`、`solver_identity`、实际命令和各层 commit。
+- 未携带 `solver_id` 的旧请求解析为 `dam-safety-app / legacy_default`；显式未知 id 在文件落盘和求解前返回 422，不回退。
+- 默认启动方式使用注册表；旧 `C06_SOLVER_PROFILE` 仅在运维人员显式设置时作诊断回退，不再作产品路由。
+- LIMS Facade 运行代码无需修改；现有 multipart manifest 原样转发已增加 `solver_id` 回归断言。
+- GMP-ISE `ApplicationProfile -> Job Snapshot -> SimClient` 已打通可选 `solver_id`；旧 v1 快照不生成该字段，继续触发 C06 默认兼容。现有 DamSafetyApp、BlackBear 和 Combined 档案均声明同名注册 id；未注册的 `combined-opt` 会明确失败，不再误跑 DamSafetyApp。
+- 为支持 Round B 从 CAE 完成人工路由验收，已增加严格标记为 `prototype` 的 `hc_moose-opt` GUI 路由档案，暂时复用现有 `mapping-v1.json`；该档案不声明 MC01 已能结构化生成。`mapping-hcmoose-v1.json` 及 MC01 热传导对象仍属于 TASK-MOOSECASE-040。
+
+### 13.3 测试与远端准出
+
+| 层级 | 证据 | 结果 |
+|---|---|---|
+| C06 定向测试 | `tests/test_solver_profiles.py` + `tests/test_api_e2e.py` | 20 passed |
+| C06 诊断回退复验 | `tests/test_solver_profiles.py` | 2 passed |
+| GMP-ISE 编译 | `cmake --build build -j4` | PASS；仅现有 Qt 弃用警告 |
+| GMP-ISE 合同 | `gmp_ise_phase0` | 1/1 passed |
+| LIMS 回归文件 | Python 语法编译 | PASS；本地 `api/.venv` 未安装 pytest，未执行 pytest |
+
+138 上线前已确认 `queued/preparing/running` 均为空。C06 首次从 PID `97370` 受控重启，制品 manifest 身份字段补齐后再次确认无活跃作业并重启；最终 PID 为 `218941`。健康接口返回 `status=ok`、`default_solver_id=dam-safety-app`及三个注册求解器身份。
+
+| 验收路由 | Job | 选择记录 | 实际二进制 SHA-256 | 结果 |
+|---|---|---|---|---|
+| LIMS -> C06 -> HcMooseApp（MC01） | `job_20260928_105412_cuge9k` | `hc_moose-opt / explicit` | `7e14a4e8206dc3ac0848a3bb2df32f863f0b6f5ec53415d28951924780cc71d6` | succeeded |
+| LIMS -> C06 -> DamSafetyApp（旧请求无 id） | `job_20260928_105516_t6z5jp` | `dam-safety-app / legacy_default` | `576ea2c938ac6d0b4fbccce541ec9265bb5d77c4726745d067db450bd23f0a8a` | succeeded |
+| LIMS -> C06 未知 id | 未创建 Job | `unknown-opt` | -- | HTTP 422 / `agent_error` |
+
+为选取一个既有 DamSafetyApp 可运行的短验证输入，曾将 MC01 和 MC03 用于旧请求路由预检；由于 DamSafetyApp 未注册 `HeatConduction` / `[Contact]` 语法，留下三条预期的 `check_input_failed` 记录：`job_20260928_105427_d5thdq`、`job_20260928_105436_jqg7k7`、`job_20260928_105449_vatyte`。这三条记录的实际命令均指向 DamSafetyApp，不是路由串用；正向准出改用已知成功的 DamSafetyApp CDP 短算例。
+
+TASK-MOOSECASE-006 的远端准出条件已满足：HcMooseApp 与旧 DamSafetyApp 作业互不串用二进制，并且 Job 可根据 requested/resolved id、commit 和 binary SHA-256 审计。三个仓库的 Round B 变更均未提交、未推送，等待用户授权。

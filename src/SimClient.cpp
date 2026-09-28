@@ -81,6 +81,17 @@ QJsonObject SimClient::build_submission_manifest(
   if (solver_program.contains('/') || solver_program.contains('\\')) {
     return fail("solver 程序名不允许路径分量: " + solver_program);
   }
+  const QString solver_id =
+      snapshot_manifest.value("application_profile")
+          .toObject()
+          .value("solver_id")
+          .toString()
+          .trimmed();
+  static const QRegularExpression solver_id_re(
+      QStringLiteral("^[a-z0-9][a-z0-9_-]*$"));
+  if (!solver_id.isEmpty() && !solver_id_re.match(solver_id).hasMatch()) {
+    return fail("solver_id 非法: " + solver_id);
+  }
 
   QJsonObject sub;
   sub.insert("project_id", project_id.trimmed());
@@ -103,11 +114,14 @@ QJsonObject SimClient::build_submission_manifest(
   };
   sub.insert("mesh_files", sanitize_files(snap.value("mesh_files")));
   sub.insert("extra_files", sanitize_files(snap.value("extra_files")));
-  // solver 程序名经 command 字段传达（W-00c 起从活动档案读取）。
+  // command 只用于白名单形态校验；实际二进制由 C06 根据 solver_id 解析。
   // 服务端按严格 schema 校验提交清单（additionalProperties=false），
   // 不得附加 solver_program/profile_* 等额外键——档案溯源信息保留在
   // 快照自带的 manifest.json 中，提交清单只放服务端合同允许的 7 个键。
   sub.insert("command", solver_program + " -i " + input_file);
+  if (!solver_id.isEmpty()) {
+    sub.insert("solver_id", solver_id);
+  }
   return sub;
 }
 

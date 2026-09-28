@@ -387,6 +387,9 @@ SnapshotExportResult export_job_snapshot_v2(const QString& dest_dir,
     profile_obj.insert("profile_version", cfg.profile.version);
     profile_obj.insert("mapping_version", cfg.profile.mapping_version);
     profile_obj.insert("solver_program", cfg.profile.solver_program);
+    if (!cfg.profile.solver_id.trimmed().isEmpty()) {
+      profile_obj.insert("solver_id", cfg.profile.solver_id.trimmed());
+    }
     profile_obj.insert("support_level", cfg.profile.support_level);
     manifest.insert("application_profile", profile_obj);
   }

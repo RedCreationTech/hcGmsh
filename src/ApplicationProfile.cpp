@@ -94,6 +94,7 @@ bool ApplicationProfileRegistry::reload() {
     profile.status = json_string_or(obj, "status", "prototype");
     profile.status_note = json_string_or(obj, "status_note");
     profile.solver_program = json_string_or(obj, "solver_program", profile.id);
+    profile.solver_id = json_string_or(obj, "solver_id");
     profile.compute_environment = json_string_or(obj, "compute_environment");
     profile.mapping_registry_path = json_string_or(obj.value("mapping_registry").toObject(),
                                                      "path", "../mapping-v1.json");

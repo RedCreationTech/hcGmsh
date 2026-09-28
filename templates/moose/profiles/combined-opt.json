@@ -5,6 +5,7 @@
   "status": "prototype",
   "status_note": "Combined 模块能力广但需逐案验证；当前仅作为开发/对比用途。",
   "solver_program": "combined-opt",
+  "solver_id": "combined-opt",
   "compute_environment": "linux-x86_64-gnu-mpi",
   "physics": [
     {

@@ -26,6 +26,7 @@ struct ApplicationProfile {
   QString status;                   // production | prototype | unsupported
   QString status_note;              // 状态说明（prototype 的限制）
   QString solver_program;           // 可执行程序名或命令白名单
+  QString solver_id;                // C06 Solver Registry 标识；空表示旧客户端默认
   QString compute_environment;      // 计算环境标识或描述
   QList<ApplicationProfilePhysics> physics;
   QString mapping_registry_path;    // 相对档案目录的映射注册表路径

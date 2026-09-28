@@ -7548,6 +7548,7 @@ void MainWindow::set_active_app_profile(const QString& profile_id,
     map.insert("support_level", profile.support_level);
     map.insert("mapping_version", profile.mapping_version);
     map.insert("solver_program", profile.solver_program);
+    map.insert("solver_id", profile.solver_id);
     application_profile_ = map;
     QVariantMap units;
     for (auto it = profile.unit_contract.cbegin();

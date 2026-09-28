@@ -1582,6 +1582,7 @@ ApplicationProfile MoosePanel::snapshot_profile() const {
       application_profile_map_.value("status_note").toString();
   profile.solver_program =
       application_profile_map_.value("solver_program").toString();
+  profile.solver_id = application_profile_map_.value("solver_id").toString();
   profile.mapping_version =
       application_profile_map_.value("mapping_version").toString();
   if (profile.mapping_version.isEmpty()) {

@@ -1,0 +1,48 @@
+{
+  "id": "hc_moose-opt",
+  "display_name": "HC MOOSE CAE [prototype]",
+  "version": "0.1.0",
+  "status": "prototype",
+  "status_note": "Round B 求解器路由验收档案；MC01 热传导独立 mapping 尚未交付。",
+  "solver_program": "hc_moose-opt",
+  "solver_id": "hc_moose-opt",
+  "compute_environment": "linux-x86_64-gnu-mpi",
+  "physics": [
+    {
+      "id": "core_diffusion",
+      "display_name": "MOOSE 核心扩散验证",
+      "dimensions": [1, 2, 3],
+      "supported_blocks": [
+        "Mesh", "Variables", "ICs", "Kernels", "Materials", "BCs",
+        "Functions", "Executioner", "Preconditioning", "Postprocessors",
+        "VectorPostprocessors", "Outputs"
+      ]
+    },
+    {
+      "id": "small_strain_solid",
+      "display_name": "固体力学路由验证",
+      "dimensions": [2, 3],
+      "supported_blocks": [
+        "Mesh", "GlobalParams", "Variables", "ICs", "Kernels", "Materials",
+        "BCs", "Functions", "Constraints", "Contact", "Executioner",
+        "Preconditioning", "Postprocessors", "VectorPostprocessors", "Outputs",
+        "Physics/SolidMechanics/QuasiStatic"
+      ]
+    }
+  ],
+  "mapping_registry": {
+    "path": "../mapping-v1.json",
+    "version": "1.0.0"
+  },
+  "check_command": "{solver} -i {input} --check-input",
+  "support_level": "prototype",
+  "unit_contract": {
+    "name": "SI",
+    "length": "m",
+    "force": "N",
+    "time": "s",
+    "mass": "kg",
+    "pressure": "Pa",
+    "temperature": "K"
+  }
+}

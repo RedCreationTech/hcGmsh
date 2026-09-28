@@ -64,6 +64,7 @@ gmp::ApplicationProfile valid_profile() {
   profile.id = "DamSafetyApp-opt";
   profile.version = "1.0.0";
   profile.solver_program = "DamSafetyApp-opt";
+  profile.solver_id = "dam-safety-app";
   profile.status = "production";
   profile.support_level = "production";
   profile.mapping_version = "1.0.0";
@@ -254,10 +255,18 @@ constraints:
 void test_profiles_and_mapping(TestContext& test) {
   gmp::ApplicationProfileRegistry profiles(QStringLiteral(GMP_PROFILE_DIR));
   test.expect(profiles.reload(), "application profiles load");
-  test.expect(profiles.profile_ids().size() == 3,
-              "three application profiles are available");
+  test.expect(profiles.profile_ids().size() == 4,
+              "four application profiles are available");
   test.expect(profiles.last_error().isEmpty(),
               "bundled application profiles pass validation");
+  test.expect(profiles.profile("DamSafetyApp-opt").solver_id ==
+                  "dam-safety-app" &&
+                  profiles.profile("blackbear-opt").solver_id ==
+                      "blackbear-opt" &&
+                  profiles.profile("hc_moose-opt").solver_id ==
+                      "hc_moose-opt" &&
+                  profiles.profile("hc_moose-opt").status == "prototype",
+              "application profiles declare C06 solver registry ids");
 
   QTemporaryDir profile_parent;
   const QString profile_root = profile_parent.filePath("profiles");
@@ -2389,14 +2398,15 @@ void test_submission_manifest(TestContext& test) {
   snap.insert("mesh_files", QJsonArray{mesh_entry});
   snap.insert("extra_files", QJsonArray{});
 
-  // v2 快照 manifest（含 application_profile）：solver 经 command 传达；
+  // v2 快照 manifest（含 application_profile）：solver_id 选择求解器；
   // 服务端按严格 schema 校验（additionalProperties=false），提交清单
-  // 只允许 7 个合同键，不得附带 solver_program/profile_* 等额外键。
+  // 允许 7 个基础键和可选 solver_id。
   QJsonObject profile;
   profile.insert("profile_id", "DamSafetyApp-opt");
   profile.insert("profile_version", "1.0.0");
   profile.insert("mapping_version", "1.0.0");
   profile.insert("solver_program", "DamSafetyApp-opt");
+  profile.insert("solver_id", "dam-safety-app");
   QJsonObject manifest;
   manifest.insert("case_name", "demo");
   manifest.insert("input_snapshot", snap);
@@ -2409,15 +2419,17 @@ void test_submission_manifest(TestContext& test) {
               "submission manifest builds from a v2 snapshot");
   test.expect(sub.value("command") == "DamSafetyApp-opt -i case.i",
               "submission command uses the profile solver program");
+  test.expect(sub.value("solver_id") == "dam-safety-app",
+              "submission carries the profile solver id");
   const QStringList allowed_keys = {"project_id",  "case_name", "input_file",
                                     "input_sha256", "mesh_files", "extra_files",
-                                    "command"};
+                                    "command", "solver_id"};
   bool only_allowed = sub.size() == allowed_keys.size();
   for (auto it = sub.begin(); it != sub.end(); ++it) {
     only_allowed = only_allowed && allowed_keys.contains(it.key());
   }
   test.expect(only_allowed,
-              "submission manifest contains only the 7 server contract keys");
+              "submission manifest contains only the server contract keys");
   // 文件条目同样裁剪为服务端合同允许的 {name, sha256}（快照里的 role
   // 等溯源字段不进提交报文）。
   const QJsonArray sub_mesh = sub.value("mesh_files").toArray();
@@ -2441,10 +2453,13 @@ void test_submission_manifest(TestContext& test) {
       legacy, "proj-1", "DamSafetyApp-opt", &error);
   test.expect(!legacy_sub.isEmpty() && error.isEmpty(),
               "v1 snapshot manifest still builds a submission");
-  bool legacy_only_allowed = legacy_sub.size() == allowed_keys.size();
+  const QStringList legacy_keys = {"project_id", "case_name", "input_file",
+                                   "input_sha256", "mesh_files", "extra_files",
+                                   "command"};
+  bool legacy_only_allowed = legacy_sub.size() == legacy_keys.size();
   for (auto it = legacy_sub.begin(); it != legacy_sub.end(); ++it) {
     legacy_only_allowed =
-        legacy_only_allowed && allowed_keys.contains(it.key());
+        legacy_only_allowed && legacy_keys.contains(it.key());
   }
   test.expect(legacy_only_allowed &&
                   legacy_sub.value("command") == "DamSafetyApp-opt -i case.i",
@@ -2467,6 +2482,15 @@ void test_submission_manifest(TestContext& test) {
       manifest, "proj-1", "../evil/solver", &error);
   test.expect(bad_solver.isEmpty() && !error.isEmpty(),
               "solver program with path components is rejected");
+  QJsonObject bad_profile = profile;
+  bad_profile.insert("solver_id", "../evil");
+  QJsonObject bad_solver_id_manifest = manifest;
+  bad_solver_id_manifest.insert("application_profile", bad_profile);
+  error.clear();
+  const QJsonObject bad_solver_id = gmp::SimClient::build_submission_manifest(
+      bad_solver_id_manifest, "proj-1", "DamSafetyApp-opt", &error);
+  test.expect(bad_solver_id.isEmpty() && !error.isEmpty(),
+              "solver id outside the registry id grammar is rejected");
 }
 
 void test_result_data_contract(TestContext& test) {

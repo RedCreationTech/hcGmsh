@@ -27,8 +27,7 @@ class SimClient : public QObject {
   // 由 C01 任务快照 manifest（export_job_snapshot 产出的
   // contract/input_snapshot 结构）构造 C06 提交侧 manifest
   // （project_id/case_name/input_file/input_sha256/mesh_files/extra_files/
-  // command/solver_program，v2 快照另透传 profile_id/profile_version/
-  // mapping_version——向后兼容，服务端可忽略未知字段）。
+  // command，v2 快照若声明 application_profile.solver_id 则同时透传。
   // command 采用白名单形态 "<solver_program> -i <input_file>"。
   // 失败返回空对象并填写 error。
   static QJsonObject build_submission_manifest(

@@ -5,6 +5,7 @@
   "status": "production",
   "status_note": "",
   "solver_program": "blackbear-opt",
+  "solver_id": "blackbear-opt",
   "compute_environment": "linux-x86_64-gnu-mpi",
   "physics": [
     {
