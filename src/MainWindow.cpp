@@ -4,6 +4,7 @@
 
 #include <QFileDialog>
 #include <QFile>
+#include <QSaveFile>
 #include <QDir>
 #include <QDesktopServices>
 #include <QUrl>
@@ -104,6 +105,7 @@
 #include "gmp/DependencyGraph.h"
 #include "gmp/ProjectStore.h"
 #include "gmp/MoosePanel.h"
+#include "gmp/MooseSnapshot.h"
 #include "gmp/MooseTemplates.h"
 #include "gmp/PropertyBag.h"
 #include "gmp/OccBridge.h"
@@ -4519,7 +4521,7 @@ MainWindow::MainWindow(QWidget* parent) : QMainWindow(parent) {
         tab = job_tab;
       } else if (kind == "Results") {
         tab = results_tab;
-      } else if (kind == "BC" || kind == "Functions" || kind == "Variables" ||
+      } else if (kind == "BC" || kind == "Functions" || kind == "Variables" || kind == "VectorPostprocessors" ||
                  kind == "Outputs" || kind == "Physics" ||
                  kind == "Constraints" || kind == "Selections" ||
                  kind == "Input Cases") {
@@ -5438,6 +5440,8 @@ void MainWindow::build_menu() {
   // W-02b：显式导入 Exodus 网格（决策 6 例外路径，role=input_mesh）。
   action_import_exodus_ = mesh_menu->addAction("Import Exodus Mesh...");
   action_import_exodus_->setObjectName("importExodusMeshAction");
+  auto* create_mc01_mesh = mesh_menu->addAction("Create MC01 Reference Mesh");
+  create_mc01_mesh->setObjectName("createMc01ReferenceMeshAction");
   action_mesh_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
   action_preview_mesh_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_M));
 
@@ -5806,6 +5810,8 @@ void MainWindow::build_menu() {
   });
   connect(action_import_exodus_, &QAction::triggered, this,
           [this]() { on_import_exodus_mesh(); });
+  connect(create_mc01_mesh, &QAction::triggered, this,
+          [this]() { create_mc01_reference_mesh(); });
   connect(action_run_, &QAction::triggered, this, [this]() {
     if (moose_panel_) {
       moose_panel_->run_job();
@@ -6567,6 +6573,8 @@ void MainWindow::build_model_tree() {
       icon = gmp::icons::get("tree_loads", gmp::icons::Size::Tree);
     } else if (name == "Outputs") {
       icon = gmp::icons::get("tree_outputs", gmp::icons::Size::Tree);
+    } else if (name == "VectorPostprocessors") {
+      icon = gmp::icons::get("tree_outputs", gmp::icons::Size::Tree);
     } else if (name == "Interactions") {
       icon = gmp::icons::get("tree_interactions", gmp::icons::Size::Tree);
     } else if (name == "Assembly") {
@@ -6743,7 +6751,9 @@ void MainWindow::open_property_form(QTreeWidgetItem* item,
       property_editor_ ? property_editor_->volume_groups() : QStringList();
   auto* form = new FloatingPropertyForm(
       item, boundaries, volumes, physics_action_options(),
-      load_type_options(), interaction_type_options(),
+      material_type_options(), load_type_options(), interaction_type_options(),
+      application_profile_.value("id").toString() ==
+          QStringLiteral("hc_moose-opt"),
       dialog_parent(transient_parent ? transient_parent : this));
   floating_property_form_ = form;
   form->set_display_unit_factors(display_unit_factors());
@@ -7630,8 +7640,12 @@ void MainWindow::push_context_to_moose_panel() {
     property_editor_->set_display_unit_factors(display_unit_factors());
     // W-03b：Physics action 下拉候选随档案 extra.physics_action 声明刷新。
     property_editor_->set_physics_action_options(physics_action_options());
+    property_editor_->set_material_type_options(material_type_options());
     property_editor_->set_load_type_options(load_type_options());
     property_editor_->set_interaction_type_options(interaction_type_options());
+    property_editor_->set_minimal_transient_defaults(
+        application_profile_.value("id").toString() ==
+        QStringLiteral("hc_moose-opt"));
   }
 }
 
@@ -8409,8 +8423,15 @@ QVariantList MainWindow::collect_workflow_issues() const {
   }
 
   require_children("Materials", "At least one material is required.");
-  require_children("Sections", "Assign a material to a physical volume.");
-  require_children("Physics", "Configure a supported Physics action.");
+  const bool hc_profile = application_profile_.value("id").toString() ==
+                          QStringLiteral("hc_moose-opt");
+  if (!hc_profile) {
+    require_children("Sections", "Assign a material to a physical volume.");
+    require_children("Physics", "Configure a supported Physics action.");
+  } else {
+    require_children("VectorPostprocessors",
+                     "Configure the MC01 line sampler before submission.");
+  }
   require_children("Steps", "Configure at least one analysis Step.");
   require_children("Outputs", "Configure field/history output before submission.");
   if (child_count("BC") == 0 && child_count("Loads") == 0) {
@@ -8467,7 +8488,7 @@ QVariantList MainWindow::collect_workflow_issues() const {
 
   const QStringList roots_to_validate = {
       "Materials", "Sections", "Assembly", "Physics", "Functions",
-      "Steps",     "BC",       "Loads",    "Interactions", "Outputs"};
+      "Steps",     "BC",       "Loads",    "Interactions", "VectorPostprocessors", "Outputs"};
   for (const auto& root_name : roots_to_validate) {
     QSet<QString> names;
     for (const ProjectModelEntry& entry : entries_by_kind.value(root_name)) {
@@ -9414,6 +9435,108 @@ void MainWindow::upsert_mesh_item(const QString& path) {
   set_project_dirty(true);
 }
 
+void MainWindow::create_mc01_reference_mesh() {
+  if (project_path_.isEmpty()) {
+    QMessageBox::warning(this, "Create MC01 Reference Mesh",
+                         "Save the project before creating its MC01 mesh.");
+    return;
+  }
+  const QString dir = project_case_work_dir(project_path_);
+  if (!QDir().mkpath(dir)) {
+    statusBar()->showMessage("Failed to create the project mesh directory.",
+                             4000);
+    return;
+  }
+  const QString path = QDir(dir).filePath("mc01_therm_step03.msh");
+  QSaveFile file(path);
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    statusBar()->showMessage("Failed to create the MC01 mesh.", 4000);
+    return;
+  }
+  QTextStream out(&file);
+  out << "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n";
+  out << "$PhysicalNames\n5\n"
+      << "1 1 \"bottom\"\n1 2 \"right\"\n1 3 \"top\"\n"
+      << "1 4 \"left\"\n2 5 \"domain\"\n$EndPhysicalNames\n";
+  out << "$Nodes\n121\n";
+  auto node = [](int i, int j) { return j * 11 + i + 1; };
+  for (int j = 0; j <= 10; ++j) {
+    for (int i = 0; i <= 10; ++i) {
+      out << node(i, j) << ' ' << QString::number(i * 0.2, 'g', 12) << ' '
+          << QString::number(j * 0.1, 'g', 12) << " 0\n";
+    }
+  }
+  out << "$EndNodes\n$Elements\n140\n";
+  int element = 1;
+  for (int i = 0; i < 10; ++i) {
+    out << element++ << " 1 2 1 1 " << node(i, 0) << ' ' << node(i + 1, 0)
+        << '\n';
+  }
+  for (int j = 0; j < 10; ++j) {
+    out << element++ << " 1 2 2 2 " << node(10, j) << ' ' << node(10, j + 1)
+        << '\n';
+  }
+  for (int i = 10; i > 0; --i) {
+    out << element++ << " 1 2 3 3 " << node(i, 10) << ' ' << node(i - 1, 10)
+        << '\n';
+  }
+  for (int j = 10; j > 0; --j) {
+    out << element++ << " 1 2 4 4 " << node(0, j) << ' ' << node(0, j - 1)
+        << '\n';
+  }
+  for (int j = 0; j < 10; ++j) {
+    for (int i = 0; i < 10; ++i) {
+      out << element++ << " 3 2 5 5 " << node(i, j) << ' ' << node(i + 1, j)
+          << ' ' << node(i + 1, j + 1) << ' ' << node(i, j + 1) << '\n';
+    }
+  }
+  out << "$EndElements\n";
+  if (!file.commit()) {
+    statusBar()->showMessage("Failed to save the MC01 mesh.", 4000);
+    return;
+  }
+
+  bool hash_ok = false;
+  PhysicalGroupManifest manifest;
+  manifest.mesh_path = QFileInfo(path).absoluteFilePath();
+  manifest.mesh_sha256 = sha256_file_hex(path, &hash_ok);
+  manifest.mesh_dim = 2;
+  manifest.node_count = 121;
+  // Includes 100 QUAD4 domain elements and 40 LINE2 boundary elements.
+  manifest.element_count = 140;
+  manifest.element_type = "QUAD4";
+  auto group = [](const QString& name, int dim, int tag, int count) {
+    PhysicalGroupEntry entry;
+    entry.name = name;
+    entry.dim = dim;
+    entry.tags = {tag};
+    entry.entity_count = 1;
+    entry.element_count = count;
+    return entry;
+  };
+  manifest.groups = {group("bottom", 1, 1, 10), group("right", 1, 2, 10),
+                     group("top", 1, 3, 10), group("left", 1, 4, 10),
+                     group("domain", 2, 5, 100)};
+  if (!hash_ok) {
+    statusBar()->showMessage("The MC01 mesh manifest is invalid.", 4000);
+    return;
+  }
+  mesh_snapshot_ = manifest;
+  upsert_mesh_item(manifest.mesh_path);
+  property_editor_->set_boundary_groups({"bottom", "right", "top", "left"});
+  property_editor_->set_volume_groups({"domain"});
+  gmsh_panel_->set_physical_group_manifest(manifest.to_variant_map());
+  moose_panel_->set_boundary_groups({"bottom", "right", "top", "left"});
+  moose_panel_->set_mesh_path(manifest.mesh_path);
+  viewer_->set_mesh_file(manifest.mesh_path);
+  push_context_to_moose_panel();
+  refresh_module_pages();
+  statusBar()->showMessage("MC01 reference mesh created: 121 nodes, 100 QUAD4.",
+                           5000);
+  gmp::log_operation("mesh",
+                     "MC01 reference mesh created: " + manifest.mesh_path);
+}
+
 void MainWindow::on_import_exodus_mesh() {
   // 巡览/自动化环境无文件对话框：GMP_TOUR_EXODUS_IMPORT 直接指定路径。
   QString path = qEnvironmentVariable("GMP_TOUR_EXODUS_IMPORT").trimmed();
@@ -9601,7 +9724,7 @@ void MainWindow::import_result_package(const QString& selected_path,
   gmp::ResultPackage package = gmp::inspect_result_package(selected_path);
   if (package.exodus_candidates.isEmpty() && package.csv_candidates.isEmpty()) {
     QMessageBox::warning(this, "Import Task Directory",
-                         "No usable Exodus or history CSV result was found.");
+                         "No usable Exodus or CSV result was found.");
     return;
   }
 
@@ -9619,10 +9742,12 @@ void MainWindow::import_result_package(const QString& selected_path,
     *selected = value;
     return true;
   };
-  if (!choose("Main Exodus", package.exodus_candidates,
-              &package.main_exodus) ||
-      !choose("Main History CSV", package.csv_candidates,
-              &package.main_csv)) {
+  if ((!package.exodus_candidates.isEmpty() &&
+      !choose("Main Exodus", package.exodus_candidates,
+               &package.main_exodus)) ||
+      (!package.csv_candidates.isEmpty() &&
+       !choose("Main CSV Result", package.csv_candidates,
+               &package.main_csv))) {
     return;
   }
   if (package.case_name.isEmpty()) {
@@ -9659,9 +9784,13 @@ void MainWindow::import_result_package(const QString& selected_path,
     if (copy == QMessageBox::No) {
       const QString original_root = package.root_path;
       const QString main_exodus_relative =
-          QDir(original_root).relativeFilePath(package.main_exodus);
+          package.main_exodus.isEmpty()
+              ? QString()
+              : QDir(original_root).relativeFilePath(package.main_exodus);
       const QString main_csv_relative =
-          QDir(original_root).relativeFilePath(package.main_csv);
+          package.main_csv.isEmpty()
+              ? QString()
+              : QDir(original_root).relativeFilePath(package.main_csv);
       const QString folder = !package.job_id.isEmpty()
                                  ? package.job_id
                                  : package.case_name;
@@ -9683,9 +9812,14 @@ void MainWindow::import_result_package(const QString& selected_path,
         return;
       }
       package = gmp::inspect_result_package(destination);
-      package.main_exodus =
-          QDir(destination).absoluteFilePath(main_exodus_relative);
-      package.main_csv = QDir(destination).absoluteFilePath(main_csv_relative);
+      if (!main_exodus_relative.isEmpty()) {
+        package.main_exodus =
+            QDir(destination).absoluteFilePath(main_exodus_relative);
+      }
+      if (!main_csv_relative.isEmpty()) {
+        package.main_csv =
+            QDir(destination).absoluteFilePath(main_csv_relative);
+      }
       import_mode = "copy";
       const QStringList integrity = gmp::verify_result_package(package);
       if (!integrity.isEmpty()) {
@@ -10277,9 +10411,16 @@ QVariantMap MainWindow::default_params_for_kind(const QString& kind) const {
   if (kind == "Loads") {
     return {{"type", "BodyForce"}, {"variable", "u"}, {"value", "0"}};
   }
+  if (kind == "VectorPostprocessors") {
+    return {{"type", "LineValueSampler"}, {"variable", "T"},
+            {"start_point", "0 0.5 0"},   {"end_point", "2 0.5 0"},
+            {"num_points", "20"},         {"sort_by", "x"}};
+  }
   if (kind == "Outputs") {
     // W-03d：套餐命名空间键（全部默认未勾）；未勾任何套餐时生成侧保持
     // 旧行为（单 Exodus 块），勾选后经 build_outputs_block 成组产出。
+    const bool hc_profile = application_profile_.value("id").toString() ==
+                            QStringLiteral("hc_moose-opt");
     return {{"type", "Exodus"},
             {"field_outputs", ""},
             {"history_profile", "custom"},
@@ -10297,6 +10438,7 @@ QVariantMap MainWindow::default_params_for_kind(const QString& kind) const {
             {"times_interval", "0.01"},
             {"output_exodus", "true"},
             {"output_csv", "true"},
+            {"csv_execute_on", hc_profile ? "final" : ""},
             {"file_base", ""}};
   }
   if (kind == "Physics") {
@@ -10336,6 +10478,14 @@ QVariantMap MainWindow::default_params_for_kind(const QString& kind) const {
             {"save_in_resid", "true"}};
   }
   if (kind == "Steps") {
+    if (application_profile_.value("id").toString() ==
+        QStringLiteral("hc_moose-opt")) {
+      return {{"type", "Transient"},
+              {"scheme", "implicit-euler"},
+              {"start_time", "0"},
+              {"end_time", "5"},
+              {"dt", "1"}};
+    }
     // W-03e：默认值对齐 v01 验收基线（*Static 四参数语义 →
     // Executioner/TimeStepper/Preconditioning）。
     return {{"type", "Transient"},
@@ -10593,11 +10743,31 @@ bool MainWindow::active_profile_supports_block(
   return false;
 }
 
+QStringList MainWindow::material_type_options() const {
+  QStringList options{"GenericConstantMaterial",
+                      "ParsedMaterial",
+                      "ComputeElasticityTensor",
+                      "ComputeIsotropicElasticityTensor",
+                      "ComputeSmallStrain",
+                      "ComputeLinearElasticStress",
+                      "ComputeThermalExpansionEigenstrain",
+                      "AbaqusCDP"};
+  if (application_profile_.value("id").toString() ==
+      QStringLiteral("hc_moose-opt")) {
+    options.insert(2, "HeatConductionMaterial");
+  }
+  return options;
+}
+
 QStringList MainWindow::load_type_options() const {
   // 既有通用 Kernel 类型保留兼容；Pressure 只有在档案与 mapping 均明确
   // 支持 BCs/Pressure 时才进入候选。
   QStringList options{"BodyForce", "TimeDerivative", "MatDiffusion",
                       "HeatConduction", "TensorMechanics"};
+  if (application_profile_.value("id").toString() ==
+      QStringLiteral("hc_moose-opt")) {
+    options << "HeatConductionTimeDerivative";
+  }
   if (active_profile_supports_block("BCs") &&
       mapping_registry_.has_object_type("BCs", "Pressure")) {
     options << "Pressure";
@@ -10810,6 +10980,8 @@ bool MainWindow::sync_model_to_input(const QString& project_path_override) {
                                                         generated.aux_kernels);
     input = MooseInputGenerator::upsert_generated_block(input, "Postprocessors",
                                                         generated.postprocessors);
+    input = MooseInputGenerator::upsert_generated_block(
+        input, "VectorPostprocessors", generated.vector_postprocessors);
     const QString& times = generated.times;
     const QString& times_header = generated.times_header;
     for (const auto& header :
@@ -19077,6 +19249,190 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   refresh_module_pages();
                 },
                 this});
+  steps.append(
+      {"moosecase_mc01_transient_heat_contract",
+       [this]() {
+         if (!property_editor_ || !moose_panel_ || !model_tree_) {
+           throw std::runtime_error("MC01 transient heat fixture is missing");
+         }
+         auto* mesh_action =
+             findChild<QAction*>("createMc01ReferenceMeshAction");
+         if (!mesh_action) {
+           throw std::runtime_error("MC01 reference mesh action is missing");
+         }
+
+         const QString temp_dir = QDir::tempPath();
+         const QString restore_path =
+             QDir(temp_dir).filePath("gmp_tour_mc01_restore.gmp.yaml");
+         const QString case_path =
+             QDir(temp_dir).filePath("gmp_tour_mc01.gmp.yaml");
+         if (!save_project(restore_path)) {
+           throw std::runtime_error("MC01 could not save the restore fixture");
+         }
+         auto restore = [this, &restore_path, &case_path]() {
+           const bool ok = load_project(restore_path);
+           QFile::remove(restore_path);
+           QFile::remove(case_path);
+           QDir(QFileInfo(case_path).absolutePath() +
+                "/.work/case/gmp_tour_mc01")
+               .removeRecursively();
+           QDir(QFileInfo(restore_path).absolutePath() +
+                "/.work/case/gmp_tour_mc01_restore")
+               .removeRecursively();
+           return ok;
+         };
+
+         property_editor_->set_item(nullptr);
+         clear_model_tree_children();
+         moose_panel_->reset_project_state();
+         mesh_snapshot_ = {};
+         project_path_ = case_path;
+         set_active_app_profile("hc_moose-opt",
+                                /*mark_dirty=*/false);
+         mesh_action->trigger();
+
+         auto add = [this](const QString& root, const QString& name,
+                           const QVariantMap& params) {
+           return add_child_item(find_root_item(root), name, root, params);
+         };
+         add("Variables", "T",
+             {{"order", "FIRST"},
+              {"family", "LAGRANGE"},
+              {"initial_condition", "300"}});
+         add("Functions", "right_temperature",
+             {{"type", "ParsedFunction"}, {"expression", "300+5*t"}});
+         add("BC", "t_left",
+             {{"type", "DirichletBC"},
+              {"boundary", "left"},
+              {"value", "300"},
+              {"variable", "T"}});
+         add("BC", "t_right",
+             {{"type", "FunctionDirichletBC"},
+              {"boundary", "right"},
+              {"function", "right_temperature"},
+              {"variable", "T"}});
+         auto* thermal = add("Materials", "thermal",
+                             default_params_for_kind("Materials"));
+         add("Materials", "density",
+             {{"type", "GenericConstantMaterial"},
+              {"prop_names", "density"},
+              {"prop_values", "8000"}});
+         add("Loads", "heat_conduction",
+             {{"type", "HeatConduction"}, {"variable", "T"}});
+         add("Loads", "time_derivative",
+             {{"type", "HeatConductionTimeDerivative"}, {"variable", "T"}});
+         add("Steps", "heat_transient", default_params_for_kind("Steps"));
+         auto* sampler =
+             add("VectorPostprocessors", "t_sampler",
+                 default_params_for_kind("VectorPostprocessors"));
+         QVariantMap outputs = default_params_for_kind("Outputs");
+         outputs.insert("file_base", "therm_step03_out");
+         add("Outputs", "mc01_outputs", outputs);
+
+         QString failure;
+         open_property_form(thermal);
+         qApp->processEvents();
+         auto* material_form =
+             findChild<FloatingPropertyForm*>("floatingPropertyForm");
+         auto* material_type = material_form
+                                   ? material_form->findChild<QComboBox*>(
+                                         "materialTypeCombo")
+                                   : nullptr;
+         if (!material_type ||
+             material_type->findText("HeatConductionMaterial") < 0) {
+           failure = "MC01 floating material form lacks HeatConductionMaterial";
+         }
+         if (material_form) {
+           material_form->reject();
+           QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+         }
+         if (thermal &&
+             !commit_object_edit(
+                 thermal, thermal->text(0),
+                 {{"type", "HeatConductionMaterial"},
+                  {"thermal_conductivity", "45"},
+                  {"specific_heat", "0.5"}})) {
+           failure = "MC01 heat material fixture could not be committed";
+         }
+
+         open_property_form(sampler);
+         qApp->processEvents();
+         auto* sampler_form =
+             findChild<FloatingPropertyForm*>("floatingPropertyForm");
+         const bool sampler_form_ready =
+             sampler_form &&
+             sampler_form->findChild<QComboBox*>("vppTypeCombo") &&
+             sampler_form->findChild<QComboBox*>("vppVariableCombo") &&
+             sampler_form->findChild<QLineEdit*>("vppStartPoint") &&
+             sampler_form->findChild<QLineEdit*>("vppEndPoint") &&
+             sampler_form->findChild<QLineEdit*>("vppNumPoints") &&
+             sampler_form->findChild<QComboBox*>("vppSortBy");
+         if (!sampler_form_ready) {
+           failure = "MC01 vector postprocessor quick form is unavailable";
+         }
+         if (sampler_form) {
+           sampler_form->reject();
+           QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+         }
+
+         if (failure.isEmpty() && (mesh_snapshot_.node_count != 121 ||
+             mesh_snapshot_.element_count != 140 ||
+             !mesh_snapshot_.has_group("domain", 2) ||
+             !mesh_snapshot_.has_group("left", 1) ||
+             !mesh_snapshot_.has_group("right", 1))) {
+           failure = "MC01 reference mesh contract failed";
+         } else if (failure.isEmpty() && !sync_model_to_input()) {
+           failure = "MC01 model-to-input synchronization failed";
+         }
+         const QString input = moose_panel_->input_text();
+         const QStringList expected{"[Mesh/file]",
+                                    "mc01_therm_step03.msh",
+                                    "type = HeatConductionMaterial",
+                                    "thermal_conductivity = 45",
+                                    "specific_heat = 0.5",
+                                    "type = HeatConduction",
+                                    "type = HeatConductionTimeDerivative",
+                                    "[VectorPostprocessors]",
+                                    "type = LineValueSampler",
+                                    "start_point = '0 0.5 0'",
+                                    "end_point = '2 0.5 0'",
+                                    "[Executioner]",
+                                    "end_time = 5",
+                                    "dt = 1",
+                                    "[history_csv]",
+                                    "execute_on = 'final'",
+                                    "file_base = therm_step03_out"};
+         for (const auto& marker : expected) {
+           if (failure.isEmpty() && !input.contains(marker)) {
+             failure = "MC01 generated input is missing: " + marker;
+           }
+         }
+         if (failure.isEmpty() && (input.contains("[TimeStepper]") ||
+                                   input.contains("[Preconditioning/") ||
+                                   input.contains("value = 0"))) {
+           failure = "MC01 generated input retained unrelated defaults";
+         }
+         if (failure.isEmpty()) {
+           for (const QVariant& value : collect_workflow_issues()) {
+             const QVariantMap issue = value.toMap();
+             if (issue.value("severity").toString() == "error") {
+               failure = QString("MC01 preflight error: %1 / %2 / %3")
+                             .arg(issue.value("root").toString(),
+                                  issue.value("field").toString(),
+                                  issue.value("message").toString());
+               break;
+             }
+           }
+         }
+         const bool restored = restore();
+         if (!restored) {
+           throw std::runtime_error("MC01 could not restore the tour project");
+         }
+         if (!failure.isEmpty()) {
+           throw std::runtime_error(failure.toStdString());
+         }
+       },
+       this});
   steps.append({"cdp_v01_structured_reproduction_contract",
                 [this, resolve_tour_fixture]() {
                   // STD-CAE-040：从空模型树只用现有结构化对象组成 V01。

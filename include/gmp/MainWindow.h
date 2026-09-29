@@ -225,11 +225,13 @@ class MainWindow : public QMainWindow {
   // 菜单/快捷按钮入口：文件对话框选 .e/.exo 后调用 import_exodus_mesh；
   // 巡览可用 GMP_TOUR_EXODUS_IMPORT 环境变量覆盖路径（绕过对话框）。
   void on_import_exodus_mesh();
+  void create_mc01_reference_mesh();
   // W-03b：Physics action 候选与档案解析。physics_action_options 给出
   // action 下拉候选（CDPQuasiStatic 仅当档案 extra.physics_action 声明）；
   // resolve_displacements 取档案声明的位移变量名（缺省 disp_x/y/z）。
   QStringList physics_action_options() const;
   bool active_profile_supports_block(const QString& block_name) const;
+  QStringList material_type_options() const;
   QStringList load_type_options() const;
   QStringList interaction_type_options() const;
   QString resolve_displacements() const;

@@ -358,14 +358,28 @@ void PropertyEditor::set_load_type_options(const QStringList& options) {
   }
 }
 
-void PropertyEditor::set_interaction_type_options(
+void PropertyEditor::set_material_type_options(
     const QStringList& options) {
-  interaction_type_options_ = options.isEmpty() ? QStringList{"Unsupported"}
-                                                : options;
+  if (!options.isEmpty()) {
+    material_type_options_ = options;
+  }
+  if (current_item_ &&
+      current_item_->data(0, kKindRole).toString() == "Materials") {
+    refresh_form_options();
+  }
+}
+
+void PropertyEditor::set_interaction_type_options(const QStringList& options) {
+  interaction_type_options_ =
+      options.isEmpty() ? QStringList{"Unsupported"} : options;
   if (current_item_ &&
       current_item_->data(0, kKindRole).toString() == "Interactions") {
     refresh_form_options();
   }
+}
+
+void PropertyEditor::set_minimal_transient_defaults(bool enabled) {
+  minimal_transient_defaults_ = enabled;
 }
 
 double PropertyEditor::display_unit_factor(const QString& quantity,
@@ -641,6 +655,7 @@ void PropertyEditor::on_remove_param() {
   }
   params_table_->removeRow(ranges.first().topRow());
   save_params_to_item();
+  load_from_item();
   update_group_widget_for_kind(
       current_item_->data(0, kKindRole).toString());
   update_validation();
@@ -1134,6 +1149,9 @@ QStringList PropertyEditor::validate_params(const QString& kind,
     } else if (type == "ParsedMaterial") {
       require_key("expression");
       require_key("property_name");
+    } else if (type == "HeatConductionMaterial") {
+      require_key("thermal_conductivity");
+      require_key("specific_heat");
     } else if (type == "ComputeElasticityTensor") {
       require_key("C_ijkl");
     } else if (type == "ComputeIsotropicElasticityTensor") {
@@ -1329,6 +1347,13 @@ QStringList PropertyEditor::validate_params(const QString& kind,
     if (enabled("hist_extremum")) {
       require_key("hist_extremum_variables");
     }
+  } else if (kind == "VectorPostprocessors") {
+    require_key("type");
+    require_key("variable");
+    require_key("start_point");
+    require_key("end_point");
+    require_key("num_points");
+    require_key("sort_by");
   } else if (kind == "Assembly") {
     require_key("part");
     const QString part = params.value("part").toString().trimmed();
@@ -1419,6 +1444,9 @@ QVariantMap PropertyEditor::build_type_template(const QString& kind,
       t.insert("property_name", "thermal_conductivity");
       t.insert("expression", "1 + 0.01*T");
       t.insert("coupled_variables", "T");
+    } else if (type == "HeatConductionMaterial") {
+      t.insert("thermal_conductivity", "45");
+      t.insert("specific_heat", "0.5");
     } else if (type == "ComputeElasticityTensor") {
       t.insert("fill_method", "symmetric_isotropic");
       t.insert("C_ijkl", "2.1e5 0.8e5");
@@ -1455,6 +1483,13 @@ QVariantMap PropertyEditor::build_type_template(const QString& kind,
     t.insert("material", mat);
   } else if (kind == "Steps") {
     if (type == "Transient") {
+      if (minimal_transient_defaults_) {
+        t.insert("start_time", "0");
+        t.insert("end_time", "5");
+        t.insert("scheme", "implicit-euler");
+        t.insert("dt", "1");
+        return t;
+      }
       // W-03e：v01 验收基线默认值（与 default_params_for_kind 对齐）。
       t.insert("start_time", "0");
       t.insert("end_time", "1");
@@ -1516,6 +1551,13 @@ QVariantMap PropertyEditor::build_type_template(const QString& kind,
       t.insert("component", "2");
       t.insert("use_displaced_mesh", "true");
     }
+  } else if (kind == "VectorPostprocessors") {
+    t.insert("type", type.isEmpty() ? "LineValueSampler" : type);
+    t.insert("variable", current_variables_.contains("T") ? "T" : var);
+    t.insert("start_point", "0 0.5 0");
+    t.insert("end_point", "2 0.5 0");
+    t.insert("num_points", "20");
+    t.insert("sort_by", "x");
   } else if (kind == "Interactions") {
     t.insert("type", type.isEmpty() ? "Contact" : type);
     t.insert("model", "coulomb");
@@ -1566,6 +1608,8 @@ void PropertyEditor::apply_template_values(const QVariantMap& values,
         "expression",
         "property_name",
         "coupled_variables",
+        "thermal_conductivity",
+        "specific_heat",
         "fill_method",
         "C_ijkl",
         "thermal_expansion_coeff",
@@ -1595,6 +1639,8 @@ void PropertyEditor::apply_template_values(const QVariantMap& values,
       allowed = {"prop_names", "prop_values"};
     } else if (type == "ParsedMaterial") {
       allowed = {"expression", "property_name", "coupled_variables"};
+    } else if (type == "HeatConductionMaterial") {
+      allowed = {"thermal_conductivity", "specific_heat"};
     } else if (type == "ComputeElasticityTensor") {
       allowed = {"fill_method", "C_ijkl"};
     } else if (type == "ComputeIsotropicElasticityTensor") {
@@ -1628,6 +1674,29 @@ void PropertyEditor::apply_template_values(const QVariantMap& values,
         if (!allowed.contains(key) && params.remove(key) > 0) {
           changed = true;
         }
+      }
+    }
+  }
+  if (kind == "Loads" && values.contains("type")) {
+    const QString type = values.value("type").toString();
+    const QSet<QString> known_type_keys = {
+        "value",  "function",  "diffusivity",        "boundary",
+        "factor", "component", "use_displaced_mesh", "displacements",
+        "block"};
+    QSet<QString> allowed;
+    if (type == "BodyForce") {
+      allowed = {"value", "function"};
+    } else if (type == "MatDiffusion") {
+      allowed = {"diffusivity"};
+    } else if (type == "Pressure") {
+      allowed = {"boundary", "factor", "function", "component",
+                 "use_displaced_mesh"};
+    } else if (type == "TensorMechanics") {
+      allowed = {"displacements", "block"};
+    }
+    for (const auto& key : known_type_keys) {
+      if (!allowed.contains(key) && params.remove(key) > 0) {
+        changed = true;
       }
     }
   }
@@ -1757,7 +1826,8 @@ void PropertyEditor::refresh_preview() {
       : kind == "Loads" ? "Loads"
       : kind == "Functions" ? "Functions"
       : kind == "Variables" ? "Variables"
-      : QString();
+      : kind == "VectorPostprocessors" ? "VectorPostprocessors"
+                                        : QString();
 
   lines << "";
   lines << "[Input Preview]";
@@ -1894,7 +1964,8 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
   }
   const QSet<QString> supported = {"Materials", "Sections", "Assembly",
                                    "Steps", "BC", "Loads", "Functions",
-                                   "Physics", "Outputs", "Interactions"};
+                                   "Physics", "Outputs", "Interactions",
+                                   "VectorPostprocessors"};
   if (!supported.contains(kind)) {
     form_box_->setVisible(false);
     return;
@@ -2061,18 +2132,16 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
   };
 
   if (kind == "Materials") {
-    add_combo("Type", "type",
-              {"GenericConstantMaterial", "ParsedMaterial",
-               "ComputeElasticityTensor", "ComputeIsotropicElasticityTensor",
-               "ComputeSmallStrain",
-               "ComputeLinearElasticStress",
-               "ComputeThermalExpansionEigenstrain", "AbaqusCDP"},
+    add_combo("Type", "type", material_type_options_,
               "materialTypeCombo");
     add_line("Prop Names", "prop_names");
     add_line("Prop Values", "prop_values");
     add_line("Expression", "expression");
     add_line("Property Name", "property_name");
     add_line("Coupled Vars", "coupled_variables");
+    add_line("Thermal Conductivity", "thermal_conductivity",
+             "materialThermalConductivity");
+    add_line("Specific Heat", "specific_heat", "materialSpecificHeat");
     add_line("fill_method", "fill_method");
     add_line("C_ijkl", "C_ijkl");
     add_line("Block", "block", "materialBlockEdit");
@@ -2382,7 +2451,16 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     add_combo("Exodus", "output_exodus", {"true", "false"},
               "outputsExodusEnabled");
     add_combo("CSV", "output_csv", {"true", "false"}, "outputsCsvEnabled");
+    add_combo("CSV execute_on", "csv_execute_on",
+              {"", "final", "initial timestep_end"}, "outputsCsvExecuteOn");
     add_line("file_base", "file_base", "outputsFileBase");
+  } else if (kind == "VectorPostprocessors") {
+    add_combo("Type", "type", {"LineValueSampler"}, "vppTypeCombo");
+    add_combo("Variable", "variable", variables, "vppVariableCombo");
+    add_line("Start Point", "start_point", "vppStartPoint");
+    add_line("End Point", "end_point", "vppEndPoint");
+    add_line("Number of Points", "num_points", "vppNumPoints");
+    add_combo("Sort By", "sort_by", {"x", "y", "z", "id"}, "vppSortBy");
   }
 
   const QString default_var = variables.isEmpty() ? "u" : variables.first();
@@ -2411,6 +2489,15 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     template_descriptions_.insert(
         "Parsed Conductivity k(T)",
         "Temperature-dependent conductivity k(T) = 1 + 0.01*T.");
+    if (material_type_options_.contains("HeatConductionMaterial")) {
+      template_presets_.insert("Heat Conduction (MC01)",
+                               {{"type", "HeatConductionMaterial"},
+                                {"thermal_conductivity", "45"},
+                                {"specific_heat", "0.5"}});
+      template_descriptions_.insert(
+          "Heat Conduction (MC01)",
+          "Heat-transfer material with conductivity 45 and specific heat 0.5.");
+    }
     template_presets_.insert(
         "Linear Elastic (isotropic)",
         {{"type", "ComputeElasticityTensor"},
@@ -2503,6 +2590,16 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     template_descriptions_.insert(
         "MatDiffusion",
         "Material diffusion term using diffusivity property.");
+    if (load_type_options_.contains("HeatConductionTimeDerivative")) {
+      template_presets_.insert(
+          "Heat Conduction Time Derivative",
+          {{"type", "HeatConductionTimeDerivative"},
+           {"variable",
+            current_variables_.contains("T") ? "T" : default_var}});
+      template_descriptions_.insert("Heat Conduction Time Derivative",
+                                    "Transient heat capacity term for the "
+                                    "selected temperature variable.");
+    }
     template_presets_.insert(
         "TensorMechanics",
         {{"type", "TensorMechanics"},
@@ -2601,6 +2698,8 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
       set_row_visible("expression", true);
       set_row_visible("property_name", true);
       set_row_visible("coupled_variables", true);
+      set_row_visible("thermal_conductivity", false);
+      set_row_visible("specific_heat", false);
       set_row_visible("fill_method", false);
       set_row_visible("C_ijkl", false);
       set_row_visible("block", false);
@@ -2645,6 +2744,14 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
       } else if (type == "ParsedMaterial") {
         set_row_visible("prop_names", false);
         set_row_visible("prop_values", false);
+      } else if (type == "HeatConductionMaterial") {
+        set_row_visible("prop_names", false);
+        set_row_visible("prop_values", false);
+        set_row_visible("expression", false);
+        set_row_visible("property_name", false);
+        set_row_visible("coupled_variables", false);
+        set_row_visible("thermal_conductivity", true);
+        set_row_visible("specific_heat", true);
       } else if (type == "ComputeElasticityTensor") {
         set_row_visible("prop_names", false);
         set_row_visible("prop_values", false);

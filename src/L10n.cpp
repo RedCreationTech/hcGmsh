@@ -466,6 +466,7 @@ const QHash<QString, QString>& zh_dict() {
       {"Enable Deformation", "启用变形"},
       {"Enable Probe", "启用探针"},
       {"Variables", "变量"},
+      {"VectorPostprocessors", "向量后处理"},
       {"Outputs", "输出"},
       {"Open Visualization", "打开可视化"},
       // ===== MainWindow 模块页 =====

@@ -1,6 +1,6 @@
 # MOOSE 官方算例 Round B CAE 人工复刻与闭环验证手册
 
-> 版本：2026-09-28 v3
+> 版本：2026-09-29 v5
 > 计算节点：`192.168.0.138`
 > 应用：`HC MOOSE CAE [prototype]` / `hc_moose-opt`
 > 参考产物：`examples/hcMooseApp/qualification/MC01～MC05/`
@@ -44,13 +44,13 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
 
 | 用例 | 当前状态 | 首个必须解决的阻断项 |
 |---|---|---|
-| MC01 瞬态热传导 | 阻断 | 二维面网格、`HeatConductionTimeDerivative`、`HeatConductionMaterial`、`LineValueSampler` 和精确输出合同 |
+| MC01 瞬态热传导 | 待人工复验 | MC01 专用能力链已交付，需完成 CAE -> 远程求解 -> 结果回导闭环 |
 | MC02 热-结构耦合 | 阻断 | MC01 能力，再加 HeatSource、热膨胀和热-力耦合材料链 |
 | MC03 无摩擦接触 | 部分具备 | 精确的双立柱二维网格、二维 Contact 支持、预测器及结果量 |
 | MC04 J2 各向同性塑性 | 部分具备 | `IsotropicPlasticityStressUpdate` 及自动材料链、塑性应变场输出 |
 | MC05 Newmark 动力学 | 阻断 | InertialForce、Newmark 速度/加速度辅助链、动力历史输出 |
 
-人工执行到标注为“阻断闸门”的界面能力不存在时，记录为 `BLOCKED`并停止该例；不应选一个近似对象继续。
+人工执行到标注为“阻断闸门”的界面能力不存在时，记录为 `BLOCKED` 并停止该例；不应选一个近似对象继续。
 
 ## 3. 通用验证流程
 
@@ -81,7 +81,7 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
 
 ## 4. MC01：二维瞬态热传导
 
-### 4.1 用例身份与当前结论
+### 4.1 用例身份与验证边界
 
 | 项目 | 内容 |
 |---|---|
@@ -94,49 +94,29 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
 
 官方算例的物理问题是：一块长 `2`、高 `1` 的二维材料，初始温度均为 `300`；左边始终保持 `300`，右边温度按 `300+5*t` 上升；在 `0～5` 内以 `dt=1` 做瞬态热传导计算。
 
-当前 CAE 版本还不能从空项目完成本例闭环。本节因此分为两条路径：
+本轮已交付“通用结构化对象 + MC01 预设”能力。当前状态为**待人工复验**：不再使用 Round A 的 `.e` 作为输入网格，也不需要切换专家/自定义模式手改 `.i`。
 
-- **当前诊断路径**：导入 Round A 的 Exodus 作为输入网格，实际操作已有的结构化表单，用于确认项目、分组、变量、函数、边界、分析步、作业和结果窗口；它不是正式验收。
-- **正式验收路径**：必须从空项目建立二维网格，并用专用结构化表单建立全部热传导对象。第 4.11 节列出了当前阻断项。
-
-> 执行规则：找不到文档指定的对象类型或按钮时，立即记录对应的 `BLOCKED` 编号。不使用 Custom Block，不粘贴官方 `.i`，不用名称相近但物理意义不同的对象替代。
+**能力边界**：变量、函数、材料、Kernel、分析步、向量后处理和输出仍由通用结构化对象、mapping 与生成器承载；只有 MC01 的参考网格、可选类型、最小默认值和输出预设绑定 `hc_moose-opt`。本轮不扩展成“可编辑任意 MOOSE block/参数”的通用编辑器，因为那会同时引入完整语法覆盖、版本兼容和所有现有应用的回归面，却不是 MC01 闭环验收所需。后续只有在多个算例重复需要同一种能力时，才把对应预设上提为跨算例通用能力。
 
 ### 4.2 新建项目并选择应用
 
-1. 启动 GMP-ISE，在顶部“应用”下拉框选择 `HC MOOSE CAE [prototype]`。
-2. 选择“文件 -> 新建项目”，保存为 `roundb-mc01.gmp.yaml`。
-3. 查看模型树，确认至少能看到 `Variables`、`Functions`、`Materials`、`Steps`、`BC`、`Loads`、`Outputs`、`Mesh`、`Jobs` 和 `Results`。
-4. 再次查看顶部“应用”，确认没有回退为 `DamSafetyApp-opt`或 `combined-opt`。
-5. 记录截图 `MC01-01-project-profile.png`，画面中应同时包含项目名和 HC 应用名。
+1. 启动 GMP-ISE，选择“文件 -> 新建项目”。
+2. 在顶部“应用”下拉框选择 `HC MOOSE CAE [prototype]`。
+3. 保存为 `roundb-mc01.gmp.yaml`。必须先保存，MC01 参考网格会写入项目自己的工作目录。
+4. 再次查看顶部“应用”，确认没有回退为 `DamSafetyApp-opt` 或 `combined-opt`。
+5. 确认模型树中有 `Variables`、`Functions`、`Materials`、`Loads`、`Steps`、`VectorPostprocessors`、`Outputs` 和 `Mesh`，记录 `MC01-01-project-profile.png`。
 
 **预期结果**：项目成功保存，顶部应用始终为 `HC MOOSE CAE [prototype]`。
 
 ### 4.3 准备二维网格
 
-#### 4.3.1 正式验收应建立的网格
+1. 打开顶部“网格”（`Mesh`）菜单，点击 `Create MC01 Reference Mesh`。
+2. 等待状态栏显示 `MC01 reference mesh created: 121 nodes, 100 QUAD4.`。
+3. 确认视口中是 `2 x 1` 的二维矩形，X/Y 方向各 10 段，共 `121` 个节点和 `100` 个 `QUAD4` 单元。
+4. 确认物理组为二维域 `domain` 及边界 `bottom`、`right`、`top`、`left`。
+5. 确认 `Mesh` 根节点下已登记 `mc01_therm_step03.msh`，保存项目并记录 `MC01-02-reference-mesh.png`。
 
-正式的 CAE 操作入口应建立以下模型：
-
-| 项目 | 目标值 |
-|---|---|
-| 几何 | XY 平面矩形，左下角 `(0,0,0)`，右上角 `(2,1,0)` |
-| 网格 | X 方向 10 段，Y 方向 10 段，共 100 个四边形单元、11×11 个节点 |
-| 二维域 | 单一材料域；可命名为 `domain`，但 MC01 的全局材料不依赖该名称 |
-| 边界组 | `left`、`right`、`top`、`bottom` |
-
-当前草图可绘制矩形，但尚无“草图平面 -> 二维 Gmsh 面网格”的正式通路；网格模块的 Box 是三维实体，不能用它的外表面代替本例的二维域。因此当前记录 `BLOCKED MC01-GEO-01`。
-
-#### 4.3.2 当前版本可执行的诊断网格路径
-
-1. 进入 `Mesh` 模块，选择“网格 -> 导入 Exodus 网格...”（`Import Exodus Mesh...`）。
-2. 选择 `examples/hcMooseApp/qualification/MC01/therm_step03_out.e`。
-3. 等待导入完成，查看网格摘要：应为二维、`121` 个节点、`100` 个 `QUAD4` 单元。
-4. 在 Physical Groups/分组清单中确认 `left`、`right`、`top`、`bottom` 都存在。
-5. 保存项目，记录截图 `MC01-02-diagnostic-mesh.png`。
-
-**预期结果**：可以在 CAE 中选择左右边界并继续测试后续表单。
-
-**限制**：该 `.e` 是 Round A 已求解结果。把它作为输入网格只是诊断手段，不能计入“从空项目一比一复刻”的正式验收证据。
+**等价性**：官方输入使用 `GeneratedMeshGenerator(dim=2,nx=10,ny=10,xmax=2,ymax=1)`；CAE 生成与其几何、拓扑、网格密度和边界名一致的 Gmsh 网格，属于 CAE Native Equivalent。
 
 ### 4.4 创建温度变量
 
@@ -190,107 +170,56 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
 
 ### 4.7 创建材料与热传导 Kernel
 
-#### 4.7.1 密度材料：当前可操作
+#### 4.7.1 材料
 
-1. 右键 `Materials`添加材料，重命名为 `density`。
-2. 在属性中将 Type 设为 `GenericConstantMaterial`。
-3. 填写 `prop_names = density`，`prop_values = 8000`。
-4. 顶部“可选物理体”就是材料的域/block 指派入口，不会再显示一个名为“域”的参数。
-5. 使用第 4.3.2 节的诊断网格时，列表中会出现 `Unnamed block ID: 0`。这表示 Exodus 中已识别到唯一的未命名单元块，不是网格缺失。
-6. 本例保持不选任何物理体，使“待应用选择”显示“（无）”。不需要点选 `Unnamed block ID: 0`，也不需要为它补造 `domain`。
-7. 进入“预览”或后续检查生成 `.i`：`density` 块应只有 `type`、`prop_names`、`prop_values`，不应生成 `block = ...`。省略 `block` 表示材料对全部网格块生效，与官方 MC01 输入一致。
+1. 在 `Materials` 下添加 `thermal`。
+2. Type 选择 `HeatConductionMaterial`，填写 Thermal Conductivity=`45`、Specific Heat=`0.5`。
+   - 若通过双击对象打开浮动属性窗，Type 下拉也必须包含 `HeatConductionMaterial`；缺失则记录 `MC01-PHY-FLOATING-01`，不要改用近似材料。
+3. 在 `Materials` 下添加 `density`。
+4. Type 选择 `GenericConstantMaterial`，填写 Prop Names=`density`、Prop Values=`8000`。
+5. 两个材料的“可选物理体”均保持不选，“待应用选择”显示“（无）”正是本例预期。省略 `block` 代表对唯一域全局生效。
 
-**截图判定**：当前界面显示 `Unnamed block ID: 0` 且“待应用选择：（无）”，符合 MC01 预期，可继续执行第 4.7.2 节。
+#### 4.7.2 Kernel
 
-#### 4.7.2 热传导项：当前阻断
+1. 在 `Loads` 下添加 `heat_conduction`，Type 选择 `HeatConduction`，Variable 选择 `T`。
+2. 勾选高级参数，确认只有 `type` 和 `variable`，不应残留 `BodyForce` 的 `value=0`。
+3. 在 `Loads` 下添加 `time_derivative`，Type 选择 `HeatConductionTimeDerivative`，Variable 选择 `T`。
+4. 两个对象都保持不选物理体，确认预览无 `value` 和 `block`。
 
-正式模型必须通过结构化 UI 创建下列三个对象：
-
-| 对象名 | MOOSE Type | 参数 |
-|---|---|---|
-| `thermal` | `HeatConductionMaterial` | `thermal_conductivity=45`，`specific_heat=0.5` |
-| `heat_conduction` | `HeatConduction` | `variable=T` |
-| `time_derivative` | `HeatConductionTimeDerivative` | `variable=T` |
-
-当前版本的 Load/Kernel 类型中可看到 `HeatConduction`，但没有 `HeatConductionTimeDerivative`；Material 类型中也没有 `HeatConductionMaterial`。因此：
-
-1. 在左侧模型树中找到“载荷”（`Loads`）根节点。
-2. 右键“载荷”，选择“添加载荷”；也可先单击“载荷”，再点模型树上方的 `+` 按钮。
-3. 将新建对象重命名为 `heat_conduction`，双击它打开属性窗口。
-4. 进入“参数”页，在“快捷参数”中将“类型”选择为 `HeatConduction`，将“变量”选择为 `T`。
-5. 勾选“高级参数”。新建载荷最初会携带 `BodyForce` 的默认 `value=0`；切换为 `HeatConduction` 后如果该行仍存在，选中 `value` 行并点击“移除”（`Remove Param`）。
-6. `Value`、`Factor`、`Function`、`Component`、`Diffusivity` 和 `Displacements` 都不属于该 Kernel，最终高级参数表中不应有这些键。
-7. 顶部“可选物理体”保持不选，使 Kernel 对唯一网格域全局生效。
-8. 切换到“预览”，应只看到对象名 `heat_conduction`、Type=`HeatConduction`、Variable=`T`，不应有 `value` 或 `block`。
-9. 这个对象虽然在 CAE 树中位于“载荷”，但生成器会将它写入 MOOSE `[Kernels/heat_conduction]`，不会写成边界载荷。
-10. 保存项目。由于同一“类型”下拉框中找不到 `HeatConductionTimeDerivative`，记录 `BLOCKED MC01-PHY-01`并停止正式求解流程。
-11. **不要**用普通 `TimeDerivative` 替代 `HeatConductionTimeDerivative`；后者会正确引用密度和比热，两者物理语义不同。
-12. **不要**把导热系数和比热塞进任意材料类型，或通过 Custom Block 绕过表单。
-
-**截图判定**：Type=`HeatConduction` 和 Variable=`T` 已正确，但高级参数中如仍有 `value=0`，只能判定为“待清理”；删除 `value` 后才算完成当前可执行的 `heat_conduction` 诊断建立。
+**说明**：这两个对象在 CAE 树中统一由 `Loads` 管理，同步后会正确生成在 MOOSE `[Kernels]` 中。
 
 ### 4.8 创建瞬态分析步
 
 1. 进入 `Step` 模块，点击“瞬态步”（`Add Transient Step`），将对象重命名为 `heat_transient`。
-2. 双击该分析步，填写 Start Time `0`、End Time `5`、Time Step `1`。
-3. 展开“高级参数”，本例应保留的核心语义只有：
-
-   | Key | Value |
-   |---|---|
-   | `type` | `Transient` |
-   | `start_time` | `0` |
-   | `end_time` | `5` |
-   | `dt` | `1` |
-
-4. `scheme=implicit-euler` 是 MOOSE 的默认时间积分方式；当前生成器会自动补出该行，与官方算例语义一致，可保留。
-5. 当前通用 Transient 模板还会带入大量本例不需要的默认参数。在高级参数表中删除下列键：
-
-   | 类别 | 需删除的 Key | 原因 |
-   |---|---|---|
-   | 自适应时间步 | `timestepper_type`、`optimal_iterations`、`iteration_window`、`growth_factor`、`cutback_factor`、`dtmin`、`dtmax` | 会把官方的固定 `dt=1` 改成可变时间步，必须删除 |
-   | 额外求解控制 | `num_steps`、`solve_type`、`line_search`、`automatic_scaling`、`nl_rel_tol`、`nl_abs_tol`、`nl_max_its` | 官方 MC01 未显式指定，本例应使用 MOOSE 默认值 |
-   | PETSc/预处理 | `petsc_options_iname`、`petsc_options_value`、`preconditioning_type`、`preconditioning_full` | 通用非线性结构求解默认，不是 MC01 官方输入的一部分 |
-
-6. 删除后，高级参数表应只保留 `type`、`start_time`、`end_time`、`dt`，可选保留 `scheme=implicit-euler`。
-7. 切换到“预览”，再切回“参数”，确认已删除的参数没有自动恢复；然后点击“确定”、保存项目，重新打开该 Step 再检查一次。
-
-**本次实测记录**：界面默认预览中出现 `IterationAdaptiveDT`、全套非线性求解参数、PETSc LU/MUMPS 和 SMP，但 Validation 仍显示 `No issues`。这只说明参数形式合法，不代表它与官方 MC01 语义等价。
-
-2026-09-28 人工删除多余高级参数后，Input Preview 已只保留 `type=Transient`、`start_time=0`、`end_time=5`、`dt=1`、`scheme=implicit-euler`，该预览语义符合 MC01。删除后快捷表单仍可显示旧的 `preconditioning_full=true` 等值，而高级参数表和 Input Preview 已不包含它们；这是界面同步显示问题，生成语义暂以 Input Preview 为准。
-
-**阻断判定**：当前 Step 对象可用于继续人工走查，但该现象已记录为 `BLOCKED MC01-STEP-01`。如果表单强制恢复上述参数，不要用它提交正式 MC01 求解。
+2. 双击该分析步，确认 Type=`Transient`、Start Time=`0`、End Time=`5`、Time Step=`1`、Scheme=`implicit-euler`。
+3. 勾选“高级参数”，表中应且只应有 `type`、`start_time`、`end_time`、`dt`、`scheme`。
+4. “预览”中不应有 `IterationAdaptiveDT`、`TimeStepper`、PETSc 选项或 `Preconditioning`。
+5. 本步不需要手工删除通用结构分析默认参数；如仍出现，记录 `MC01-STEP-REGRESSION` 并停止提交。
 
 ### 4.9 创建中心线采样与输出
 
-正式验收应创建以下对象：
+#### 4.9.1 中心线采样
 
-| 类别 | 对象/参数 |
-|---|---|
-| VectorPostprocessor | `t_sampler`，Type=`LineValueSampler`，Variable=`T` |
-| 采样线 | Start=`0 0.5 0`，End=`2 0.5 0`，`num_points=20`，`sort_by=x` |
-| Exodus | 启用，生成 `therm_step03_out.e` |
-| CSV | `file_base=therm_step03_out`，`execute_on=final` |
+1. 在 `VectorPostprocessors` 下添加对象，重命名为 `t_sampler`。
+2. 双击对象打开属性窗，保持“高级参数”未勾选；快捷参数区必须显示 Type、Variable、Start Point、End Point、Number of Points、Sort By。若只看到高级参数表或空白区域，记录 `MC01-VPP-FORM-01` 并停止提交。
+3. Type 选择 `LineValueSampler`，Variable 选择 `T`。
+4. Start Point 填写 `0 0.5 0`，End Point 填写 `2 0.5 0`。
+5. Number of Points 填写 `20`，Sort By 选择 `x`。
+6. 预览应完整显示六个键，Validation 为 `No issues`。
 
-当前模型树没有 `VectorPostprocessors` 结构化根节点，且现有 mapping 只有 `NodalValueSampler`，没有本例需要的 `LineValueSampler`；当前 Outputs 套餐也不能精确表达“Exodus 常规输出 + CSV 仅在 final 执行”。
+#### 4.9.2 输出
 
-#### 4.9.1 当前版本的人工取证操作
+1. 在 `Outputs` 下添加对象，重命名为 `mc01_outputs`。
+2. “场输出变量”中的 CDP 变量全部不勾选；主变量 `T` 会由 Exodus 正常写出。
+3. History Output Preset 保持 `custom`，边界反力、平均位移和场量极值全部为 `false` 或留空。
+4. Enable Times 保持 `false`；本例不建立额外 Times 对象。
+5. Exodus 选择 `true`，CSV 选择 `true`，CSV execute_on 选择 `final`。
+6. `file_base` 填写 `therm_step03_out`，不选任何边界分组。
+7. 预览后点击“确定”，记录 `MC01-04-vpp-outputs.png`。
 
-1. 检查左侧模型树：确认没有 `VectorPostprocessors` 或“线采样”根节点/模块。记录 `BLOCKED MC01-VPP-01`。
-2. 展开“输出”（`Outputs`）节点。为了检查现有界面，右键“输出”添加一个临时对象，重命名为 `mc01_outputs_probe`。
-3. 双击 `mc01_outputs_probe`，进入“参数”，滚动到“Output Files/输出文件”区域。
-4. 确认可以看到 Exodus、CSV 和 `file_base`；但界面中没有分别为 Exodus/CSV 设置 `execute_on` 的入口，也没有只针对 CSV 选择 `final` 的控件。
-5. 可为取证将 Exodus 设为 `true`、CSV 设为 `true`、`file_base` 填为 `therm_step03_out`，然后查看“预览”。当前生成器不会由这三个字段单独生成官方所需的 `CSV(execute_on=final)` 合同。
-6. 记录截图 `MC01-04-output-gap.png` 和 `BLOCKED MC01-OUT-01`。
-7. 取证完成后删除 `mc01_outputs_probe`，不要将它作为正式 MC01 对象保留。
+#### 4.9.3 历史记录（修复前）
 
-#### 4.9.2 停止规则
-
-- 不用 `NodalValueSampler` 替代 `LineValueSampler`。
-- 不手改生成 `.i` 的 Outputs 块。
-- 不通过启用与 MC01 无关的 History/Times 套餐来迫使 CSV 生成。
-- 待专用入口完成后，按本节首表建立正式对象，再继续第 4.10 节。
-
-#### 4.9.3 2026-09-28 人工实测结论
+> 本小节仅保留 2026-09-28 的缺口证据，已不是复验操作指令；当前操作以 4.9.1～4.9.2 为准。
 
 对 `mc01_outputs_probe` 的界面走查已确认：
 
@@ -300,13 +229,15 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
 - “输出文件”确实可设 Exodus、CSV 和 `file_base`，但没有为 CSV 设置 `execute_on=final` 的控件；开启 CSV 也不会自动产生 `LineValueSampler` 数据。
 - 顶部“可选边界分组”与本例全域 Exodus/中心线采样无关，保持“待应用选择：（无）”是正确的。
 
-**最终判定**：4.9 已完成当前版本能做的全部人工取证，结论为 `BLOCKED MC01-VPP-01` + `BLOCKED MC01-OUT-01`。删除临时 `mc01_outputs_probe`后停止，不执行第 4.10 节的生成、快照和远端提交。
+**修复前判定（已失效）**：当时记录为 `BLOCKED MC01-VPP-01` + `BLOCKED MC01-OUT-01`；两项已在本轮关闭，不得再作为停止当前复验的依据。
 
-#### 4.9.4 当前同步 `.i` 与提交决策
+#### 4.9.4 修复前 `.i` 记录（已失效）
+
+> 下表描述修复前的残缺输入，不用于判定当前版本是否可提交。当前准出以 4.11～4.12 为准。
 
 2026-09-28 实际操作日志已记录项目新建、Exodus 诊断网格导入、`T`、函数、两个 BC、`density`、`heat_conduction`、`heat_transient` 的添加/编辑，以及 `mc01_outputs_probe` 的添加后删除。日志中没有 `Check Input`、Job Snapshot 或远端提交成功记录。
 
-当前结构化同步的 `.i` 已正确生成 Variable、Function、两个 BC、密度、`HeatConduction` 和固定时间步，但仍不可提交：
+修复前的结构化 `.i` 只生成了 Variable、Function、两个 BC、密度、`HeatConduction` 和固定时间步，当时的缺口如下：
 
 | 检查项 | 当前 `.i` | 影响 |
 |---|---|---|
@@ -317,27 +248,27 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
 | Mesh 引用 | macOS 绝对路径 | 计算节点不能直接访问；正式快照必须打包网格并改为包内相对路径 |
 | 网格来源 | Round A 已求解 `.e` | 只是表单诊断网格，不能作为从空项目复刻的正式证据 |
 
-**决策**：
+**当时决策（已由本轮修复取代）**：
 
 - 不点击“运行”或提交远端 Job。
 - 不切换高级/自定义输入模式手工补写官方 block；这样可以测求解器，但不能证明 CAE 结构化能力，而 Round A 已经完成求解器本身的直接实算验证。
-- 先完成第 4.11 节的五个结构化缺口修复，再从 CAE 重新生成 `.i`、导出快照并提交 `hc_moose-opt`。
+- 先完成第 4.11 节的五个结构化缺口修复，再从 CAE 重新生成 `.i`、导出快照并提交 `hc_moose-opt`。这一步现已完成，当前应直接按第 4.10 节复验。
 
 ### 4.10 从保存复查到远端求解
 
-> 本节是正式闭环操作。只有第 4.11 节所有阻断项解决后才执行；当前同步的残缺 `.i` 不得提交，也不得通过高级/自定义输入手工补块后冒充结构化验收。
+> 本节是修复后的正式人工复验路径。输入模式必须保持 Structured/结构化，不需要手改 `.i`。
 
 #### 4.10.1 保存、重开与生成 `.i`
 
 1. 保存项目，关闭项目后重新打开 `roundb-mc01.gmp.yaml`。
 2. 逐项复查 `T`、`right_temperature`、两个 BC、两个 Kernel、两个 Material、Transient Step、`t_sampler` 和 Outputs，确认名称、引用和数值未丢失。
 3. 进入 `Job`模块，点击“打开作业工作区”（`Open Job Workspace`）。
-4. 点击“校验工作流”（`Validate Workflow`）；要求 `0 errors`。如有 warning，逐条记录，不直接忽略。
+4. 点击“校验工作流”（`Validate Workflow`）；要求 `0 errors`。HC 档案下不要为通过校验而补建 `Sections` 或 `Physics`。
 5. 点击“同步到输入”（`Sync to Input`）。
-6. 在 MOOSE 工作窗的“输入文件”页查看 `Generated Input` 和 `Generation Report`。输入模式必须是 Structured/结构化。
+6. 在 MOOSE 工作窗的“输入文件”页查看 `Generated Input` 和 `Generation Report`。按第 4.12 节核对后，不需要切换高级模式。
 7. 再次执行“同步到输入”，确认生成内容稳定，没有随机重命名或引用漂移。
-8. 点击“写入输入文件”（`Write Input`），将生成文件保存为 `therm_step03.i`。
-9. 按第 4.12 节检查语义，然后点击“检查输入”（`Check Input`）。
+8. 生成输入中的 Mesh 可能显示本机项目工作目录的绝对路径，这是结构化编辑阶段的正常显示；导出 Job Snapshot 时必须改写为包内文件名。
+9. 点击“写入输入文件”（`Write Input`），将生成文件保存为 `therm_step03.i`，然后点击“检查输入”（`Check Input`）。
 
 #### 4.10.2 导出快照并提交计算节点
 
@@ -345,7 +276,8 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
 2. Server 填写当前 LIMS API 地址，本地默认为 `http://127.0.0.1:8200`；Project ID 选择本次验证项目。
 3. 确认目标求解器为 `hc_moose-opt`，不是 `dam-safety-app`。
 4. 点击“导出任务快照”（`Export Job Snapshot`），记录快照目录。
-5. 打开快照制品清单，确认包含 `.i`、输入网格、`manifest.json`，且 `.i` 引用的网格为快照内相对路径。
+   - 每次同步或修改输入后都必须重新导出；“提交作业”会按输入哈希拒绝过期快照。
+5. 打开快照制品清单，确认包含 `.i`、`mc01_therm_step03.msh`、`manifest.json`，且快照内 `.i` 不再引用 `/Users/...`。
 6. 点击“提交作业”（`Submit Job`），记录 Job ID。
 7. 点击“刷新状态”（`Refresh Status`），直到状态为 `succeeded`。`running` 不算完成。
 8. 在 Job 详情中确认 requested solver id 和 resolved solver id 都为 `hc_moose-opt`，应用为 `HcMooseApp`，计算节点为 `192.168.0.138`。
@@ -355,34 +287,36 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
 1. 在 Job 工作区点击“刷新文件”（`Refresh Files`）。
 2. 在制品清单中至少勾选 `therm_step03_out.e`、`therm_step03_out_t_sampler_0006.csv`、求解日志和作业 manifest。
 3. 点击“下载选中项”（`Download Selected`）。默认下载目录为 `~/Downloads/gmp_remote/<job_id>/`。
-4. 进入 `Results` 模块，点击“导入结果文件...”（`Import Result File...`），先选择刚下载的 `.e`。
-5. 在场变量中选择 `T`，从 `t=0` 逐帧播放到 `t=5`，记录首帧和末帧截图。
-6. 再次点击“导入结果文件...”，选择下载的 CSV，切换到表格/曲线视图查看 `T-x` 中心线数据。
-7. 不要直接导入 `examples/` 中的 Round A 文件作为 Round B 结果；Round B 证据必须来自刚记录的 Job ID。
+4. 进入 `Results` 模块，点击“导入任务目录...”（`Import Task Directory...`），选择刚下载的 Job 根目录。
+5. MC01 的预期结果是一个 `therm_step03_out.e` 场结果和一个 `therm_step03_out_t_sampler_0006.csv` 最终时刻空间剖面；CSV 表头为 `T,id,x,y,z`，不要求 `time` 列。
+6. 导入后在场变量中选择 `T`，从 `t=0` 逐帧播放到 `t=5`，记录首帧和末帧截图。
+7. 切换到表格/曲线视图，查看 CSV 的 `T-x` 中心线数据。单文件导入仅作为目录导入异常时的诊断手段。
+8. 不要直接导入 `examples/` 中的 Round A 文件作为 Round B 结果；Round B 证据必须来自刚记录的 Job ID。
 
-### 4.11 当前阻断清单与开发准出
+### 4.11 本轮修复记录
 
-| 编号 | 当前缺口 | 开发后的可见准出条件 |
+| 编号 | 修复结果 | 人工复验点 |
 |---|---|---|
-| `MC01-GEO-01` | 无草图/参数矩形到二维面网格的通路 | 能从空项目生成 `2 x 1`、`10 x 10` 网格及四条命名边界 |
-| `MC01-PHY-01` | 缺 `HeatConductionMaterial` 和 `HeatConductionTimeDerivative` 表单/mapping | 类型可选，参数可保存重开，生成引用正确 |
-| `MC01-STEP-01` | 通用 Transient 模板强制带入自适应步长、非线性控制、PETSc 和 SMP，校验不提示与 MC01 语义不等价；从高级表删除后，快捷表单仍显示旧值 | 用户只需设置 `0/5/1`，生成固定 `dt=1`的最小 Executioner；不相容模板需警告或自动清理，快捷/高级/预览三处显示必须一致 |
-| `MC01-VPP-01` | 无 `VectorPostprocessors/LineValueSampler` 结构化入口；现有场/历史输出只有 CDP 诊断量和结构反力/位移/极值 | 可设置变量、起终点、采样点数和排序方式 |
-| `MC01-OUT-01` | Outputs 虽有 Exodus、CSV、`file_base`，但无 CSV 专属 `execute_on=final`；开启 CSV 不会补出线采样数据 | 能生成 Exodus，且 CSV 为 `file_base=therm_step03_out`、`execute_on=final` |
+| `MC01-GEO-01` | 增加 `Create MC01 Reference Mesh` | 121 节点、100 QUAD4、`domain/left/right/top/bottom` |
+| `MC01-PHY-01` | HC 独立 mapping 增加 `HeatConductionMaterial` 和 `HeatConductionTimeDerivative`，并向浮动属性窗传递同一份档案类型候选 | 主编辑器与浮动窗均可选类型，切换 Kernel 后无残留 `value=0` |
+| `MC01-STEP-01` | HC 档案使用最小固定步长默认值，删除高级行后立即刷新表单 | 只生成 `type/start/end/dt/scheme` |
+| `MC01-VPP-01` | 增加 `VectorPostprocessors/LineValueSampler` 结构化表单，并补入快捷表单启用白名单 | 浮动窗六个快捷控件可见；`T`、起终点、20 点、x 排序均可保存 |
+| `MC01-OUT-01` | Outputs 增加 CSV `execute_on` | Exodus 启用，CSV 为 `final`，`file_base=therm_step03_out` |
+| `MC01-RESULT-01` | 目录导入同时识别时间历程 CSV 和 `x/y/z` 空间采样 CSV，不再强制结果包同时具备 Exodus 与 CSV | 直接选择 MC01 Job 根目录，`.e` 与 `T-x` 采样均进入 Results |
 
-只有五项全部解决，并通过 `moosecase_mc01_transient_heat_contract` 定向测试，才可把 MC01 从 `BLOCKED` 改为可人工验收。
+自动定向巡览 `moosecase_mc01_transient_heat_contract` 已通过：它从空模型树创建网格和全部 MC01 对象，检查生成 `.i`、无关默认值清理以及工作流预检。这不替代第 4.10 节的真实远程人工复验。
 
 ### 4.12 生成 `.i` 的语义检查
 
 不要按行和排版与官方 `.i` 做文本比对，应核对下列语义：
 
-- Mesh 引用快照内的 Gmsh/Exodus 网格，网格物理语义等价于官方 `GeneratedMeshGenerator(dim=2, nx=10, ny=10, xmax=2, ymax=1)`。
+- `[Mesh/file]` 在编辑阶段引用项目自己的 `mc01_therm_step03.msh`，在快照内必须改为包内引用；网格语义等价于官方 `GeneratedMeshGenerator(dim=2,nx=10,ny=10,xmax=2,ymax=1)`。
 - `[Variables/T]` 存在，且 `initial_condition=300`。
-- `HeatConduction(variable=T)` 和 `HeatConductionTimeDerivative(variable=T)` 同时存在。
+- `HeatConduction(variable=T)` 和 `HeatConductionTimeDerivative(variable=T)` 同时存在，且块内无 `value=0`。
 - `HeatConductionMaterial` 的导热系数为 `45`、比热为 `0.5`；`density` 为 `8000`。
 - `t_left` 为 `DirichletBC(T=300, boundary=left)`。
 - `t_right` 为 `FunctionDirichletBC`，引用等价于 `300+5*t` 的函数，边界为 `right`。
-- Executioner 为 `Transient`，`start_time=0`、`end_time=5`、`dt=1`，不应启用自适应时间步。
+- Executioner 为 `Transient`，`start_time=0`、`end_time=5`、`dt=1`、`scheme=implicit-euler`，无 `TimeStepper` 和 `Preconditioning`。
 - `LineValueSampler` 采样 `T`，从 `(0,0.5,0)` 到 `(2,0.5,0)`，`num_points=20`，`sort_by=x`。
 - Exodus 和 CSV 均存在，CSV 的输出前缀为 `therm_step03_out` 且只在 `final` 执行。
 
@@ -391,6 +325,7 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
 | 文件 | 必须存在 | 用途 |
 |---|---|---|
 | `therm_step03.i` | 是 | CAE 结构化生成的求解输入 |
+| `mc01_therm_step03.msh` | 是 | CAE 生成并随快照打包的输入网格 |
 | `therm_step03_out.e` | 是 | `T` 温度场和 `t=0～5` 时间帧 |
 | `therm_step03_out_t_sampler_0006.csv` | 是 | `t=5` 时 `y=0.5` 中心线的 20 个温度采样点 |
 | 求解日志 | 是 | 确认正常收敛和实际求解器身份 |
@@ -524,7 +459,7 @@ CAE 后处理必须完成以下检查：
 
 | 用例 | CAE 预处理 | `.i` 语义 | `--check-input` | 远程 Job | LIMS 下载 | CAE 后处理 | Job ID / 备注 |
 |---|---|---|---|---|---|---|---|
-| MC01 | BLOCKED | 待验证 | 待验证 | 待验证 | 待验证 | 待验证 | MC01-G1 |
+| MC01 | 待人工复验 | 待人工复验 | 待验证 | 待验证 | 待验证 | 待验证 | MC01 专用能力链已通过定向巡览 |
 | MC02 | BLOCKED | 待验证 | 待验证 | 待验证 | 待验证 | 待验证 | MC02-G1 |
 | MC03 | BLOCKED | 待验证 | 待验证 | 待验证 | 待验证 | 待验证 | MC03-G1 |
 | MC04 | BLOCKED | 待验证 | 待验证 | 待验证 | 待验证 | 待验证 | MC04-G1 |

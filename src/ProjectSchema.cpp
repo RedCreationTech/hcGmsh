@@ -45,6 +45,7 @@ QStringList model_root_nodes() {
       "Materials",   "Sections",    "Assembly",     "Physics",
       "Steps",       "BC",          "Loads",        "Interactions",
       "Constraints", "Selections",  "Functions",    "Variables",
+      "VectorPostprocessors",
       "Outputs",     "Mesh",        "Input Cases",  "Jobs",
       "Results",
   };

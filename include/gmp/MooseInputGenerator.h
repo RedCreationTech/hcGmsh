@@ -46,6 +46,7 @@ class MooseInputGenerator {
     QString aux_variables;
     QString aux_kernels;
     QString postprocessors;
+    QString vector_postprocessors;
     QString times;
     QString times_header;
     QString generation_report;

@@ -86,6 +86,16 @@ QString SnapshotService::normalize_refs(
   return QString();
 }
 
+bool SnapshotService::input_matches_snapshot(
+    const QJsonObject& manifest, const QString& normalized_input) {
+  const QString snapshot_hash = manifest.value("input_snapshot")
+                                    .toObject()
+                                    .value("input_sha256")
+                                    .toString();
+  return !snapshot_hash.isEmpty() &&
+         snapshot_hash == sha256_hex(normalized_input.toUtf8());
+}
+
 SnapshotExportOutcome SnapshotService::export_snapshot(
     const SnapshotExportRequest& request) {
   SnapshotExportOutcome outcome;

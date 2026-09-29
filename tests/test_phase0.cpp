@@ -116,6 +116,7 @@ void test_project_schema(TestContext& test) {
       QStringLiteral("Loads"),       QStringLiteral("Interactions"),
       QStringLiteral("Constraints"), QStringLiteral("Selections"),
       QStringLiteral("Functions"),   QStringLiteral("Variables"),
+      QStringLiteral("VectorPostprocessors"),
       QStringLiteral("Outputs"),     QStringLiteral("Mesh"),
       QStringLiteral("Input Cases"), QStringLiteral("Jobs"),
       QStringLiteral("Results"),
@@ -294,6 +295,17 @@ void test_profiles_and_mapping(TestContext& test) {
   test.expect(mapping.has_object_type("BCs", "Pressure") &&
                   mapping.has_object_type("Contact", "Contact"),
               "G1 pressure/contact object mappings are available");
+  gmp::MooseMappingRegistry hc_mapping(
+      QDir::current().filePath("templates/moose/mapping-hcmoose-v1.json"));
+  test.expect(
+      hc_mapping.is_loaded() && hc_mapping.version() == "1.1.0" &&
+          hc_mapping.has_object_type("Kernels", "HeatConduction") &&
+          hc_mapping.has_object_type("Kernels",
+                                     "HeatConductionTimeDerivative") &&
+          hc_mapping.has_object_type("Materials", "HeatConductionMaterial") &&
+          hc_mapping.has_object_type("VectorPostprocessors",
+                                     "LineValueSampler"),
+      "HC mapping isolates the MC01 object types");
   const QJsonObject contact =
       mapping.object_schema("Contact", "Contact");
   const QJsonArray required = contact.value("required_params").toArray();
@@ -1953,6 +1965,63 @@ void test_moose_input_generator_contract(TestContext& test) {
   test.expect(out.console_warnings.isEmpty() && out.status_warning.isEmpty(),
               "clean G1-shaped input produces no warnings");
 
+  gmp::MooseInputGenerator::Input mc01;
+  mc01.entries = {
+      entry("Variables", "T",
+            {{"order", "FIRST"},
+             {"family", "LAGRANGE"},
+             {"initial_condition", "300"}}),
+      entry("Materials", "thermal",
+            {{"type", "HeatConductionMaterial"},
+             {"thermal_conductivity", "45"},
+             {"specific_heat", "0.5"}}),
+      entry("Materials", "density",
+            {{"type", "GenericConstantMaterial"},
+             {"prop_names", "density"},
+             {"prop_values", "8000"}}),
+      entry("Loads", "heat_conduction",
+            {{"type", "HeatConduction"}, {"variable", "T"}}),
+      entry("Loads", "time_derivative",
+            {{"type", "HeatConductionTimeDerivative"}, {"variable", "T"}}),
+      entry("Steps", "heat_transient",
+            {{"type", "Transient"},
+             {"start_time", "0"},
+             {"end_time", "5"},
+             {"dt", "1"},
+             {"scheme", "implicit-euler"}}),
+      entry("VectorPostprocessors", "t_sampler",
+            {{"type", "LineValueSampler"},
+             {"variable", "T"},
+             {"start_point", "0 0.5 0"},
+             {"end_point", "2 0.5 0"},
+             {"num_points", "20"},
+             {"sort_by", "x"}}),
+      entry("Outputs", "mc01_outputs",
+            {{"type", "Exodus"},
+             {"field_outputs", ""},
+             {"history_profile", "custom"},
+             {"output_exodus", "true"},
+             {"output_csv", "true"},
+             {"csv_execute_on", "final"},
+             {"file_base", "therm_step03_out"}}),
+  };
+  const auto mc01_out = gmp::MooseInputGenerator::generate(mc01);
+  test.expect(
+      mc01_out.materials.contains("type = HeatConductionMaterial") &&
+          mc01_out.loads.contains("type = HeatConductionTimeDerivative") &&
+          !mc01_out.loads.contains("value =") &&
+          mc01_out.executioner.contains("dt = 1") &&
+          !mc01_out.executioner.contains("[TimeStepper]") &&
+          !mc01_out.executioner.contains("[Preconditioning/") &&
+          mc01_out.vector_postprocessors.contains("type = LineValueSampler") &&
+          mc01_out.vector_postprocessors.contains(
+              "start_point = '0 0.5 0'") &&
+          mc01_out.vector_postprocessors.contains(
+              "end_point = '2 0.5 0'") &&
+          mc01_out.outputs.contains("execute_on = 'final'") &&
+          mc01_out.outputs.contains("file_base = therm_step03_out"),
+      "MC01 structured objects generate the frozen heat-transfer contract");
+
   // 报告可追溯行（ TASK-V02-003 候选转正 ）。
   test.expect(out.generation_report.contains(
                   "Application profile: DamSafetyApp-opt") &&
@@ -1976,7 +2045,8 @@ void test_moose_input_generator_contract(TestContext& test) {
     return o.functions + o.variables + o.materials + o.bcs + o.loads +
            o.outputs + o.executioner + o.global_params +
            o.physics_blocks.join("") + o.interactions + o.aux_variables +
-           o.aux_kernels + o.postprocessors + o.times + o.generation_report;
+           o.aux_kernels + o.postprocessors + o.vector_postprocessors +
+           o.times + o.generation_report;
   };
   test.expect(flatten(out) == flatten(out_b),
               "generation is deterministic across repeated calls");
@@ -2100,6 +2170,11 @@ void test_snapshot_service_contract(TestContext& test) {
                       QDir(request.dest_parent).filePath(outcome.dir_name),
               "service allocates a timestamped case dir and exports");
   const QJsonObject manifest_json = outcome.result.manifest;
+  test.expect(
+      gmp::SnapshotService::input_matches_snapshot(manifest_json, text) &&
+          !gmp::SnapshotService::input_matches_snapshot(
+              manifest_json, text + "# changed\n"),
+      "snapshot service detects stale input before submission");
   test.expect(manifest_json.value("contract_version").toString() == "2.0.0" &&
                   manifest_json.value("case_id").toString() ==
                       outcome.dir_name &&
@@ -2548,6 +2623,22 @@ void test_result_data_contract(TestContext& test) {
                   package.input_files.size() == 1 &&
                   package.log_report_files.size() >= 1,
               "task root and results directory resolve to one classified package");
+
+  const QString spatial_root = temp.path() + "/job_spatial";
+  const QString spatial_csv =
+      spatial_root + "/results/therm_step03_out_t_sampler_0006.csv";
+  const QString spatial_exodus =
+      spatial_root + "/results/therm_step03_out.e";
+  test.expect(write_file(spatial_csv,
+                         "T,id,x,y,z\n300,0,0,0.5,0\n301,1,2,0.5,0\n") &&
+                  write_file(spatial_exodus, "exodus"),
+              "spatial sampler result fixtures are written");
+  const gmp::ResultPackage spatial =
+      gmp::inspect_result_package(spatial_root);
+  test.expect(spatial.main_exodus == spatial_exodus &&
+                  spatial.main_csv == spatial_csv &&
+                  spatial.csv_candidates.size() == 1,
+              "spatial sampler CSV is accepted as a main curve result");
   test.expect(gmp::result_file_is_usable(package, package.main_exodus),
               "unchanged main Exodus is usable");
 

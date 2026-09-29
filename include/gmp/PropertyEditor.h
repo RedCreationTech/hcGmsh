@@ -44,8 +44,12 @@ class PropertyEditor : public QWidget {
   void set_physics_action_options(const QStringList& options);
   // G1：候选由活动 Application Profile + mapping registry 注入，避免
   // 表单展示当前求解应用不能生成的载荷/接触类型。
+  void set_material_type_options(const QStringList& options);
+  // G1：候选由活动 Application Profile + mapping registry 注入，避免
+  // 表单展示当前求解应用不能生成的载荷/接触类型。
   void set_load_type_options(const QStringList& options);
   void set_interaction_type_options(const QStringList& options);
+  void set_minimal_transient_defaults(bool enabled);
   void refresh_form_options();
   // 主工程编辑器用回调把名称/参数提交为领域命令；未设置时（浮动窗缓冲
   // 副本）仍只写本地克隆项。
@@ -163,10 +167,19 @@ class PropertyEditor : public QWidget {
   QStringList volume_groups_;
   QMap<QString, double> display_unit_factors_;
   QStringList physics_action_options_ = {"QuasiStatic"};
+  QStringList material_type_options_ = {"GenericConstantMaterial",
+                                        "ParsedMaterial",
+                                        "ComputeElasticityTensor",
+                                        "ComputeIsotropicElasticityTensor",
+                                        "ComputeSmallStrain",
+                                        "ComputeLinearElasticStress",
+                                        "ComputeThermalExpansionEigenstrain",
+                                        "AbaqusCDP"};
   QStringList load_type_options_ = {"BodyForce", "TimeDerivative",
                                     "MatDiffusion", "HeatConduction",
                                     "TensorMechanics"};
   QStringList interaction_type_options_ = {"Contact"};
+  bool minimal_transient_defaults_ = false;
 };
 
 }  // namespace gmp

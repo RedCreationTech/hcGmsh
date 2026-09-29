@@ -390,17 +390,18 @@ ResultPackage inspect_result_package(const QString& selected_path) {
   }
   for (const QString& csv : ordinary_csv) {
     const CsvData parsed = read_csv_data(csv);
-    int time_column = -1;
+    bool has_curve_axis = false;
     for (int column = 0; column < parsed.headers.size(); ++column) {
-      if (header_name_without_unit(parsed.headers.at(column))
-              .compare("time", Qt::CaseInsensitive) == 0) {
-        time_column = column;
+      const QString header =
+          header_name_without_unit(parsed.headers.at(column)).toLower();
+      if (header == "time" || header == "x" || header == "y" ||
+          header == "z" || header == "distance" ||
+          header == "arc_length") {
+        has_curve_axis = true;
         break;
       }
     }
-    if (parsed.valid() && time_column >= 0 &&
-        time_column < parsed.numeric_columns.size() &&
-        parsed.numeric_columns.at(time_column) &&
+    if (parsed.valid() && has_curve_axis &&
         parsed.numeric_headers().size() >= 2) {
       package.csv_candidates << csv;
     }

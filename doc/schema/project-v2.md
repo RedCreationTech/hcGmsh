@@ -62,6 +62,7 @@ model:
   Selections: []
   Functions: []
   Variables: []
+  VectorPostprocessors: []
   Outputs: []
   Mesh: []
   Input Cases: []

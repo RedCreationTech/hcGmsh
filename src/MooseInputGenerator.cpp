@@ -30,7 +30,8 @@ const QStringList kOutputsPackageKeys = {
     "times_enabled",          "times_name",
     "times_start",            "times_end",
     "times_interval",         "output_exodus",
-    "output_csv",             "file_base"};
+    "output_csv",             "csv_execute_on",
+    "file_base"};
 
 QString build_block_from_root(const EntryView& items, const QString& block_name,
                               const QString& default_type,
@@ -60,7 +61,8 @@ QString build_block_from_root(const EntryView& items, const QString& block_name,
       }
       out += QString("    %1 = %2\n")
                  .arg(it.key())
-                 .arg(it.value().toString());
+                 .arg(MooseInputGenerator::quote_moose_value_if_needed(
+                     it.value().toString()));
     }
     out += "  []\n";
   }
@@ -688,6 +690,7 @@ QVariantMap outputs_package_config(const EntryView& output_items) {
   bool csv_on = false;
   bool any_exodus_key = false;
   bool any_csv_key = false;
+  QString csv_execute_on;
   QString file_base;
   auto split_list = [](const QString& raw) {
     return raw.split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
@@ -753,6 +756,9 @@ QVariantMap outputs_package_config(const EntryView& output_items) {
       any_csv_key = true;
       csv_on = csv_on || enabled("output_csv");
     }
+    if (csv_execute_on.isEmpty()) {
+      csv_execute_on = params.value("csv_execute_on").toString().trimmed();
+    }
     if (file_base.isEmpty()) {
       file_base = params.value("file_base").toString().trimmed();
     }
@@ -764,7 +770,8 @@ QVariantMap outputs_package_config(const EntryView& output_items) {
   const bool package_active = !field_vars.isEmpty() ||
                               history_profile == "cdp_uniaxial_z" ||
                               hist_reaction ||
-                              hist_disp_avg || hist_extremum || times_enabled;
+                              hist_disp_avg || hist_extremum || times_enabled ||
+                              !csv_execute_on.isEmpty();
   cfg.insert("field_outputs", field_vars);
   cfg.insert("history_profile", history_profile);
   cfg.insert("hist_reaction_force", hist_reaction);
@@ -787,6 +794,7 @@ QVariantMap outputs_package_config(const EntryView& output_items) {
              times_interval.isEmpty() ? QString("0.01") : times_interval);
   cfg.insert("output_exodus", exodus_on);
   cfg.insert("output_csv", csv_on);
+  cfg.insert("csv_execute_on", csv_execute_on);
   cfg.insert("file_base", file_base);
   cfg.insert("package_active", package_active);
   return cfg;
@@ -833,10 +841,11 @@ QString build_outputs_block(const EntryView& items,
     exodus_on = true;  // 兜底：勾选套餐后至少保留一路落盘。
   }
   auto emit_output_subblock = [&](const QString& name, const QString& type,
+                                  const QString& execute_on,
                                   bool sync_to_times) {
     out += QString("  [%1]\n").arg(name);
     out += QString("    type = %1\n").arg(type);
-    out += "    execute_on = 'initial timestep_end'\n";
+    out += QString("    execute_on = '%1'\n").arg(execute_on);
     if (times && sync_to_times) {
       out += QString("    sync_times_object = %1\n").arg(times_name);
       out += "    sync_only = true\n";
@@ -847,12 +856,17 @@ QString build_outputs_block(const EntryView& items,
     out += "  []\n";
   };
   if (exodus_on) {
-    emit_output_subblock("field_exodus", "Exodus", true);
+    emit_output_subblock("field_exodus", "Exodus", "initial timestep_end",
+                         true);
   }
   if (csv_on) {
     // CSV is already a time history. Syncing it to a Times object makes MOOSE
     // emit one numbered copy per output time, flooding the result directory.
-    emit_output_subblock("history_csv", "CSV", false);
+    const QString csv_execute_on =
+        cfg.value("csv_execute_on").toString().trimmed();
+    emit_output_subblock("history_csv", "CSV",
+                         csv_execute_on.isEmpty() ? "initial timestep_end"
+                                                  : csv_execute_on, false);
   }
   out += "[]\n";
   return out;
@@ -1274,6 +1288,8 @@ MooseInputGenerator::Output MooseInputGenerator::generate(const Input& input) {
   const EntryView outputs = entries_of(input.entries, "Outputs");
   const EntryView steps = entries_of(input.entries, "Steps");
   const EntryView physics = entries_of(input.entries, "Physics");
+  const EntryView vector_postprocessors =
+      entries_of(input.entries, "VectorPostprocessors");
 
   out.functions = build_functions_block(functions);
   out.variables = build_variables_block(variables);
@@ -1303,6 +1319,8 @@ MooseInputGenerator::Output MooseInputGenerator::generate(const Input& input) {
                                             sections, &out.console_warnings);
   out.postprocessors =
       build_postprocessors_block(outputs_cfg, &out.console_warnings);
+  out.vector_postprocessors = build_block_from_root(
+      vector_postprocessors, "VectorPostprocessors", "LineValueSampler", {});
   out.times = build_times_block(outputs_cfg, &out.times_header);
   out.generation_report = build_generation_report(input);
   return out;

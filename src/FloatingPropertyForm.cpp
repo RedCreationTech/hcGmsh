@@ -72,8 +72,10 @@ FloatingPropertyForm::FloatingPropertyForm(
     QTreeWidgetItem* target, const QStringList& boundary_groups,
     const QStringList& volume_groups,
     const QStringList& physics_action_options,
+    const QStringList& material_type_options,
     const QStringList& load_type_options,
-    const QStringList& interaction_type_options, QWidget* parent)
+    const QStringList& interaction_type_options,
+    bool minimal_transient_defaults, QWidget* parent)
     : QDialog(parent), target_item_(target) {
   setObjectName("floatingPropertyForm");
   // 实测 macOS 上 QDialog 独立顶层路径不继承 QApplication 样式表
@@ -116,8 +118,10 @@ FloatingPropertyForm::FloatingPropertyForm(
   // The modal editor works on a cloned tree, but must use the same active
   // application-profile choices as the main editor before building its form.
   editor_->set_physics_action_options(physics_action_options);
+  editor_->set_material_type_options(material_type_options);
   editor_->set_load_type_options(load_type_options);
   editor_->set_interaction_type_options(interaction_type_options);
+  editor_->set_minimal_transient_defaults(minimal_transient_defaults);
   editor_->set_boundary_groups(boundary_groups);
   editor_->set_volume_groups(volume_groups);
   editor_->set_item(buffer_item_);

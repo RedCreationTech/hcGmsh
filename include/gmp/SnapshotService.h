@@ -7,6 +7,7 @@
 // Qt Widgets；UI 决策（目录选择对话框、弹窗、日志呈现）留在 MoosePanel。
 // 实现逐字搬运自 MoosePanel::on_export_snapshot（行为冻结）。
 
+#include <QJsonObject>
 #include <QMap>
 #include <QString>
 #include <QVariantMap>
@@ -56,6 +57,10 @@ class SnapshotService {
                                 QString* input_text,
                                 QMap<QString, QString>* file_sources,
                                 QMap<QString, QString>* file_roles);
+
+  // 提交前确认快照确实由当前（已归一化）输入导出。
+  static bool input_matches_snapshot(const QJsonObject& manifest,
+                                     const QString& normalized_input);
 
   // 总编排：版本目录分配（case-<timestamp>，撞名加 -2 后缀）→ cfg 组装
   // （项目哈希、单位因子、快照内 basename 网格路径重写）→ 导出。

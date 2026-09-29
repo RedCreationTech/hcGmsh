@@ -173,8 +173,8 @@ QString latest_project_snapshot(const QString& project_path) {
   if (project_path.trimmed().isEmpty()) {
     return {};
   }
-  const QDir project_dir(QFileInfo(project_path).absolutePath());
-  const QFileInfoList candidates = project_dir.entryInfoList(
+  const QDir snapshot_dir(project_artifact_paths(project_path).first);
+  const QFileInfoList candidates = snapshot_dir.entryInfoList(
       {QStringLiteral("case-*")}, QDir::Dirs | QDir::NoDotAndDotDot,
       QDir::Time);
   for (const QFileInfo& candidate : candidates) {
@@ -1719,11 +1719,12 @@ void MoosePanel::on_submit_job() {
     return;
   }
   QString dir = last_snapshot_dir_;
+  QJsonObject manifest;
   QString snapshot_error;
-  if (!read_snapshot_manifest(dir, nullptr, &snapshot_error)) {
+  if (!read_snapshot_manifest(dir, &manifest, &snapshot_error)) {
     dir = latest_project_snapshot(project_path_);
   }
-  if (!read_snapshot_manifest(dir, nullptr, &snapshot_error)) {
+  if (!read_snapshot_manifest(dir, &manifest, &snapshot_error)) {
     const QString start_dir =
         project_path_.isEmpty()
             ? (workdir_path_ && !workdir_path_->text().isEmpty()
@@ -1737,10 +1738,30 @@ void MoosePanel::on_submit_job() {
       return;
     }
   }
-  if (!read_snapshot_manifest(dir, nullptr, &snapshot_error)) {
+  if (!read_snapshot_manifest(dir, &manifest, &snapshot_error)) {
     append_log("Remote submit rejected: " + snapshot_error);
     if (!qEnvironmentVariableIsSet("GMP_SCREENSHOT_DIR")) {
       QMessageBox::warning(this, "Submit Job", snapshot_error);
+    }
+    return;
+  }
+  QString normalized_input = input_editor_->toPlainText();
+  QMap<QString, QString> file_sources;
+  QMap<QString, QString> file_roles;
+  const QString normalize_error = SnapshotService::normalize_refs(
+      mesh_path_ ? mesh_path_->currentText() : QString(), extra_file_sources_,
+      &normalized_input, &file_sources, &file_roles);
+  if (!normalize_error.isEmpty() ||
+      !SnapshotService::input_matches_snapshot(manifest, normalized_input)) {
+    const QString reason = normalize_error.isEmpty()
+                               ? QStringLiteral(
+                                     "The selected Job Snapshot is stale. "
+                                     "Export a new Job Snapshot from the "
+                                     "current input before submitting.")
+                               : normalize_error;
+    append_log("Remote submit rejected: " + reason);
+    if (!qEnvironmentVariableIsSet("GMP_SCREENSHOT_DIR")) {
+      QMessageBox::warning(this, "Submit Job", reason);
     }
     return;
   }
