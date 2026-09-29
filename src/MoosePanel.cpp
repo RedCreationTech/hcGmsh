@@ -173,15 +173,19 @@ QString latest_project_snapshot(const QString& project_path) {
   if (project_path.trimmed().isEmpty()) {
     return {};
   }
-  const QDir snapshot_dir(project_artifact_paths(project_path).first);
-  const QFileInfoList candidates = snapshot_dir.entryInfoList(
-      {QStringLiteral("case-*")}, QDir::Dirs | QDir::NoDotAndDotDot,
-      QDir::Time);
-  for (const QFileInfo& candidate : candidates) {
-    QJsonObject manifest;
-    if (read_snapshot_manifest(candidate.absoluteFilePath(), &manifest) &&
-        snapshot_matches_project(manifest, project_path)) {
-      return candidate.absoluteFilePath();
+  const QStringList snapshot_roots = {
+      project_artifact_paths(project_path).first,
+      QFileInfo(project_path).absolutePath()};
+  for (const QString& root : snapshot_roots) {
+    const QFileInfoList candidates = QDir(root).entryInfoList(
+        {QStringLiteral("case-*")}, QDir::Dirs | QDir::NoDotAndDotDot,
+        QDir::Time);
+    for (const QFileInfo& candidate : candidates) {
+      QJsonObject manifest;
+      if (read_snapshot_manifest(candidate.absoluteFilePath(), &manifest) &&
+          snapshot_matches_project(manifest, project_path)) {
+        return candidate.absoluteFilePath();
+      }
     }
   }
   return {};
