@@ -1,7 +1,7 @@
 # MOOSE 官方算例 Round B CAE 人工复刻与闭环验证手册
 
-> 版本：2026-09-29 v5
-> 计算节点：`192.168.0.138`
+> 版本：2026-10-06 v7（MC01、MC02 人工闭环通过；补充官方教程链接与 MC02 验收记录）
+> 计算节点：本次 MC02 使用 `192.168.0.121`；后续提交前确认实际节点与运行任务
 > 应用：`HC MOOSE CAE [prototype]` / `hc_moose-opt`
 > 参考产物：`examples/hcMooseApp/qualification/MC01～MC05/`
 
@@ -14,7 +14,7 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
   -> 通过 CAE 图形化操作完成几何、网格、材料、物理、边界、分析步和输出
   -> 结构化生成 .i
   -> 导出不可变 Job Snapshot
-  -> 通过 LIMS/C06 提交到 192.168.0.138
+  -> 通过 LIMS/C06 提交到本次确认的计算节点
   -> hc_moose-opt 完成有限元求解
   -> 通过 LIMS 下载结果目录
   -> 导入 CAE Results 工作窗
@@ -44,8 +44,8 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
 
 | 用例 | 当前状态 | 首个必须解决的阻断项 |
 |---|---|---|
-| MC01 瞬态热传导 | 待人工复验 | MC01 专用能力链已交付，需完成 CAE -> 远程求解 -> 结果回导闭环 |
-| MC02 热-结构耦合 | 阻断 | MC01 能力，再加 HeatSource、热膨胀和热-力耦合材料链 |
+| MC01 瞬态热传导 | 已人工通过 | 用户于 2026-09-29 验收；Job `job_20260929_081949_gxr4ra` |
+| MC02 热-结构耦合 | 已人工闭环通过 | 用户于 2026-10-06 确认验证、远程任务执行及 CAE 结果导入均 OK；见 5.14.1 |
 | MC03 无摩擦接触 | 部分具备 | 精确的双立柱二维网格、二维 Contact 支持、预测器及结果量 |
 | MC04 J2 各向同性塑性 | 部分具备 | `IsotropicPlasticityStressUpdate` 及自动材料链、塑性应变场输出 |
 | MC05 Newmark 动力学 | 阻断 | InertialForce、Newmark 速度/加速度辅助链、动力历史输出 |
@@ -56,7 +56,7 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
 
 ### 3.1 环境与证据
 
-1. 启动 LIMS API，CAE 的 Server 使用 `http://127.0.0.1:8200`。
+1. 确认现有 LIMS API 可用，CAE 的 Server 使用 `http://127.0.0.1:8200`；服务已运行时不重复启动或重启。
 2. 启动 CAE，新建独立项目，选择 `HC MOOSE CAE [prototype]`。
 3. 每例使用独立项目：`roundb-mc01.gmp.yaml`～`roundb-mc05.gmp.yaml`。
 4. 每例记录项目路径、生成 `.i`、生成报告、快照目录、Job ID、终态、制品清单和结果截图。
@@ -86,15 +86,18 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
 | 项目 | 内容 |
 |---|---|
 | 人工测试编号 | `TEST-MOOSE-B-MC01-01` |
+| 官方教程 | [Step 3 — Adding additional terms to the heat equation](https://mooseframework.inl.gov/modules/heat_transfer/tutorials/introduction/therm_step03.html) |
 | 官方输入 | `examples/hcMooseApp/qualification/MC01/therm_step03.i` |
 | Round A 参考结果 | `examples/hcMooseApp/qualification/MC01/therm_step03_out.e` |
 | Round A 参考曲线 | `examples/hcMooseApp/qualification/MC01/therm_step03_out_t_sampler_0006.csv` |
 | 目标项目文件 | `roundb-mc01.gmp.yaml` |
 | 目标求解器 | `hc_moose-opt` |
 
+官网同页还介绍增加体热源的 `therm_step03a.i`；MC01 对齐的是不含体热源的 `therm_step03.i`。官网可能随版本更新，本轮数值基准仍使用上述 Round A 冻结文件。
+
 官方算例的物理问题是：一块长 `2`、高 `1` 的二维材料，初始温度均为 `300`；左边始终保持 `300`，右边温度按 `300+5*t` 上升；在 `0～5` 内以 `dt=1` 做瞬态热传导计算。
 
-本轮已交付“通用结构化对象 + MC01 预设”能力。当前状态为**待人工复验**：不再使用 Round A 的 `.e` 作为输入网格，也不需要切换专家/自定义模式手改 `.i`。
+本轮已交付“通用结构化对象 + MC01 预设”能力。MC01 已于 2026-09-29 由用户完成人工闭环：不再使用 Round A 的 `.e` 作为输入网格，也不需要切换专家/自定义模式手改 `.i`。
 
 **能力边界**：变量、函数、材料、Kernel、分析步、向量后处理和输出仍由通用结构化对象、mapping 与生成器承载；只有 MC01 的参考网格、可选类型、最小默认值和输出预设绑定 `hc_moose-opt`。本轮不扩展成“可编辑任意 MOOSE block/参数”的通用编辑器，因为那会同时引入完整语法覆盖、版本兼容和所有现有应用的回归面，却不是 MC01 闭环验收所需。后续只有在多个算例重复需要同一种能力时，才把对应预设上提为跨算例通用能力。
 
@@ -350,33 +353,240 @@ CAE 后处理必须完成以下检查：
 
 ## 5. MC02：二维热-结构耦合
 
-### 5.1 CAE 预处理
+### 5.1 用例身份、当前状态与执行边界
 
-1. 以新的空项目建立与 MC01 相同的 `2 x 1`、`10 x 10` 网格；另建立底边界 `bottom` 和左下角点组 `pin`。
-2. 创建 `T`，初始值 300，并使用 MC01 的热传导、材料、密度和两个温度边界。
-3. 增加体热源：`HeatSource`，`variable=T`，`value=5e4`。
-4. 创建二维 QuasiStatic 有限应变 Physics，自动创建 `disp_x disp_y`，输出 von Mises 应力。
-5. 创建材料链：
+| 项目 | 内容 |
+|---|---|
+| 人工测试编号 | `TEST-MOOSE-B-MC02-01` |
+| 官方教程 | [Step 1 — Basic Thermal/Mechanical Coupling](https://mooseframework.inl.gov/modules/combined/tutorials/introduction/thermomech_step01.html) |
+| 官方冻结输入 | `examples/hcMooseApp/qualification/MC02/thermomech_step01.i` |
+| Round A 参考结果 | `examples/hcMooseApp/qualification/MC02/thermomech_step01_out.e` |
+| 目标项目 | `roundb-mc02.gmp.yaml` |
+| 目标求解器 | `HC MOOSE CAE [prototype]` / `hc_moose-opt` |
+| 生成网格 | `mc02_thermomech_step01.msh` |
+| 结果前缀 | `thermomech_step01_out` |
+| 当前状态 | 2026-10-06 用户确认人工验证、远程任务执行与 CAE 结果导入通过；详细数值比较证据待补 |
 
-   | 对象 | 关键参数 |
-   |---|---|
-   | ComputeIsotropicElasticityTensor | `youngs_modulus=1e9`，`poissons_ratio=0.3` |
-   | ComputeThermalExpansionEigenstrain | `thermal_expansion_coeff=0.001`，`stress_free_temperature=300`，`temperature=T` |
-   | ComputeFiniteStrain | 有限应变，引用热膨胀本征应变 |
-   | ComputeFiniteStrainElasticStress | 弹性应力 |
+2026-10-05 用户指定本轮测试由用户自行执行，AI 完成代码、编译和人工说明，不运行自动巡览、CTest、远程输入检查或求解，不修改 LIMS/C06 配置、注册表或服务。2026-10-06 用户确认已验证通过，提交任务执行后导入结果也均 OK。本次闭环由用户执行，验收范围与证据见 5.14.1；以下步骤保留作为后续复验说明。
 
-6. 约束 `pin` 的 `disp_x=0`，约束 `bottom` 的 `disp_y=0`。
-7. 创建 Transient Step：`0～5`、`dt=1`，SMP `full=true`，线性求解使用 LU。
-8. 启用 Exodus，`file_base=thermomech_step01_out`。
+官方教程以 `thermal_mechanical/thermomech_step01.i` 为输入。该文件的旧注释存在 `thermoech_step01.html` 拼写，本表使用已核验可访问的 `thermomech_step01.html`。官网用于查验建模语义，数值参考仍使用 Round A 冻结输入和结果。
 
-**阻断闸门 MC02-G1**：必须通过 MC01-G1，且 HeatSource、热膨胀材料链、二维点组约束均可由 UI 建立。
+物理问题：`2 x 1` 的二维矩形，`10 x 10` 四边形网格，初温 `300 K`。左边恒温 `300`、右边 `300+5*t`，全域体热源 `5e4`。材料为有限应变线弹性、热膨胀系数 `0.001`，左下角固定 X 位移，底边固定 Y 位移。时间范围 `0～5`，固定 `dt=1`。
 
-### 5.2 `.i` 语义检查与后处理
+### 5.2 官方语义到 CAE 的能力对照
 
-- 热场必须同时作为热膨胀的温度耦合量；不能是两个无引用关系的 Physics。
-- 位移、有限应变、热膨胀和 von Mises 输出必须共存。
-- 下载并导入 `thermomech_step01_out.e`。
-- 分别查看 `T`、`disp_x`、`disp_y` 和 von Mises；温度随时间上升，位移/应力对热载荷产生响应，且约束位置不得出现刚体漂移。
+| 官方块/对象 | CAE 结构化入口 | 生成语义 | 人工验证位置 |
+|---|---|---|---|
+| GeneratedMeshGenerator + ExtraNodesetGenerator | Mesh → Create MC02 Reference Mesh | FileMeshGenerator；MSH 内置左下角 `pin` nodeset | 5.3、5.8、5.10 |
+| Variables/T、热传导、热容、热学材料与密度 | Variables、Loads、Materials | 保留 MC01 热学链 | 5.4～5.5 |
+| HeatSource | Loads → Heat Source (MC02) 模板或 Type | `HeatSource(T, value=5e4)` | 5.5、5.10 |
+| GlobalParams + QuasiStatic | Physics 快捷表单 | 二维位移、FINITE、自动本征应变、von Mises | 5.7、5.10 |
+| 弹性张量、热膨胀、有限应变应力 | Materials 的三个 MC02 模板 | 三对象材料链 | 5.6、5.10 |
+| pin_x / bottom_y | BC 快捷表单 + 分组指派 | `disp_x=0 @ pin`、`disp_y=0 @ bottom` | 5.8 |
+| SMP / LU / Transient | Steps 快捷表单 | `SMP(full=true)`；PETSc `-pc_type lu`；固定步长 | 5.9 |
+| Outputs/Exodus | Outputs 快捷表单 | 仅 Exodus，无强制采样 CSV | 5.9、5.12 |
+
+`pin` 采用 CAE Native Equivalent：MSH 2.2 中的 0 维物理组与一个 POINT 单元，挂在已有的 `(0,0,0)` 节点上，不增加节点或求解域单元。libMesh 将其读为命名 nodeset，与官方 ExtraNodesetGenerator 的点约束语义一致。实现依据见 [libMesh GmshIO 源码](https://mooseframework.inl.gov/docs/doxygen/libmesh/gmsh__io_8C_source.html)。该路径已包含在用户确认通过的本次远程实算中。
+
+QuasiStatic 负责生成有限应变计算对象；**不另行手工添加 ComputeFiniteStrain 材料**，避免与 action 生成的对象重复。
+
+### 5.3 新建项目与参考网格
+
+1. 启动更新后的 GMP-ISE，新建空项目，应用选择 `HC MOOSE CAE [prototype]`。
+2. 保存为 `roundb-mc02.gmp.yaml`；先保存再生成网格。
+3. 打开顶部“网格 / Mesh”菜单，点击 **Create MC02 Reference Mesh**。
+4. 状态栏应显示 `MC02 reference mesh created: 121 nodes, 100 QUAD4.`。
+5. 确认 Mesh 下登记的是 `mc02_thermomech_step01.msh`，视口为 `2 x 1` 二维矩形。
+6. 网格清单应有 `domain(dim=2)`，`bottom/right/top/left(dim=1)`，`pin(dim=0)`。`pin` 只含左下角 `(0,0,0)` 的一个节点。
+7. 总记录数为 `141`：100 QUAD4 域单元 + 40 LINE2 边界单元 + 1 POINT；求解域仍只有 100 单元、121 节点。
+8. 保存，记录 `MC02-01-project-mesh.png`。
+
+不要选 MC01 网格代替本步：它没有 pin 点组。
+
+### 5.4 温度变量、函数与温度边界
+
+按 MC01 第 4.4～4.6 节的同一路径，从模型树分别建立：
+
+| 分类 | 对象名 | 参数 |
+|---|---|---|
+| Variables | `T` | `family=LAGRANGE`、`order=FIRST`、`initial_condition=300` |
+| Functions | `right_temperature` | Type=`ParsedFunction`、Expression=`300+5*t` |
+| BC | `t_left` | Type=`DirichletBC`、Variable=`T`、Value=`300`；选 `left` 后应用 |
+| BC | `t_right` | Type=`FunctionDirichletBC`、Variable=`T`、Function=`right_temperature`；选 `right` 后应用 |
+
+变量使用 CAE 的结构化高级参数表；其余使用快捷表单。对象编辑完成后点击“确定”，确认修改已提交到模型树。此时不创建 disp_x/disp_y 变量节点，后续由 Physics 自动创建。
+
+### 5.5 热学材料、热传导与体热源
+
+1. Materials 添加 `thermal`：Type=`HeatConductionMaterial`，导热系数 `45`、比热 `0.5`。
+2. Materials 添加 `density`：Type=`GenericConstantMaterial`，Prop Names=`density`、Prop Values=`8000`。
+3. 两个材料都不指派 block，作用于唯一全域。
+4. Loads 添加 `heat_conduction`：Type=`HeatConduction`、Variable=`T`。
+5. Loads 添加 `time_derivative`：Type=`HeatConductionTimeDerivative`、Variable=`T`。
+6. Loads 添加 `heat_source`：选择 **Heat Source (MC02)** 模板，点击“应用模板”；或选择 Type=`HeatSource` 后手动填写 Variable=`T`、Value=`5e4`。Function 下拉选择空白项，不指派物理体。应用常量模板会主动清除该对象已有的 function 引用。
+7. 预览检查：前两个 Kernel 没有残留 `value`，只有 heat_source 有 `value=5e4`；热源没有 `function` 引用。
+8. 保存，记录 `MC02-02-thermal-source.png`。
+
+#### 5.5.1 Function 空值与常量模板定向人工复验（2026-10-05 修复）
+
+本次用户截图中 Function 显示 right_temperature，但实际保存的 heat_source 参数和生成的 .i 均未包含 function。原因是共用下拉回显将“未设置”显示为第一项；另外常量模板曾未明确移除已经保存的 function，两个问题分别修复。以下复验由用户执行，AI 未运行 GUI/CTest 或远程求解。
+
+1. 重启更新后的应用，打开当前 roundb-mc02.gmp.yaml，双击 heat_source。若高级参数没有 function，快捷表单也必须显示空白，不能自动显示 right_temperature；T 和 5e4 仍正确回显。
+2. 在 Function 下拉主动选择 right_temperature，再应用 Heat Source (MC02) 模板。Function 必须清空，高级参数/预览没有 function，type=HeatSource、variable=T、value=5e4。
+3. 再主动选 right_temperature，然后从同一下拉选择第一条空白项，确认可人工撤销引用；点击确定、保存并重开，Function 应继续为空。
+4. 同步模型，检查 [Kernels/heat_source] 仅含 type、variable、value（本例不指派 block），不能残留 function=right_temperature。该测试无需提交作业。
+5. 打开 t_right，已保存的 right_temperature 应正常显示。临时选 Function 空白项时，FunctionDirichletBC 必须报告缺少 function；取消编辑，保留原有温度边界。
+6. 对 Body Force 常量模板同样做“先选择函数、再应用常量模板”的检查；Function 应清空。其他快捷下拉在高级参数不存在对应值时，应显示空白；已有有效值应继续回显。必填项为空仍按原有校验规则处理。
+
+观察数据以对象高级参数和生成输入为准；操作日志只记录对象提交时间，不包含字段明细，不能单凭日志判断某个函数引用是否已保存。
+
+### 5.6 弹性与热膨胀材料链
+
+在 Materials 下依次添加三个对象。双击打开属性，在模板下拉中选择对应模板后点击“应用模板”，再核对快捷字段：
+
+| 对象名 | 模板 / Type | 必须核对的值 |
+|---|---|---|
+| `elasticity` | Isotropic Elasticity (MC02) / ComputeIsotropicElasticityTensor | Young's Modulus **1000 MPa**；Poisson's Ratio `0.3`；存储/预览为 `youngs_modulus=1e9 Pa` |
+| `expansion1` | Thermal Expansion (MC02) / ComputeThermalExpansionEigenstrain | `temperature=T`、`thermal_expansion_coeff=0.001`、`stress_free_temperature=300`、`eigenstrain_name=thermal_expansion` |
+| `stress` | Finite Strain Elastic Stress (MC02) / ComputeFiniteStrainElasticStress | 仅 Type；不携带 Prop Names/Prop Values、E/nu 或热膨胀字段 |
+
+三个对象均保持不选物理体，不创建 Sections。本例为单域全局材料链，Physics 在下一步指派 domain。
+
+**单位检查**：弹性表单按 MPa 显示，输入 1000 对应求解器的 1e9 Pa；不要在 MPa 控件中填写 1e9。热膨胀材料必须使用 0.001，不使用通用 Thermal Expansion 模板的 1e-5 默认值。
+
+记录 `MC02-03-elasticity.png`、`MC02-04-thermal-expansion.png`。
+
+### 5.7 有限应变 QuasiStatic Physics
+
+1. 在模型树 Physics 根节点下添加对象，命名为 `all`，双击打开属性。
+2. Action=`QuasiStatic`，Block=`domain`；若 Block 为空，在可选物理体中选 domain 并应用。
+3. Strain=`FINITE`，add_variables=`true`。
+4. automatic_eigenstrain_names=`true`，generate_output=`vonmises_stress`，save_in_resid=`false`。
+5. volumetric_locking_correction、incremental 保持空白，表示不覆盖 MOOSE 默认值。
+6. 预览应包含上述关键语义，不应出现 CDP 场输出、resid_x/y/z 或手工额外的有限应变材料。
+7. 保存，记录 `MC02-05-physics.png`。
+
+本例通过全局参数自动生成 `displacements='disp_x disp_y'`；二维网格不得生成第三个位移 disp_z。自动本征应变引用将 expansion1 的 `thermal_expansion` 纳入有限应变计算。
+
+### 5.8 点组与底边位移约束
+
+1. BC 添加 `pin_x`，Type=`DirichletBC`、Variable=`disp_x`、Value=`0`。
+2. 在可选边界分组中选择 **pin**，点击“应用所选边界”，Boundary 回显必须为 `pin`。
+3. BC 添加 `bottom_y`，Type=`DirichletBC`、Variable=`disp_y`、Value=`0`；只选 bottom 后应用。
+4. 两个对象都不得带 function 引用；pin_x 不能误选 left，bottom_y 不能误选整个 domain。
+5. pin 点组可用于 DirichletBC / FunctionDirichletBC；压力、接触和 Neumann 面载荷不应提供该点组作为候选。
+6. 保存，记录 `MC02-06-displacement-bcs.png`。
+
+### 5.9 瞬态步和输出
+
+1. Steps 添加 Transient Step，命名为 `thermomechanical_transient`。
+2. Type=`Transient`、Start=`0`、End=`5`、dt=`1`、scheme=`implicit-euler`。
+3. petsc_options_iname 填 `-pc_type`，petsc_options_value 填 `lu`。不添加 MUMPS 选项。
+4. preconditioning_type 选择 `SMP`，preconditioning_full 选择 `true`；两个下拉均需显式选定。
+5. timestepper_type、solve_type、line_search、automatic_scaling 和其他非线性控制保持空白；不启用 IterationAdaptiveDT。
+6. Outputs 添加 `mc02_outputs`：Exodus=`true`、CSV=`false`，file_base=`thermomech_step01_out`。
+7. CDP 场输出全不选，历史套餐保持 custom，各历史开关为 false，Times=false，不选边界。
+8. 不创建 VectorPostprocessors：官方 MC02 只要求 Exodus，工作流应允许它为空。
+9. 保存，记录 `MC02-07-step-outputs.png`。
+
+### 5.10 本地工作流、生成语义与保存重开
+
+1. 点击“校验工作流”，应为 **0 errors**。MC02 不应出现“缺少 MC01 line sampler”或“pin 维度不符”的错误。
+2. 点击“同步模型到 MOOSE 输入”，保存为项目自己的 `thermomech_step01.i`；再同步一次，文本应完全一致。
+3. 仅在预览中核对下表；发现缺项先记录并停止该项，不手改 .i。
+
+| 生成位置 | 预期语义 |
+|---|---|
+| Mesh/file | FileMeshGenerator，引用本项目的 mc02_thermomech_step01.msh；pin 已包含在网格中，因此不另外生成 ExtraNodesetGenerator |
+| GlobalParams | `displacements = 'disp_x disp_y'` |
+| Variables/T | 初值 300、FIRST/LAGRANGE；无手工 disp_z |
+| Kernels | HeatConduction、HeatConductionTimeDerivative、HeatSource，全部引用 T；热源值 5e4 |
+| Materials | thermal(45,0.5)、density(8000)、elasticity(1e9,0.3)、expansion1(T,0.001,300,thermal_expansion)、stress(ComputeFiniteStrainElasticStress) |
+| Physics/SolidMechanics/QuasiStatic/all | domain、FINITE、add_variables=true、automatic_eigenstrain_names=true、generate_output='vonmises_stress' |
+| BCs | t_left(T=300@left)、t_right(T由right_temperature驱动@right)、pin_x(disp_x=0@pin)、bottom_y(disp_y=0@bottom) |
+| Executioner | Transient、start=0、end=5、dt=1、implicit-euler、PETSc -pc_type / lu，无 TimeStepper |
+| Preconditioning/smp | type=SMP、full=true，重复同步后只存在一份 |
+| Outputs | Exodus 开启，file_base=thermomech_step01_out；没有 history_csv、CDP AuxKernels 或反力残差变量 |
+
+4. 保存项目，关闭并重新打开 roundb-mc02.gmp.yaml。
+5. 确认应用仍为 hc_moose-opt、五个材料/三个 Loads/四个 BC/一个 Physics/一个 Step/一个 Outputs 全部恢复，网格路径指向自己的项目。
+6. 再打开 pin_x 属性，pin 候选仍可见且已指派；打开 Physics、Step 核对自动本征应变和 SMP/LU。
+7. 重开后重新校验并同步，文本应与重开前相同。记录 `MC02-08-generated-input.png` 和 `MC02-09-reopen.png`。
+
+另做三个本地定向人工检查，使用副本或完成后恢复原值：
+
+- 将 heat_source 切为 HeatConduction，预览中的 value 应清除；再应用 Heat Source (MC02) 模板，恢复 T/5e4。
+- 将 expansion1.temperature 临时改成 T_missing，工作流校验必须报错；恢复 T 后错误消失。
+- MC02 保存后新建独立 MC01 项目并生成 MC01 网格：候选不应残留 pin，Transient 仍为最小 0～5/dt=1，无 SMP/LU；再打开 MC02 时 pin 和所有参数应恢复。若检查 MC01 完整工作流，仍须按第 4 节建立中心线采样。
+
+### 5.11 用户择时执行输入检查、快照和远程 Job
+
+本节会触发真实计算，应在用户决定 121 上其他任务的资源安排后执行。应用选 hc_moose-opt 只决定本作业的求解器，不需要切换 C06 默认求解器或重启服务。
+
+1. 确认 CAE Server 是本次使用的 LIMS 地址、Project ID 正确，目标 C06 已注册 hc_moose-opt。
+2. 按通用流程点击“检查输入”，由目标应用执行 --check-input。若本机没有该应用，记录当前检查入口的执行位置与原始日志，不把本机缺二进制误判为 MC02 语义错误；远程 Job 的 C06 输入检查必须成功。
+3. 导出**新 Job Snapshot**，确认输入和网格都已打包，Mesh/file 为包内相对路径，solver_id 为 hc_moose-opt。
+4. 不手改快照；若修改任何模型参数，重新同步、保存并导出新快照。
+5. 提交 Job，记录 Job ID；等待 succeeded，并核对 requested/resolved solver_id、HcMooseApp 身份与输入检查日志。
+6. 确认完成 t=1～5 共五个求解步，日志没有 Solve Did NOT Converge。
+7. 通过 LIMS 下载完整任务目录，至少包含生成输入、输入网格、结果 Exodus、求解日志及身份/快照记录。没有采样 CSV 是本例预期。
+
+### 5.12 CAE 结果导入与物理检查
+
+1. 在 Results 选择“导入任务目录”，选择刚下载的 Job 根目录，不能选择 Round A 参考目录替代本次计算。
+2. 确认识别 thermomech_step01_out.e；仅有 Exodus 也应导入成功。
+3. 播放应有六帧 t=0,1,2,3,4,5。逐一查看 T、disp_x、disp_y 和 **单元场** vonmises_stress。
+4. t=0：T 为 300，位移和热应力为零或求解精度下的近零。
+5. t=5：左边 T=300，右边 T=325；内部因 5e4 体热源可以高于 325，不能套用 MC01 的温度上界。
+6. pin 节点 disp_x=0，bottom 全边 disp_y=0；结构对热载荷产生位移/应力响应，没有整体刚体漂移。
+7. vonmises_stress 作为单元输出存在且数值有限；不能用 CDP 诊断量代替它。
+8. 如启用变形显示，记录缩放倍率；数值检查使用原始场值，不能按夸大的显示位移判断误差。
+9. 记录 MC02-10-T-final.png、MC02-11-disp-x.png、MC02-12-disp-y.png、MC02-13-vonmises.png。
+
+### 5.13 与 Round A 参考的人工数值核对
+
+真实 Job 结果登记后，可以另外打开 Round A 参考 thermomech_step01_out.e 用于比较。参考文件不计入本次 Job 产物。
+
+1. 相同物理时间、相同 Point/Cell 关联、相同分量进行比较，优先用数据表，Digits 设为 12 以上。
+2. 先比较六帧的 T、disp_x、disp_y、vonmises_stress 最小值/最大值和均值；可在结果曲线页导出这些统计时间曲线的 CSV，保留两组来源文件。
+3. 对左下角点、四个角点和中心区域做原始场值抽查；节点/单元编号可能不同，按坐标位置或单元所在区域对应，不直接用表格 Index 一一配对。
+4. Round A compare.log 的场量比较容差为相对 5.5e-6、floor=1e-10。人工非零量抽查沿用相对 5.5e-6；参考为零的约束量单列绝对误差并以 1e-10 作为人工检查阈值。后者是本轮人工检查规则，不等同于 Exodiff floor 的定义。
+5. 统计量/几个点相符属于人工数值抽查，**不应写成全场 Exodiff PASS**。如要宣告完整全场数值等价，仍需保存坐标对齐后的完整比较证据；无法完成的行保持待验证，并提供实际输入、结果和日志继续核对。
+
+### 5.14 验收记录与常见阻断
+
+| 检查项 | 状态（PASS/BLOCKED/FAIL/待验证） | 证据 |
+|---|---|---|
+| 空项目、HC 档案、MC02 参考网格和 pin | PASS | 用户确认；项目、网格与快照只读核对通过，见 5.14.1 |
+| 热源与三对象力学材料链 | PASS | 保存项目、当前输入与快照一致；用户确认验证通过 |
+| 二维 Physics、自动本征应变和位移 BC | PASS | bottom_y 已修正为 disp_y；输入与快照核对通过 |
+| SMP/LU、Exodus-only、工作流与远程提交 | PASS | 用户确认已完成远程任务执行 |
+| 幂等同步、保存重开和项目隔离 | 同步一致性 PASS；其他专项待补证据 | 导出后再次同步仍匹配快照；重开/隔离专项记录未单独提供 |
+| 远程输入检查及 hc_moose-opt Job | PASS（用户确认闭环） | Job ID、原始输入检查/求解日志及身份记录待归档 |
+| LIMS 下载与 CAE 目录导入 | PASS（用户确认） | 用户确认执行后导入结果均 OK；结果目录与截图待归档 |
+| 四个场量、时间帧、约束和物理趋势 | 后处理整体 PASS；逐项证据待补 | 用户确认导入和验证 OK；MC02-10～13 未单独提供 |
+| 人工数值抽查 / 全场比较（分开记录） | 待补证据 | 尚未提供比较数据与误差，不声明全场 Exodiff PASS |
+
+发生以下问题时记录原始证据并停止相应阶段：Type/模板缺失、pin 不可选择、生成三维位移、材料残留异类参数、重复有限应变计算、MC02 被要求创建 line sampler、SMP.full 未生成、快照过期、unknown solver_id、输入检查失败、求解不收敛或结果变量缺失。界面缺口填 BLOCKED，真实计算/结果不符合填 FAIL；未执行的项不填 PASS。
+
+#### 5.14.1 本次人工闭环记录（2026-10-06）
+
+用户确认：“已经验证通过了，并且提交了计划任务执行后，又导入结果，都是 OK 的”。据此记录 MC02 的 CAE 建模、生成输入、快照、远程执行和结果导入闭环通过。该记录来自用户人工验收，不代表 AI 执行了自动测试或全场数值比较。
+
+| 追溯项 | 本次记录 |
+|---|---|
+| 项目 | `/Users/a123/Desktop/test/moose/workspace/1005/roundb-mc02.gmp.yaml` |
+| 已核对快照 | `.work/case/roundb-mc02/case-20261005-234323` |
+| 快照导出时间 | 2026-10-05 23:43:23（北京时间） |
+| 应用 / mapping / profile | `hc_moose-opt` / `1.2.0` / `0.3.0`；保持 prototype |
+| 输入 SHA-256 | `fe6998373900bfe12535a9b6149c18b185ca527bcae44612d11550f5d0c2a43d` |
+| 网格 SHA-256 | `004b78a98666af7bce245976cf597598a06d4e16ca72379f18c0ec3d0623c6f3` |
+| 网格组成 | 121 节点、100 QUAD4 域单元、40 LINE2 边界单元、1 POINT pin |
+| 提交前核对 | 保存项目与当前输入一致；网格引用归一化后与快照输入一致；输入、网格哈希均匹配清单 |
+| 用户执行结果 | 人工验证通过、远程任务执行后结果导入 OK |
+| 待归档证据 | 实际 Job ID、执行身份/日志、结果目录、截图及数值比较数据；本次未单独提供，不填写推测值 |
+
+本轮改动：新增 MC02 参考网格与 pin 点组；补齐 HeatSource、热膨胀、有限应变弹性应力模板和 HC mapping；生成二维位移与自动本征应变 Physics；允许 Exodus-only 工作流；保存/重开恢复点组候选；修复可选下拉空值回显和常量模板清除 function。人工走查发现的 bottom_y 误配为 T 已由用户在界面改为 disp_y，修正进入上述快照。
 
 ## 6. MC03：二维无摩擦接触
 
@@ -459,8 +669,8 @@ CAE 后处理必须完成以下检查：
 
 | 用例 | CAE 预处理 | `.i` 语义 | `--check-input` | 远程 Job | LIMS 下载 | CAE 后处理 | Job ID / 备注 |
 |---|---|---|---|---|---|---|---|
-| MC01 | 待人工复验 | 待人工复验 | 待验证 | 待验证 | 待验证 | 待验证 | MC01 专用能力链已通过定向巡览 |
-| MC02 | BLOCKED | 待验证 | 待验证 | 待验证 | 待验证 | 待验证 | MC02-G1 |
+| MC01 | PASS | PASS | PASS | PASS | PASS | PASS | 用户 2026-09-29 确认；job_20260929_081949_gxr4ra |
+| MC02 | PASS | PASS | PASS（用户确认） | PASS | PASS | PASS | 用户 2026-10-06 确认人工闭环；Job ID 与数值比较证据待归档，见 5.14.1 |
 | MC03 | BLOCKED | 待验证 | 待验证 | 待验证 | 待验证 | 待验证 | MC03-G1 |
 | MC04 | BLOCKED | 待验证 | 待验证 | 待验证 | 待验证 | 待验证 | MC04-G1 |
 | MC05 | BLOCKED | 待验证 | 待验证 | 待验证 | 待验证 | 待验证 | MC05-G1 |

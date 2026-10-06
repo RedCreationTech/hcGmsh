@@ -34,6 +34,7 @@ class PropertyEditor : public QWidget {
   // 句柄；仅依赖 current_item_ 时，项目重开后未选中任何节点会误判引用悬空。
   void set_model_tree(QTreeWidget* tree);
   void set_boundary_groups(const QStringList& names);
+  void set_node_groups(const QStringList& names);
   void set_volume_groups(const QStringList& names);
   // W-03a：显示→求解单位换算因子（decision 7），键为量纲（pressure 等），
   // 满足 solver = display * factor；来自活动档案 unit_contract 的
@@ -164,6 +165,7 @@ class PropertyEditor : public QWidget {
   QMap<QString, QWidget*> form_widgets_;
   bool form_updating_ = false;
   QStringList boundary_groups_;
+  QStringList node_groups_;
   QStringList volume_groups_;
   QMap<QString, double> display_unit_factors_;
   QStringList physics_action_options_ = {"QuasiStatic"};

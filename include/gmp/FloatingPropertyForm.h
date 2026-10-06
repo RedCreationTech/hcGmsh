@@ -35,6 +35,7 @@ class FloatingPropertyForm : public QDialog {
   void place_over_stage(QWidget* stage);
   // W-03a：显示→求解单位换算因子转发给内部 PropertyEditor（决策 7）。
   void set_display_unit_factors(const QMap<QString, double>& factors);
+  void set_node_groups(const QStringList& names);
   // HARD-050：校验后的缓冲值由宿主提交为领域命令。
   void set_commit_callback(
       std::function<bool(QTreeWidgetItem*, const QString&,

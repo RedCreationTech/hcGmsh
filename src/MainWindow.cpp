@@ -5442,6 +5442,8 @@ void MainWindow::build_menu() {
   action_import_exodus_->setObjectName("importExodusMeshAction");
   auto* create_mc01_mesh = mesh_menu->addAction("Create MC01 Reference Mesh");
   create_mc01_mesh->setObjectName("createMc01ReferenceMeshAction");
+  auto* create_mc02_mesh = mesh_menu->addAction("Create MC02 Reference Mesh");
+  create_mc02_mesh->setObjectName("createMc02ReferenceMeshAction");
   action_mesh_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
   action_preview_mesh_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_M));
 
@@ -5561,6 +5563,7 @@ void MainWindow::build_menu() {
       }
       refresh_job_table();
       property_editor_->set_item(nullptr);
+      property_editor_->set_node_groups({});
       // 2026-09-19-027：新建项目必须清空舞台（网格/结果、变量数组列表、
       // 组筛选与拾取态），否则旧项目网格在中央舞台残留。
       if (viewer_) {
@@ -5812,6 +5815,8 @@ void MainWindow::build_menu() {
           [this]() { on_import_exodus_mesh(); });
   connect(create_mc01_mesh, &QAction::triggered, this,
           [this]() { create_mc01_reference_mesh(); });
+  connect(create_mc02_mesh, &QAction::triggered, this,
+          [this]() { create_thermal_reference_mesh(true); });
   connect(action_run_, &QAction::triggered, this, [this]() {
     if (moose_panel_) {
       moose_panel_->run_job();
@@ -6738,6 +6743,7 @@ void MainWindow::open_property_form(QTreeWidgetItem* item,
   if (!item || !item->parent()) {
     return;
   }
+  sync_property_editor_groups_from_snapshot();
   if (floating_property_form_) {
     floating_property_form_->show();
     floating_property_form_->raise();
@@ -6756,6 +6762,7 @@ void MainWindow::open_property_form(QTreeWidgetItem* item,
           QStringLiteral("hc_moose-opt"),
       dialog_parent(transient_parent ? transient_parent : this));
   floating_property_form_ = form;
+  form->set_node_groups(mesh_snapshot_.group_names(0));
   form->set_display_unit_factors(display_unit_factors());
   form->set_commit_callback(
       [this](QTreeWidgetItem* target, const QString& name,
@@ -7646,6 +7653,7 @@ void MainWindow::push_context_to_moose_panel() {
     property_editor_->set_minimal_transient_defaults(
         application_profile_.value("id").toString() ==
         QStringLiteral("hc_moose-opt"));
+    sync_property_editor_groups_from_snapshot();
   }
 }
 
@@ -8428,7 +8436,7 @@ QVariantList MainWindow::collect_workflow_issues() const {
   if (!hc_profile) {
     require_children("Sections", "Assign a material to a physical volume.");
     require_children("Physics", "Configure a supported Physics action.");
-  } else {
+  } else if (child_count("Physics") == 0) {
     require_children("VectorPostprocessors",
                      "Configure the MC01 line sampler before submission.");
   }
@@ -8583,11 +8591,29 @@ QVariantList MainWindow::collect_workflow_issues() const {
   for (const ProjectModelEntry& entry : entries_by_kind.value("Variables")) {
     variable_names.insert(entry.name);
   }
+  for (const ProjectModelEntry& entry : entries_by_kind.value("Materials")) {
+    if (entry.params.value("type").toString() ==
+        "ComputeThermalExpansionEigenstrain") {
+      const QString temperature =
+          entry.params.value("temperature").toString().trimmed();
+      if (!temperature.isEmpty() && !variable_names.contains(temperature)) {
+        add_issue("error", "Materials", entry.name, "temperature",
+                  "Thermal expansion must reference an existing temperature variable.");
+      }
+    }
+  }
   QSet<QString> constrained_boundary_dofs;
   for (const ProjectModelEntry& entry : entries_by_kind.value("BC")) {
       const QVariantMap params = entry.params;
-      check_group("BC", entry.name, "boundary",
-                  params.value("boundary").toString(), boundary_dim);
+      const QString bc_type = params.value("type").toString();
+      const bool nodal_bc = bc_type == "DirichletBC" ||
+                            bc_type == "FunctionDirichletBC";
+      for (const auto& boundary : params.value("boundary").toString().split(
+               QRegularExpression("\\s+"), Qt::SkipEmptyParts)) {
+        const int dim = nodal_bc && mesh_snapshot_.has_group(boundary, 0)
+                            ? 0 : boundary_dim;
+        check_group("BC", entry.name, "boundary", boundary, dim);
+      }
       const QString variable = params.value("variable").toString();
       if (!variable.isEmpty() && !variable_names.contains(variable)) {
         add_issue("error", "BC", entry.name, "variable",
@@ -8738,6 +8764,7 @@ void MainWindow::sync_property_editor_groups_from_snapshot() const {
   if (!property_editor_) {
     return;
   }
+  property_editor_->set_node_groups(mesh_snapshot_.group_names(0));
   int model_dim = mesh_snapshot_.mesh_dim;
   if (model_dim < 0) {
     for (const auto& group : mesh_snapshot_.groups) {
@@ -9436,9 +9463,14 @@ void MainWindow::upsert_mesh_item(const QString& path) {
 }
 
 void MainWindow::create_mc01_reference_mesh() {
+  create_thermal_reference_mesh(false);
+}
+
+void MainWindow::create_thermal_reference_mesh(bool with_pin) {
+  const QString case_name = with_pin ? "MC02" : "MC01";
   if (project_path_.isEmpty()) {
-    QMessageBox::warning(this, "Create MC01 Reference Mesh",
-                         "Save the project before creating its MC01 mesh.");
+    QMessageBox::warning(this, "Create " + case_name + " Reference Mesh",
+                         "Save the project before creating its reference mesh.");
     return;
   }
   const QString dir = project_case_work_dir(project_path_);
@@ -9447,17 +9479,22 @@ void MainWindow::create_mc01_reference_mesh() {
                              4000);
     return;
   }
-  const QString path = QDir(dir).filePath("mc01_therm_step03.msh");
+  const QString path = QDir(dir).filePath(
+      with_pin ? "mc02_thermomech_step01.msh" : "mc01_therm_step03.msh");
   QSaveFile file(path);
   if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
-    statusBar()->showMessage("Failed to create the MC01 mesh.", 4000);
+    statusBar()->showMessage("Failed to create the " + case_name + " mesh.", 4000);
     return;
   }
   QTextStream out(&file);
   out << "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n";
-  out << "$PhysicalNames\n5\n"
+  out << "$PhysicalNames\n" << (with_pin ? 6 : 5) << '\n'
       << "1 1 \"bottom\"\n1 2 \"right\"\n1 3 \"top\"\n"
-      << "1 4 \"left\"\n2 5 \"domain\"\n$EndPhysicalNames\n";
+      << "1 4 \"left\"\n2 5 \"domain\"\n";
+  if (with_pin) {
+    out << "0 6 \"pin\"\n";
+  }
+  out << "$EndPhysicalNames\n";
   out << "$Nodes\n121\n";
   auto node = [](int i, int j) { return j * 11 + i + 1; };
   for (int j = 0; j <= 10; ++j) {
@@ -9466,7 +9503,7 @@ void MainWindow::create_mc01_reference_mesh() {
           << QString::number(j * 0.1, 'g', 12) << " 0\n";
     }
   }
-  out << "$EndNodes\n$Elements\n140\n";
+  out << "$EndNodes\n$Elements\n" << (with_pin ? 141 : 140) << '\n';
   int element = 1;
   for (int i = 0; i < 10; ++i) {
     out << element++ << " 1 2 1 1 " << node(i, 0) << ' ' << node(i + 1, 0)
@@ -9490,9 +9527,13 @@ void MainWindow::create_mc01_reference_mesh() {
           << ' ' << node(i + 1, j + 1) << ' ' << node(i, j + 1) << '\n';
     }
   }
+  // Gmsh type 15 is read by libMesh as a nodeset, not a domain element.
+  if (with_pin) {
+    out << element++ << " 15 2 6 6 " << node(0, 0) << '\n';
+  }
   out << "$EndElements\n";
   if (!file.commit()) {
-    statusBar()->showMessage("Failed to save the MC01 mesh.", 4000);
+    statusBar()->showMessage("Failed to save the " + case_name + " mesh.", 4000);
     return;
   }
 
@@ -9502,8 +9543,8 @@ void MainWindow::create_mc01_reference_mesh() {
   manifest.mesh_sha256 = sha256_file_hex(path, &hash_ok);
   manifest.mesh_dim = 2;
   manifest.node_count = 121;
-  // Includes 100 QUAD4 domain elements and 40 LINE2 boundary elements.
-  manifest.element_count = 140;
+  // 100 QUAD4 + 40 LINE2, and optionally one POINT for the pin nodeset.
+  manifest.element_count = with_pin ? 141 : 140;
   manifest.element_type = "QUAD4";
   auto group = [](const QString& name, int dim, int tag, int count) {
     PhysicalGroupEntry entry;
@@ -9517,24 +9558,28 @@ void MainWindow::create_mc01_reference_mesh() {
   manifest.groups = {group("bottom", 1, 1, 10), group("right", 1, 2, 10),
                      group("top", 1, 3, 10), group("left", 1, 4, 10),
                      group("domain", 2, 5, 100)};
+  if (with_pin) {
+    manifest.groups << group("pin", 0, 6, 1);
+  }
   if (!hash_ok) {
-    statusBar()->showMessage("The MC01 mesh manifest is invalid.", 4000);
+    statusBar()->showMessage("The " + case_name + " mesh manifest is invalid.", 4000);
     return;
   }
   mesh_snapshot_ = manifest;
   upsert_mesh_item(manifest.mesh_path);
   property_editor_->set_boundary_groups({"bottom", "right", "top", "left"});
   property_editor_->set_volume_groups({"domain"});
+  property_editor_->set_node_groups(manifest.group_names(0));
   gmsh_panel_->set_physical_group_manifest(manifest.to_variant_map());
   moose_panel_->set_boundary_groups({"bottom", "right", "top", "left"});
   moose_panel_->set_mesh_path(manifest.mesh_path);
   viewer_->set_mesh_file(manifest.mesh_path);
   push_context_to_moose_panel();
   refresh_module_pages();
-  statusBar()->showMessage("MC01 reference mesh created: 121 nodes, 100 QUAD4.",
+  statusBar()->showMessage(case_name + " reference mesh created: 121 nodes, 100 QUAD4.",
                            5000);
   gmp::log_operation("mesh",
-                     "MC01 reference mesh created: " + manifest.mesh_path);
+                     case_name + " reference mesh created: " + manifest.mesh_path);
 }
 
 void MainWindow::on_import_exodus_mesh() {
@@ -10442,6 +10487,14 @@ QVariantMap MainWindow::default_params_for_kind(const QString& kind) const {
             {"file_base", ""}};
   }
   if (kind == "Physics") {
+    if (application_profile_.value("id").toString() == "hc_moose-opt") {
+      return {{"action", "QuasiStatic"},
+              {"block", mesh_snapshot_.group_names(mesh_snapshot_.mesh_dim)
+                            .join(" ")},
+              {"strain", "FINITE"}, {"add_variables", "true"},
+              {"automatic_eigenstrain_names", "true"},
+              {"generate_output", "vonmises_stress"}, {"save_in_resid", "false"}};
+    }
     // W-03b：v01 QuasiStatic 口径默认值。block 默认取第一个 CDP 材料的
     // Section 指派体组（W-01b 通道），可手改/用体组 chips。
     QString block;
@@ -10755,6 +10808,7 @@ QStringList MainWindow::material_type_options() const {
   if (application_profile_.value("id").toString() ==
       QStringLiteral("hc_moose-opt")) {
     options.insert(2, "HeatConductionMaterial");
+    options << "ComputeFiniteStrainElasticStress";
   }
   return options;
 }
@@ -10767,6 +10821,7 @@ QStringList MainWindow::load_type_options() const {
   if (application_profile_.value("id").toString() ==
       QStringLiteral("hc_moose-opt")) {
     options << "HeatConductionTimeDerivative";
+    options << "HeatSource";
   }
   if (active_profile_supports_block("BCs") &&
       mapping_registry_.has_object_type("BCs", "Pressure")) {
@@ -10785,6 +10840,10 @@ QStringList MainWindow::interaction_type_options() const {
 }
 
 QString MainWindow::resolve_displacements() const {
+  if (application_profile_.value("id").toString() == "hc_moose-opt" &&
+      mesh_snapshot_.mesh_dim == 2) {
+    return "disp_x disp_y";
+  }
   // [GlobalParams] displacements 由档案声明决定；档案未声明时按固体力学
   // 默认 'disp_x disp_y disp_z'（v01 验收基线）。
   const ApplicationProfile profile = app_profile_registry_.profile(

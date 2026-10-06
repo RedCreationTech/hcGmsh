@@ -331,6 +331,13 @@ void PropertyEditor::set_volume_groups(const QStringList& names) {
   update_validation();
 }
 
+void PropertyEditor::set_node_groups(const QStringList& names) {
+  node_groups_ = names;
+  const QString kind =
+      current_item_ ? current_item_->data(0, kKindRole).toString() : QString();
+  update_group_widget_for_kind(kind);
+}
+
 void PropertyEditor::set_display_unit_factors(
     const QMap<QString, double>& factors) {
   display_unit_factors_ = factors;
@@ -849,6 +856,14 @@ void PropertyEditor::update_group_widget_for_kind(const QString& kind) {
        (kind == "Loads" &&
         params.value("type").toString() == "Pressure"));
   QStringList source = use_boundary ? boundary_groups_ : volume_groups_;
+  // Point nodesets support prescribed nodal BCs, not pressure or contact.
+  if (kind == "BC" &&
+      (params.value("type").toString() == "DirichletBC" ||
+       params.value("type").toString() == "FunctionDirichletBC")) {
+    for (const auto& name : node_groups_) {
+      if (!source.contains(name)) source << name;
+    }
+  }
   if (source.isEmpty()) {
     // E3 空列表占位：灰色不可选引导文案，仅 count==0 时插入，
     // 非空清单无占位，不影响 groups_list_->count() 类断言。
@@ -1177,6 +1192,7 @@ QStringList PropertyEditor::validate_params(const QString& kind,
     } else if (type == "ComputeThermalExpansionEigenstrain") {
       require_key("thermal_expansion_coeff");
       require_key("temperature");
+      require_key("eigenstrain_name");
     } else if (type == "AbaqusCDP") {
       // W-03a：CDP 三件套表单合同（v01 验收基线）。youngs_modulus 在
       // params 中为 SI 求解值（Pa），表单以 MPa 显示。
@@ -1256,7 +1272,7 @@ QStringList PropertyEditor::validate_params(const QString& kind,
     if (type != "TensorMechanics") {
       require_key("variable");
     }
-    if (type == "BodyForce") {
+    if (type == "BodyForce" || type == "HeatSource") {
       if (params.value("value").toString().trimmed().isEmpty() &&
           params.value("function").toString().trimmed().isEmpty()) {
         missing << "value or function";
@@ -1538,8 +1554,9 @@ QVariantMap PropertyEditor::build_type_template(const QString& kind,
     } else {
       t.insert("variable", type == "Pressure" ? "disp_z" : var);
     }
-    if (type == "BodyForce") {
-      t.insert("value", "1.0");
+    if (type == "BodyForce" || type == "HeatSource") {
+      t.insert("value", type == "HeatSource" ? "5e4" : "1.0");
+      t.insert("function", QString());
     } else if (type == "MatDiffusion") {
       t.insert("diffusivity", "diff_u");
     } else if (type == "Pressure") {
@@ -1573,6 +1590,12 @@ QVariantMap PropertyEditor::build_type_template(const QString& kind,
     t.insert("penalty", "1e12");
     t.insert("normalize_penalty", "true");
   } else if (kind == "Physics") {
+    if (minimal_transient_defaults_) {
+      return {{"action", "QuasiStatic"}, {"strain", "FINITE"},
+              {"add_variables", "true"},
+              {"automatic_eigenstrain_names", "true"},
+              {"generate_output", "vonmises_stress"}, {"save_in_resid", "false"}};
+    }
     // W-03b：v01 验收基线默认值（与 default_params_for_kind 对齐）；
     // block 不覆盖（由 Section 指派/chips 填入）。
     t.insert("action", "QuasiStatic");
@@ -1669,7 +1692,8 @@ void PropertyEditor::apply_template_values(const QVariantMap& values,
                  "tension_stiffening_file",
                  "tension_damage_file"};
     }
-    if (!allowed.isEmpty() || type == "ComputeLinearElasticStress") {
+    if (!allowed.isEmpty() || type == "ComputeLinearElasticStress" ||
+        type == "ComputeFiniteStrainElasticStress") {
       for (const auto& key : known_type_keys) {
         if (!allowed.contains(key) && params.remove(key) > 0) {
           changed = true;
@@ -1684,7 +1708,7 @@ void PropertyEditor::apply_template_values(const QVariantMap& values,
         "factor", "component", "use_displaced_mesh", "displacements",
         "block"};
     QSet<QString> allowed;
-    if (type == "BodyForce") {
+    if (type == "BodyForce" || type == "HeatSource") {
       allowed = {"value", "function"};
     } else if (type == "MatDiffusion") {
       allowed = {"diffusivity"};
@@ -1702,6 +1726,14 @@ void PropertyEditor::apply_template_values(const QVariantMap& values,
   }
   for (auto it = values.begin(); it != values.end(); ++it) {
     if (!overwrite && !params.value(it.key()).toString().trimmed().isEmpty()) {
+      continue;
+    }
+    // An explicit empty template value unsets the parameter. Omitted keys
+    // still preserve compatible user settings and group assignments.
+    if (it.value().toString().isEmpty()) {
+      if (params.remove(it.key()) > 0) {
+        changed = true;
+      }
       continue;
     }
     if (params.value(it.key()) != it.value()) {
@@ -2066,7 +2098,13 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     if (!object_name.isEmpty()) {
       combo->setObjectName(object_name);
     }
-    combo->addItems(items);
+    QStringList choices = items;
+    // Optional load functions need an explicit unset choice. Required BC
+    // functions share the control; their validator rejects an empty value.
+    if (key == "function" && !choices.contains(QString())) {
+      choices.prepend(QString());
+    }
+    combo->addItems(choices);
     combo->setEditable(true);
     form_layout_->addRow(label, combo);
     form_widgets_.insert(key, combo);
@@ -2275,12 +2313,16 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     add_line("End Time (s)", "end_time", "stepEndTime");
     add_line("num_steps", "num_steps", "stepNumSteps");
     add_section("Solve Control");
-    add_combo("solve_type", "solve_type", {"NEWTON", "PJFNK"},
+    const auto optional_choices = [this](QStringList choices) {
+      if (minimal_transient_defaults_) choices.prepend(QString());
+      return choices;
+    };
+    add_combo("solve_type", "solve_type", optional_choices({"NEWTON", "PJFNK"}),
               "stepSolveType");
     add_combo("line_search", "line_search",
-              {"bt", "basic", "none", "cp", "l2", "shell", "default"},
+              optional_choices({"bt", "basic", "none", "cp", "l2", "shell", "default"}),
               "stepLineSearch");
-    add_combo("automatic_scaling", "automatic_scaling", {"true", "false"},
+    add_combo("automatic_scaling", "automatic_scaling", optional_choices({"true", "false"}),
               "stepAutomaticScaling");
     add_line("nl_rel_tol", "nl_rel_tol", "stepNlRelTol");
     add_line("nl_abs_tol", "nl_abs_tol", "stepNlAbsTol");
@@ -2293,7 +2335,7 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     add_line("l_max_its", "l_max_its", "stepLMaxIts");
     add_line("l_tol", "l_tol", "stepLTol");
     add_section("Time Stepping");
-    add_combo("timestepper_type", "timestepper_type", {"IterationAdaptiveDT"},
+    add_combo("timestepper_type", "timestepper_type", optional_choices({"IterationAdaptiveDT"}),
               "stepTimeStepperType");
     add_line("dt (s)", "dt", "stepDt");
     add_line("optimal_iterations", "optimal_iterations",
@@ -2304,10 +2346,10 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     add_line("dtmin (s)", "dtmin", "stepDtMin");
     add_line("dtmax (s)", "dtmax", "stepDtMax");
     add_section("Preconditioning");
-    add_combo("preconditioning_type", "preconditioning_type", {"SMP"},
+    add_combo("preconditioning_type", "preconditioning_type", optional_choices({"SMP"}),
               "stepPreconditioningType");
     add_combo("preconditioning_full", "preconditioning_full",
-              {"true", "false"}, "stepPreconditioningFull");
+              optional_choices({"true", "false"}), "stepPreconditioningFull");
   } else if (kind == "Functions") {
     // W-03c：ParsedFunction（expression）/ PiecewiseLinear（x/y 数据对，
     // 空格分隔，个数需一致）。
@@ -2409,12 +2451,18 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
               "physicsActionCombo");
     add_line("Block", "block", "physicsBlockEdit");
     add_combo("Strain", "strain", {"SMALL", "FINITE"}, "physicsStrainCombo");
+    const QStringList optional_bools = minimal_transient_defaults_
+        ? QStringList{QString(), "true", "false"} : QStringList{"true", "false"};
     add_combo("volumetric_locking_correction", "volumetric_locking_correction",
-              {"true", "false"}, "physicsVolumetricLocking");
-    add_combo("incremental", "incremental", {"true", "false"},
+              optional_bools, "physicsVolumetricLocking");
+    add_combo("incremental", "incremental", optional_bools,
               "physicsIncremental");
     add_combo("add_variables", "add_variables", {"true", "false"},
               "physicsAddVariables");
+    if (minimal_transient_defaults_) {
+      add_combo("automatic_eigenstrain_names", "automatic_eigenstrain_names",
+                {"true", "false"}, "physicsAutomaticEigenstrainNames");
+    }
     add_line("generate_output", "generate_output", "physicsGenerateOutput");
     add_combo("save_in_resid", "save_in_resid", {"true", "false"},
               "physicsSaveInResid");
@@ -2516,6 +2564,23 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     template_descriptions_.insert(
         "Thermal Expansion",
         "Thermal expansion eigenstrain with reference temperature 300.");
+    if (material_type_options_.contains("ComputeFiniteStrainElasticStress")) {
+      template_presets_.insert("Isotropic Elasticity (MC02)",
+          {{"type", "ComputeIsotropicElasticityTensor"},
+           {"youngs_modulus", "1e9"}, {"poissons_ratio", "0.3"}});
+      template_descriptions_.insert("Isotropic Elasticity (MC02)",
+          "MC02 elasticity: E = 1000 MPa (1e9 Pa), nu = 0.3.");
+      template_presets_.insert("Thermal Expansion (MC02)",
+          {{"type", "ComputeThermalExpansionEigenstrain"},
+           {"thermal_expansion_coeff", "0.001"}, {"temperature", "T"},
+           {"stress_free_temperature", "300"}, {"eigenstrain_name", "thermal_expansion"}});
+      template_descriptions_.insert("Thermal Expansion (MC02)",
+          "MC02 thermal expansion coupled to T, stress-free at 300 K.");
+      template_presets_.insert("Finite Strain Elastic Stress (MC02)",
+          {{"type", "ComputeFiniteStrainElasticStress"}});
+      template_descriptions_.insert("Finite Strain Elastic Stress (MC02)",
+          "Elastic stress using finite strain generated by QuasiStatic.");
+    }
     template_presets_.insert(
         "CDP Concrete (Abaqus)",
         {{"type", "AbaqusCDP"},
@@ -2570,7 +2635,8 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
         "Body Force",
         {{"type", "BodyForce"},
          {"variable", default_var},
-         {"value", "1.0"}});
+         {"value", "1.0"},
+         {"function", QString()}});
     template_descriptions_.insert(
         "Body Force",
         "Constant body force on variable.");
@@ -2599,6 +2665,13 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
       template_descriptions_.insert("Heat Conduction Time Derivative",
                                     "Transient heat capacity term for the "
                                     "selected temperature variable.");
+    }
+    if (load_type_options_.contains("HeatSource")) {
+      template_presets_.insert("Heat Source (MC02)",
+          {{"type", "HeatSource"}, {"variable", "T"}, {"value", "5e4"},
+           {"function", QString()}});
+      template_descriptions_.insert("Heat Source (MC02)",
+          "MC02 constant volumetric heat source on T.");
     }
     template_presets_.insert(
         "TensorMechanics",
@@ -2761,7 +2834,8 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
         set_row_visible("fill_method", true);
         set_row_visible("C_ijkl", true);
       } else if (type == "ComputeIsotropicElasticityTensor" ||
-                 type == "ComputeLinearElasticStress") {
+                 type == "ComputeLinearElasticStress" ||
+                 type == "ComputeFiniteStrainElasticStress") {
         set_row_visible("prop_names", false);
         set_row_visible("prop_values", false);
         set_row_visible("expression", false);
@@ -2815,8 +2889,8 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
       set_row_visible("use_displaced_mesh", pressure);
       set_row_visible("diffusivity", type == "MatDiffusion");
       set_row_visible("displacements", type == "TensorMechanics");
-      set_row_visible("value", type == "BodyForce");
-      set_row_visible("function", type == "BodyForce" || pressure);
+      set_row_visible("value", type == "BodyForce" || type == "HeatSource");
+      set_row_visible("function", type == "BodyForce" || type == "HeatSource" || pressure);
     } else if (kind == "Interactions") {
       const bool contact = (type == "Contact");
       for (const auto& key : {"model", "formulation", "primary",
@@ -2880,7 +2954,13 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
         combo->addItem(value);
         combo->setCurrentText(value);
       } else {
-        combo->setCurrentIndex(0);
+        // An unset model parameter must never appear as the first candidate.
+        // The whole population pass is signal-guarded, so this only changes
+        // display and does not silently mutate the object being opened.
+        combo->setCurrentIndex(-1);
+        if (combo->isEditable()) {
+          combo->setEditText(QString());
+        }
       }
     } else if (it.value()) {
       // 文件选择行：容器内第一个 QLineEdit 承载参数值。
@@ -2906,7 +2986,7 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
                apply_defaults](const QString& value) {
                 update_visibility();
                 apply_defaults(value.trimmed());
-                if (kind == "Loads") {
+                if (kind == "Loads" || kind == "BC") {
                   update_group_widget_for_kind(kind);
                 }
               });

@@ -298,7 +298,7 @@ void test_profiles_and_mapping(TestContext& test) {
   gmp::MooseMappingRegistry hc_mapping(
       QDir::current().filePath("templates/moose/mapping-hcmoose-v1.json"));
   test.expect(
-      hc_mapping.is_loaded() && hc_mapping.version() == "1.1.0" &&
+      hc_mapping.is_loaded() && hc_mapping.version() == "1.2.0" &&
           hc_mapping.has_object_type("Kernels", "HeatConduction") &&
           hc_mapping.has_object_type("Kernels",
                                      "HeatConductionTimeDerivative") &&
@@ -306,6 +306,10 @@ void test_profiles_and_mapping(TestContext& test) {
           hc_mapping.has_object_type("VectorPostprocessors",
                                      "LineValueSampler"),
       "HC mapping isolates the MC01 object types");
+  test.expect(hc_mapping.has_object_type("Kernels", "HeatSource") &&
+                  hc_mapping.has_object_type("Materials", "ComputeThermalExpansionEigenstrain") &&
+                  hc_mapping.has_object_type("Materials", "ComputeFiniteStrainElasticStress"),
+              "HC mapping covers MC02 heat source and finite strain material chain");
   const QJsonObject contact =
       mapping.object_schema("Contact", "Contact");
   const QJsonArray required = contact.value("required_params").toArray();

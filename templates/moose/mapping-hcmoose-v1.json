@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "MOOSE 输入 blocks 与对象类型的版本化映射注册表（Phase 0 基线）",
   "blocks": {
     "Mesh": {
@@ -87,6 +87,16 @@
             "variable": { "type": "variable_ref", "label": "温度变量" }
           }
         },
+        "HeatSource": {
+          "required_params": ["type", "variable"],
+          "optional_params": ["value", "function", "block"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "HeatSource", "readonly": true },
+            "variable": { "type": "variable_ref", "label": "温度变量" },
+            "value": { "type": "scalar", "label": "体热源" },
+            "function": { "type": "function_ref", "label": "热源函数" }
+          }
+        },
         "StressDivergenceRZTensors": {
           "required_params": ["type", "variable", "displacements"],
           "optional_params": ["block", "use_displaced_mesh"],
@@ -124,13 +134,14 @@
           "required_params": ["block", "strain"],
           "optional_params": [
             "volumetric_locking_correction", "add_variables", "incremental",
-            "generate_output", "save_in", "displacements"
+            "generate_output", "save_in", "displacements", "automatic_eigenstrain_names"
           ],
           "param_schema": {
-            "block": { "type": "physical_group_list", "dim": 3, "label": "作用区域" },
+            "block": { "type": "physical_group_list", "dimensions": [2, 3], "label": "作用区域" },
             "strain": { "type": "enum", "enum": ["SMALL", "FINITE"], "label": "应变模型" },
             "volumetric_locking_correction": { "type": "bool", "label": "体积自锁修正" },
             "add_variables": { "type": "bool", "label": "自动添加位移变量" },
+            "automatic_eigenstrain_names": { "type": "bool", "label": "自动引用本征应变" },
             "incremental": { "type": "bool", "label": "增量形式" },
             "generate_output": { "type": "variable_list", "label": "场输出量" },
             "save_in": { "type": "variable_list", "label": "残差保存变量" }
@@ -225,6 +236,24 @@
           "optional_params": ["block"],
           "param_schema": {
             "type": { "type": "enum", "value": "ComputeLinearElasticStress", "readonly": true }
+          }
+        },
+        "ComputeThermalExpansionEigenstrain": {
+          "required_params": ["type", "temperature", "thermal_expansion_coeff", "eigenstrain_name"],
+          "optional_params": ["stress_free_temperature", "block"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "ComputeThermalExpansionEigenstrain", "readonly": true },
+            "temperature": { "type": "variable_ref", "label": "温度变量" },
+            "thermal_expansion_coeff": { "type": "scalar", "label": "热膨胀系数" },
+            "stress_free_temperature": { "type": "scalar", "label": "无应力温度" },
+            "eigenstrain_name": { "type": "string", "label": "本征应变名称" }
+          }
+        },
+        "ComputeFiniteStrainElasticStress": {
+          "required_params": ["type"],
+          "optional_params": ["block"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "ComputeFiniteStrainElasticStress", "readonly": true }
           }
         },
         "ComputeMultipleInelasticStress": {

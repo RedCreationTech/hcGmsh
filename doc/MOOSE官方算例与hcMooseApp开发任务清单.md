@@ -1,7 +1,7 @@
 # MOOSE 官方算例与 hcMooseApp 开发任务清单
 
 > 编制日期：2026-09-28
-> 当前状态：Round A 已验收；Round B 基础路由已完成，MC01～MC05 CAE 闭环待开发
+> 当前状态（2026-10-06）：Round A 已验收；Round B 基础路由、MC01 与 MC02 人工闭环已完成；MC02 详细 Job/数值比较证据待归档
 > 本地仓库基线：`main@2dda489fbacd4621dbe817cbf8c1a9b47d065615`
 > 计算节点：`kevin@192.168.0.138`（2026-09-28 由 `192.168.0.121` 切换，同一物理节点）
 > 任务轨道：`TASK-MOOSECASE-*`
@@ -292,8 +292,8 @@ modules:
 | M1 | `hc_moose-opt` 远端构建与身份冻结 | ✅ 完成 |
 | M2 | MC01～MC05 Baseline v1 资格验证 | ✅ 完成 |
 | M3 | 远端接入与身份握手 | ✅ 完成并已提交推送 |
-| M4 | MC01 达 D | 未开始 |
-| M5 | MC02 达 D | 未开始 |
+| M4 | MC01 达 D | ✅ 用户 2026-09-29 人工验收通过 |
+| M5 | MC02 达 D | 用户 2026-10-06 确认人工闭环通过；详细 Job/数值比较证据待归档 |
 | M6 | MC03 达 D | 未开始 |
 | M7 | MC04 达 D | 未开始 |
 | M8 | MC05 达 D，Profile 可评估 production | 未开始 |
@@ -519,3 +519,45 @@ TASK-MOOSECASE-006 的远端准出条件已满足：HcMooseApp 与旧 DamSafetyA
 - 原“Round B 求解器路由人工验收手册”已改写为五例闭环主手册；路由验收作为其公共基础流程。
 - 当前五例都尚有结构化 UI/mapping 阻断项，手册已标明停止闸门，不允许用手改 `.i` 绕过。
 - 后续从 MC01 开始执行 TASK-MOOSECASE-010～110；MC01 达 D 后再进入 MC02，依次完成到 MC05。
+
+## 14. MC02 最小实现与人工验证交付（2026-10-05）
+
+本节为最新状态；前面的 2026-09-28 执行记录保持其历史语境。MC01 已由用户完成人工闭环，成功 Job 为 `job_20260929_081949_gxr4ra`。
+
+本轮开始时 GMP-ISE 为 `main@a4f78c3`，工作区干净。LIMS 本机配置已指向 `192.168.0.121:8357`；只读健康检查显示该节点已注册 `hc_moose-opt`，二进制 SHA 与 Round A 冻结值一致。94/138 的检查超时。这些是瞬时状态，不能替代用户提交前确认。
+
+用户明确指定：121 还有其他求解器任务运行，本轮 AI 只开发并提供人工验证说明，测试由用户自行执行。因此本轮不执行 GUI Tour、CTest、远程输入检查或求解，不调整服务、默认求解器或配置。
+
+| 任务 | 本轮产出 | 状态 |
+|---|---|---|
+| TASK-MOOSECASE-MC02-010 | 手册 5.2 官方块 → CAE 对象 → 生成语义 → 人工验证对照表 | 完成代码/文档审计 |
+| TASK-MOOSECASE-MC02-020 | MC02 参考网格含 pin 点组；HeatSource；热膨胀与有限应变弹性应力；二维位移；QuasiStatic 自动本征应变；复用 SMP/LU；Exodus-only 工作流 | 已实现；用户 2026-10-06 确认验证通过 |
+| TASK-MOOSECASE-MC02-030 | 按本轮用户指示，以手册 5.10 的定向人工检查交付；同步更新既有 mapping 合同断言，但不执行测试 | 用户确认人工验证通过；AI 未运行自动测试 |
+| TASK-MOOSECASE-MC02-040 | Round B 人工手册第 5 节：从空项目建模、输入检查、快照、择时远程提交、结果导入和数值核对 | 已交付 |
+| TASK-MOOSECASE-MC02-050 | 用户完成真实 Job 与 CAE 后处理、记录验收 | 用户确认远程执行与结果导入 OK；闭环通过，详细证据待归档 |
+
+主要改动位于 MainWindow、PropertyEditor、FloatingPropertyForm、MooseInputGenerator、HC 独立 mapping/profile；没有改动 hcMooseApp、DamSafetyApp 或 structlab-lims。
+
+- HC mapping 为 `1.2.0`，profile 为 `0.3.0`，保持 prototype。
+- 官方 ExtraNodesetGenerator 用 MSH 内嵌 0 维 pin nodeset 等价表达；网格仍为 121 节点、100 个 QUAD4 域单元。
+- QuasiStatic 自动生成有限应变计算对象，不额外手工建立 ComputeFiniteStrain 材料。
+- HC 二维位移按网格维度解析，避免默认注入 disp_z；其他档案保留既有解析。
+- 点组仅作为 DirichletBC / FunctionDirichletBC 候选，不混入压力/接触面组；保存重开从持久化清单恢复。
+- HC 可选 Step/Physics 下拉用空白回显“未设置”，避免界面显示 SMP/full=true 却没有写入模型。
+- MC02 具有 Physics 时不强制创建 MC01 的 LineValueSampler；纯热传导 MC01 仍保留该检查。
+
+验收入口：[Round B 人工手册第 5 节](MOOSE官方算例RoundB-CAE人工验证手册.md#5-mc02二维热-结构耦合)。2026-10-06 用户确认人工验证、远程执行与 CAE 结果导入通过，并授权本地改动提交和推送；详细记录见手册 5.14.1。完整数值等价仍需比较数据，不将人工闭环通过表述为全场 Exodiff PASS。
+
+### 14.1 MC02 人工走查修复：Function 空值回显与模板清除
+
+用户在第 5.5 节发现 heat_source 的 Function 显示 right_temperature 且没有空白候选。只读核对其保存项目与生成输入：heat_source 实际仅含 type/variable/value，没有 function；操作日志只显示编辑提交，未包含参数细节。
+
+- 原因一：PropertyEditor 共用下拉回显在模型值为空且候选不含空白时选中第 0 项，使界面显示未保存的引用。已改为所有快捷下拉空值保持未选择；函数下拉增加空白候选，已有值照常回显。
+- 原因二：Heat Source (MC02) / Body Force 常量模板未明确清除兼容的 function 字段，已有引用会被保留。已显式声明空 function，并让模板中的明确空值移除该参数；未声明的其他兼容字段按既有规则处理。
+- 用户实际工程仅做只读检查，未改写其项目/输入。复验入口为人工手册 5.5.1；按用户安排不执行自动测试或远程作业。
+
+### 14.2 用户人工闭环验收（2026-10-06）
+
+用户通过界面修正 bottom_y 为 disp_y，导出 `case-20261005-234323`。只读核对保存项目、当前输入与快照一致，输入与网格哈希均匹配清单。用户随后确认验证通过、远程任务执行后结果导入均 OK，MC02 人工闭环记录为通过。Job ID、结果目录、执行日志和数值比较数据尚未单独提供，保留待归档状态。
+
+人工手册已补充 MC01 `therm_step03.html` 与 MC02 `thermomech_step01.html` 官方教程链接（2026-10-06 核验可访问）；官网用于语义查验，数值基准继续使用本仓库 Round A 冻结输入和产物。

@@ -217,6 +217,10 @@ QString FloatingPropertyForm::settings_key() const {
   return QString("ui/property_form/v2/%1/size").arg(kind);
 }
 
+void FloatingPropertyForm::set_node_groups(const QStringList& names) {
+  editor_->set_node_groups(names);
+}
+
 void FloatingPropertyForm::set_display_unit_factors(
     const QMap<QString, double>& factors) {
   if (editor_) {

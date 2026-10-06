@@ -626,7 +626,8 @@ QString build_physics_action_block(const ProjectModelEntry* child,
     if (value.isEmpty()) {
       continue;
     }
-    out += QString("  %1 = %2\n").arg(it.key(), value);
+    out += QString("  %1 = %2\n").arg(
+        it.key(), MooseInputGenerator::quote_moose_value_if_needed(value));
   }
   out += "[]\n";
   return out;

@@ -1,9 +1,9 @@
 {
   "id": "hc_moose-opt",
   "display_name": "HC MOOSE CAE [prototype]",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "status": "prototype",
-  "status_note": "Round B MC01 热传导能力档案。",
+  "status_note": "Round B MC01 热传导与 MC02 热-结构耦合人工闭环已通过；其余算例继续按 prototype 验证。",
   "solver_program": "hc_moose-opt",
   "solver_id": "hc_moose-opt",
   "compute_environment": "linux-x86_64-gnu-mpi",
@@ -32,7 +32,7 @@
   ],
   "mapping_registry": {
     "path": "../mapping-hcmoose-v1.json",
-    "version": "1.1.0"
+    "version": "1.2.0"
   },
   "check_command": "{solver} -i {input} --check-input",
   "support_level": "prototype",
