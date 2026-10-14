@@ -1,6 +1,6 @@
 # MOOSE 官方算例 Round B CAE 人工复刻与闭环验证手册
 
-> 版本：2026-10-06 v7（MC01、MC02 人工闭环通过；补充官方教程链接与 MC02 验收记录）
+> 版本：2026-10-14 v10（MC02 已完成；补充 MC03 应用档案不匹配的恢复与入口检查）
 > 计算节点：本次 MC02 使用 `192.168.0.121`；后续提交前确认实际节点与运行任务
 > 应用：`HC MOOSE CAE [prototype]` / `hc_moose-opt`
 > 参考产物：`examples/hcMooseApp/qualification/MC01～MC05/`
@@ -45,8 +45,8 @@ Round B 不只是验证求解器路由。完整的验收对象是 MC01～MC05 �
 | 用例 | 当前状态 | 首个必须解决的阻断项 |
 |---|---|---|
 | MC01 瞬态热传导 | 已人工通过 | 用户于 2026-09-29 验收；Job `job_20260929_081949_gxr4ra` |
-| MC02 热-结构耦合 | 已人工闭环通过 | 用户于 2026-10-06 确认验证、远程任务执行及 CAE 结果导入均 OK；见 5.14.1 |
-| MC03 无摩擦接触 | 部分具备 | 精确的双立柱二维网格、二维 Contact 支持、预测器及结果量 |
+| MC02 热-结构耦合 | 已完成（PASS） | 用户于 2026-10-09 再次确认计算完成、结果验证正常；见 5.14.2 |
+| MC03 无摩擦接触 | 最小实现已交付，待用户人工验证 | 按第 6 节从空项目操作、远程执行和结果验收 |
 | MC04 J2 各向同性塑性 | 部分具备 | `IsotropicPlasticityStressUpdate` 及自动材料链、塑性应变场输出 |
 | MC05 Newmark 动力学 | 阻断 | InertialForce、Newmark 速度/加速度辅助链、动力历史输出 |
 
@@ -365,7 +365,7 @@ CAE 后处理必须完成以下检查：
 | 目标求解器 | `HC MOOSE CAE [prototype]` / `hc_moose-opt` |
 | 生成网格 | `mc02_thermomech_step01.msh` |
 | 结果前缀 | `thermomech_step01_out` |
-| 当前状态 | 2026-10-06 用户确认人工验证、远程任务执行与 CAE 结果导入通过；详细数值比较证据待补 |
+| 当前状态 | 已完成（PASS）；2026-10-09 用户确认计算完成且结果验证正常；详细执行与比较附件待归档 |
 
 2026-10-05 用户指定本轮测试由用户自行执行，AI 完成代码、编译和人工说明，不运行自动巡览、CTest、远程输入检查或求解，不修改 LIMS/C06 配置、注册表或服务。2026-10-06 用户确认已验证通过，提交任务执行后导入结果也均 OK。本次闭环由用户执行，验收范围与证据见 5.14.1；以下步骤保留作为后续复验说明。
 
@@ -564,8 +564,8 @@ QuasiStatic 负责生成有限应变计算对象；**不另行手工添加 Compu
 | 幂等同步、保存重开和项目隔离 | 同步一致性 PASS；其他专项待补证据 | 导出后再次同步仍匹配快照；重开/隔离专项记录未单独提供 |
 | 远程输入检查及 hc_moose-opt Job | PASS（用户确认闭环） | Job ID、原始输入检查/求解日志及身份记录待归档 |
 | LIMS 下载与 CAE 目录导入 | PASS（用户确认） | 用户确认执行后导入结果均 OK；结果目录与截图待归档 |
-| 四个场量、时间帧、约束和物理趋势 | 后处理整体 PASS；逐项证据待补 | 用户确认导入和验证 OK；MC02-10～13 未单独提供 |
-| 人工数值抽查 / 全场比较（分开记录） | 待补证据 | 尚未提供比较数据与误差，不声明全场 Exodiff PASS |
+| 四个场量、时间帧、约束和物理趋势 | PASS（用户确认结果验证正常） | 2026-10-09 用户验收；逐项截图附件待归档 |
+| 结果验证 / 全场比较（分开记录） | 结果验证 PASS（用户确认）；全场比较未单独提供 | 2026-10-09 确认结果正常；具体比较方法、数据和误差待归档，不声明全场 Exodiff PASS |
 
 发生以下问题时记录原始证据并停止相应阶段：Type/模板缺失、pin 不可选择、生成三维位移、材料残留异类参数、重复有限应变计算、MC02 被要求创建 line sampler、SMP.full 未生成、快照过期、unknown solver_id、输入检查失败、求解不收敛或结果变量缺失。界面缺口填 BLOCKED，真实计算/结果不符合填 FAIL；未执行的项不填 PASS。
 
@@ -588,29 +588,170 @@ QuasiStatic 负责生成有限应变计算对象；**不另行手工添加 Compu
 
 本轮改动：新增 MC02 参考网格与 pin 点组；补齐 HeatSource、热膨胀、有限应变弹性应力模板和 HC mapping；生成二维位移与自动本征应变 Physics；允许 Exodus-only 工作流；保存/重开恢复点组候选；修复可选下拉空值回显和常量模板清除 function。人工走查发现的 bottom_y 误配为 T 已由用户在界面改为 disp_y，修正进入上述快照。
 
+#### 5.14.2 任务完成确认（2026-10-09）
+
+用户再次确认 MC02 已完成计算，结果验证正常。MC02 开发、人工操作说明、远程计算、结果导入与人工结果验收任务记录为完成（PASS），作为开始 MC03 开发的前置条件已满足。
+
+5.14.1 的项目、快照及哈希保留为此前核对记录；本次未提供新的 Job ID、输入或结果文件，不推测新增执行身份。详细日志、截图和比较附件属于证据归档事项，不再作为 MC02 任务未完成或 MC03 不能开工的阻碍。用户确认结果正常不等同于已取得全场 Exodiff 比较报告。
+
 ## 6. MC03：二维无摩擦接触
 
-### 6.1 CAE 预处理
+### 6.1 用例身份与本轮状态
 
-1. 新建两根平行立柱，每根宽 `0.5`、高 `5`，中间间隙 `0.2`。
-2. 每根立柱使用 `5 x 15` 的二维网格，竖向 bias 为 `0.9`。
-3. 建立两个体组、两个底面组、两个外侧受压面组，以及面向间隙的 `pillar1_right` 和 `pillar2_left`。
-4. 创建有限应变 QuasiStatic Physics，位移为 `disp_x disp_y`，输出 von Mises。
-5. 创建线弹性材料：`E=1e9`、`nu=0.3`，使用有限应变弹性应力。
-6. 两根立柱底部的 `disp_x=0`、`disp_y=0`。
-7. 创建函数 `pressure_curve=1e4*t^2`，在两个外侧面上施加指向间隙的压力。
-8. 创建 Contact：`primary=pillar1_right`、`secondary=pillar2_left`、`model=frictionless`、`formulation=penalty`、`penalty=1e9`、`normalize_penalty=true`。
-9. 创建 Transient Step：`0～5`、`dt=0.5`、`solve_type=NEWTON`、`line_search=none`，LU，SimplePredictor `scale=1`。
-10. 启用 Exodus，`file_base=step01_out`。
+| 项目 | 内容 |
+|---|---|
+| 人工测试编号 | `TEST-MOOSE-B-MC03-01` |
+| 官方教程 | [Step 1 — First Contact](https://mooseframework.inl.gov/modules/contact/tutorials/introduction/step01.html) |
+| 官方冻结输入 | `examples/hcMooseApp/qualification/MC03/step01.i` |
+| Round A 参考结果 | `examples/hcMooseApp/qualification/MC03/step01_out.e` |
+| 目标项目 | `roundb-mc03.gmp.yaml` |
+| 应用 / mapping / profile | `hc_moose-opt` / `1.3.0` / `0.4.0`；保持 prototype |
+| 参考网格 | `mc03_contact_step01.msh` |
+| 结果前缀 | `step01_out` |
+| 本轮状态 | 最小实现与人工步骤已交付；GUI、远程输入检查、求解及结果验收待用户执行 |
 
-**阻断闸门 MC03-G1**：必须确认当前 HC profile 对二维 Contact、双体 FileMesh 和 SimplePredictor 有正式映射。现有三维 Contact 表单通过不等于本例自动通过。
+2026-10-09 用户授权开始 MC03，前置 MC02 已完成人工验收。本轮沿用用户自行测试的安排：AI 开发、编译并提供人工说明，不运行 GUI Tour、CTest 或远程作业，不调整 LIMS/C06 服务或注册表。后续提交前由用户确认实际节点和提交时机。
 
-### 6.2 `.i` 语义检查与后处理
+官方问题为两根宽 0.5、高 5 的二维弹性立柱：左柱 x=-0.6～-0.1，右柱 x=0.1～0.6，初始间隙 0.2；各 5×15 个 QUAD4，竖向 bias_y=0.9。两柱底端固定 X/Y 位移，外侧正压力 1e4*t^2 将它们推向间隙；内侧无摩擦罚接触，penalty=1e9、normalize_penalty=true。时间为 0～5，dt=0.5。
 
-- Contact 必须引用两个不同的命名面组，且为 frictionless + penalty `1e9`。
-- 两个压力方向相反，但都把立柱压向中间；不得因面法线误判而向外加载。
-- 下载并导入 `step01_out.e`，播放 `0～5`。
-- 查看变形和 von Mises：两柱向中间靠拢，进入接触后不得明显互相穿透；日志不得出现 `Solve Did NOT Converge`。
+### 6.2 官方语义与 CAE 对照
+
+| 官方块 | CAE 入口 | 生成内容 |
+|---|---|---|
+| 两个 GeneratedMeshGenerator + MeshCollectionGenerator | Mesh → Create MC03 Reference Mesh | 双立柱原生 MSH；192 节点、150 QUAD4、80 LINE2 边界记录，两柱不连接 |
+| Mesh.patch_update_strategy | Mesh 对象 → Edit Mesh Properties | 外层 Mesh 的 iteration；不放入 FileMeshGenerator 子块 |
+| QuasiStatic / GlobalParams | Physics | FINITE、add_variables=true、disp_x disp_y、vonmises_stress |
+| 两个弹性材料对象 | Materials 的 MC03 模板 | E=1e9、nu=0.3、ComputeFiniteStrainElasticStress |
+| bottom_x / bottom_y | BC | 两柱底边分别约束 disp_x、disp_y |
+| BCs/Pressure/sides | Loads → Pressure (MC03) 模板 | CAE 类型 PressureAction，生成官方 Pressure action，自动覆盖全部位移分量 |
+| Contact/pillars | Interactions → Frictionless Contact (MC03) 模板 | primary/secondary 命名边组、frictionless、penalty=1e9 |
+| Executioner/Predictor | Steps → Contact Transient (MC03) 模板 | NEWTON/none、LU、dt=0.5、SimplePredictor(scale=1) |
+| Outputs | Outputs | Exodus-only；step01_out |
+
+网格属于 CAE Native Equivalent：坐标按 GeneratedMeshGenerator 的 bias 公式生成，y_j=5*(1-0.9^j)/(1-0.9^15)，j=0～15；相邻单元竖向高度之比为 0.9。两个域组 pillar1/pillar2 便于指派同一材料/Physics，不改变两柱不连接的拓扑和本构。公式依据见 [GeneratedMeshGenerator 源码](https://github.com/idaholab/moose/blob/master/framework/src/meshgenerators/GeneratedMeshGenerator.C)。编号、域标签及输出前缀允许不同，求解语义按坐标、边界名称和参数核对。
+
+### 6.3 新建项目、参考网格和接触搜索
+
+1. 启动本轮编译的 CAE，新建独立项目，选择 **HC MOOSE CAE [prototype]**，保存为 roundb-mc03.gmp.yaml。
+   顶部和底部应用标识都应对应 hc_moose-opt；项目名称或 MC03 网格不会自动切换档案。若仍为 DamSafetyApp-opt，先切换并保存。MC03 网格入口现在会对错误档案提示并停止，避免继续创建错误求解器项目。
+2. 打开顶部 **Mesh / 网格 → Create MC03 Reference Mesh**。状态栏应显示 `MC03 reference mesh created: 192 nodes, 150 QUAD4.`。
+3. 视口应显示两根分离的立柱，各 5 列、15 行，顶部网格较密；不要用均匀网格或 MC01/MC02 网格代替。
+4. 确认物理组：2 维域组 pillar1、pillar2；1 维边组 pillar1_bottom/right/top/left 与 pillar2_bottom/right/top/left，共 10 组；没有 pin 点组。
+5. 在模型树 Mesh 下右键 mc03_contact_step01 → **Edit Mesh Properties...**。确认 Mesh File 指向本项目网格，**Patch Update Strategy = iteration**。参考网格会预设此值；不是通过高级参数手工补输入。
+6. 点击确定，保存。记录 MC03-01-mesh.png 和 MC03-02-mesh-search.png。
+
+### 6.4 材料与二维 Physics
+
+1. Materials 添加 elasticity，双击编辑，选择 **Isotropic Elasticity (MC03)**，点击应用模板。快捷字段 Young's Modulus 为 **1000 MPa**、Poisson's Ratio 为 0.3；预览/存储为 youngs_modulus=1e9 Pa。不限制 block，使同一材料应用于两柱。
+2. Materials 添加 stress，应用 **Finite Strain Elastic Stress (MC03)** 模板。只有 Type=ComputeFiniteStrainElasticStress，不应残留密度、热学或弹性张量字段。
+3. Physics 添加 all：Action=QuasiStatic、Strain=FINITE、Add Variables=true、Generate Output=vonmises_stress、Save In Resid=false。
+4. 在分组区同时选择 pillar1 与 pillar2，点击应用所选分组，Block 应为这两个域组。
+5. Automatic Eigenstrain Names 设为 false（本例没有本征应变）。Volumetric Locking Correction、Incremental 保持空白，不套入其他结构分析默认值。
+6. 不另建 ComputeFiniteStrain，QuasiStatic 会生成它；不添加 T、热源、热膨胀、热学/密度材料或 MC01 采样器。Variables 可为空，位移由 Physics 自动建立。
+7. 保存，记录 MC03-03-material-physics.png。生成输入应为 disp_x disp_y，不含 disp_z。
+
+#### 6.4.1 MC03 弹窗缺少材料模板的恢复与人工复验（2026-10-14）
+
+本次截图顶部应用为 DamSafetyApp-opt；只读检查 `/Users/a123/Desktop/test/moose/workspace/1010/roundb-mc03.gmp.yaml` 的 application_profile 也为 DamSafetyApp-opt、solver_id=dam-safety-app、mapping=1.0.0。Materials 弹窗正确按该档案过滤候选，所以不提供 Isotropic Elasticity (MC03) 或 Finite Strain Elastic Stress (MC03)。缺口是此前 MC03 网格入口没有要求 HC 档案，导致错误配置直到材料步骤才暴露；本轮已补入口检查，保留不同应用的模板隔离。
+
+恢复现有项目，无需删除网格或重建项目：
+
+1. 取消当前材料弹窗，在顶部“应用”选择 **HC MOOSE CAE [prototype]**；不要用通用 Linear Elastic 模板代替 MC03。
+2. 保存项目，确认底部应用为 hc_moose-opt；关闭并重开后仍应为该档案。档案版本应为 0.4.0、mapping 为 1.3.0、solver_id 为 hc_moose-opt。
+3. 双击 elasticity，模板下拉必须同时包含 Isotropic Elasticity (MC03) 和 Finite Strain Elastic Stress (MC03)。应用前者，确认 E=1000 MPa、nu=0.3；高级参数/预览为 type=ComputeIsotropicElasticityTensor、youngs_modulus=1e9、poissons_ratio=0.3，原 GenericConstantMaterial 的 prop_names/prop_values 已清除。
+4. 本例材料不限制 block。截图中的“待应用选择 pillar2”只是未提交的选择；若已经应用过分组，在高级参数中删除 block 行，再确定保存，避免材料只作用于一根柱。
+5. 后续按 6.4 添加 stress 和 Physics。已有网格继续使用，核对 iteration 与两柱/八条边组；完成全部对象后再校验、同步、导出新快照。
+
+入口定向复验可在副本执行：切换 DamSafetyApp-opt 后点击 Create MC03 Reference Mesh，应提示切换 HC 档案并停止，已有网格和对象不改变；切回 HC 后可继续正常使用网格入口及材料模板。另一档案不应出现 MC03 专用模板。
+
+已新增定向合同 `mc03_profile_material_templates_contract`，检查 DamSafety→HC→DamSafety 的浮动材料窗候选隔离、MC03 模板的单位与旧字段清理。按用户安排只编译，GUI 合同及以上人工检查由用户执行。
+
+### 6.5 底端约束
+
+1. BC 添加 bottom_x：Type=DirichletBC、Variable=disp_x、Value=0。
+2. 同时选中 pillar1_bottom 与 pillar2_bottom，点击应用所选边界；Boundary 应包含两项，Function 保持空白。
+3. BC 添加 bottom_y，同样指派两个底边，Variable 必须为 **disp_y**、Value=0。
+4. 两个 BC 的边界组相同但位移分量不同；不约束两柱顶边或内侧接触边。保存，记录 MC03-04-bottom-bcs.png。
+
+### 6.6 压力曲线与官方 Pressure action
+
+1. Functions 添加 pressure_curve：Type=ParsedFunction、Expression=`1e4*t^2`，点击确定。
+2. Loads 添加 sides，应用 **Pressure (MC03)** 模板，Type 应为 **PressureAction**、Function=pressure_curve、Factor=1。
+3. 分组区同时选择 **pillar1_left** 和 **pillar2_right**，点击应用所选边界。它们是两柱外侧边，不是接触边。
+4. Variable 和 Component 不应显示为可填字段；该 action 由 GlobalParams 为两个位移分量自动创建压力 BC。Use Displaced Mesh 保持空白，沿用官方 action 默认语义。
+5. 保存，记录 MC03-05-pressure.png。同步后应出现 `[BCs] / [Pressure] / [sides]`，其中 boundary 为两个外侧组、function=pressure_curve。不得在最终 .i 输出 type=PressureAction 或把 sides 写入 Kernels。
+
+正压力沿边界外法线的反方向加载，两侧使用同一个正函数即可向中间压。直接只配置一个 component=0 的 Pressure BC 不能完整复刻官方 action 的两个分量，不作为本例验收路径。action 对全部位移分量展开的依据见 [PressureAction 源码](https://github.com/idaholab/moose/blob/master/modules/solid_mechanics/src/actions/PressureAction.C)。
+
+### 6.7 无摩擦接触
+
+1. Interactions 添加 pillars，选择 **Frictionless Contact (MC03)** 模板，点击应用模板。
+2. 确认 Type=Contact、Model=frictionless、Formulation=penalty、Penalty=1e9、Normalize Penalty=true。
+3. Primary Surface 选择 **pillar1_right**，Secondary Surface 选择 **pillar2_left**；两者必须不同，候选应来自网格的 1 维边组。
+4. Friction Coefficient 不显示；Normal Smoothing Distance、Tangential Tolerance 保持空白，不残留通用接触默认值 5e-4 或 penalty=1e12。
+5. 保存，记录 MC03-06-contact.png。预览显示正确边界组，不能用域组、pin 或实例名代替。
+
+### 6.8 分析步与输出
+
+1. Steps 添加 contact_transient，选择 **Contact Transient (MC03)** 模板，点击应用模板。
+2. 确认 Type=Transient、Start Time=0、End Time=5、dt=0.5、scheme=implicit-euler、solve_type=NEWTON、line_search=none。
+3. PETSc 名称为 -pc_type，值为 lu。Predictor Type=SimplePredictor、Predictor Scale=1。
+4. TimeStepper Type、Preconditioning Type/Full、Automatic Scaling、显式容差及最大步数等保持空白；不带入 MC02 的 SMP 或其他应用的自适应步长设置。
+5. Outputs 添加 mc03_outputs：Exodus=true、CSV=false、file_base=step01_out，所有 CDP 场变量、历史套餐与 Times 保持关闭。
+6. 不创建 VectorPostprocessors。本例只需要 Exodus；位移和 von Mises 由变量/Physics 输出。
+7. 保存，记录 MC03-07-step.png 和 MC03-08-outputs.png。官方 print_linear_residuals/perf_graph 属于控制台诊断，本轮不要求复制它们，物理与场输出语义保留。
+
+### 6.9 校验、生成和保存重开
+
+1. 点击校验工作流，必须为 **0 errors**。不应误要求 T、LineValueSampler、Sections 或三维接触面。
+2. 点击同步模型到 MOOSE 输入两次，两份 .i 必须一致。确认只有一个有效 Mesh 定义：外层 patch_update_strategy=iteration，内部 file 为 FileMeshGenerator；没有重复 Mesh/file。
+3. 核对 GlobalParams 的 disp_x disp_y；Physics 为 FINITE/add_variables=true/vonmises_stress，作用于两柱；材料链只有 elasticity 和 stress。
+4. 核对两个底边 BC 分别为 disp_x/disp_y；Pressure action 作用于两个外侧组、曲线为 1e4*t^2；Contact 作用于两个内侧组、frictionless/penalty/1e9/true。
+5. Executioner/Predictor 必须嵌套于 Executioner，包含 type=SimplePredictor、scale=1；不能把 predictor_type/predictor_scale 平铺为求解器参数。固定 dt=0.5，不应生成 TimeStepper 或 Preconditioning/smp。
+6. 仅 Exodus 输出，前缀 step01_out；无 T、热学 Kernels 或强制 CSV。
+7. 保存、关闭并重开同一项目；重新检查网格组、Patch Update Strategy、压力/接触引用和 Predictor，校验再同步必须与重开前语义一致。
+8. 记录 MC03-09-input.png、MC03-10-reopen.png。保留生成报告和 .i，始终通过表单修改，不手改快照。
+
+另存为项目副本后，确认网格路径迁入副本自己的目录，Mesh 根级 iteration 与全部对象引用保留，再同步和导出新快照。此项用于验证路径更新不会丢失接触搜索设置。
+
+### 6.10 定向人工复验与清空检查
+
+建议在项目副本执行以下检查，再恢复正式配置：
+
+- Mesh 的 Patch Update Strategy 选择空白并同步，应恢复无策略字段的 FileMeshGenerator；不能保留 iteration 或生成重复 Mesh。设回 iteration。
+- Step Predictor Type 选择空白并同步，整个 Predictor 子块应消失，即使 Scale 尚有值也不能泄漏为平铺参数。重新应用 Contact Transient (MC03) 恢复。
+- 将 primary 与 secondary 设为同一边组，校验/确定必须报错；通过表单恢复正确两边。Pressure 指派域组应被拒绝，候选也不应提供域组。
+- 从带非零 friction/tangential 参数的对象应用 MC03 接触模板，确认异类字段清除；从 BodyForce 应用 MC03 压力模板，确认 variable/value/component 不残留。
+- MC03 保存后另建 MC01/MC02 项目，网格组、接触和 Predictor 不应串入；纯热 MC01 的 LineValueSampler 检查仍保留。检查后重开 MC03 正式项目。
+
+### 6.11 用户择时远程执行与结果导入
+
+1. 提交前确认当前 LIMS Server、Project ID 和实际计算节点；应用为 hc_moose-opt。已有服务正常运行时不重启或改注册表。
+2. 按通用流程执行目标应用输入检查；远程 C06 的 --check-input 必须成功。本机没有求解器时记录入口限制，不据此判定输入语义失败。
+3. 导出新的任务快照，包含 .i、mc03_contact_step01.msh 和 manifest.json。快照内网格引用为相对路径，solver_id=hc_moose-opt、mapping=1.3.0；核对清单哈希。
+4. 提交任务，等待 succeeded，保留 Job ID、执行身份、输入检查与求解日志。不得仅以进入 running 判 PASS；日志不得出现 Solve Did NOT Converge。
+5. 下载实际 Job 的结果目录，由 CAE Results 导入 step01_out.e；不能用 Round A 参考目录代替本次产物。确认位移、vonmises_stress 与时间序列可读。
+
+### 6.12 接触结果验收与记录
+
+1. 回放 0～5 时间；固定 dt=0.5 时通常有初始帧加 10 个步末帧，共 11 帧，以实际结果时间列表确认。
+2. 分别显示 disp_x、disp_y、vonmises_stress。两柱底边位移应为零；两柱向中间弯曲，变形后进入接触。
+3. 判断接触间隙时把变形显示倍率设为 **1**，按原始坐标+实际位移核对。放大变形图可能看似穿透，不能据此直接判定失败。
+4. penalty 法允许有限小穿透，不要求浮点严格零；必须无明显相互穿过、无持续失稳或错误受压方向。若异常，保留时间、位移值、倍率和截图继续核对。
+5. 需要比较 Round A 时，另打开参考 step01_out.e，在相同物理时间、坐标和场分量下比较变形趋势、底端约束及应力响应。MC03 官方基线是 RunApp 收敛检查，本轮不虚构 Exodiff 容差或全场 PASS。
+6. 保存 MC03-11-disp-x.png、MC03-12-disp-y.png、MC03-13-vonmises.png、MC03-14-contact-final.png。
+
+| 检查项 | 状态 | 证据 |
+|---|---|---|
+| 双柱偏置网格、命名边界与 iteration | 待用户验证 | 项目、网格、MC03-01～02 |
+| 材料、二维 Physics 与底端约束 | 待用户验证 | MC03-03～04、生成输入 |
+| 官方压力 action 与无摩擦接触 | 待用户验证 | MC03-05～06、BCs/Contact |
+| Predictor、固定步长、Exodus-only | 待用户验证 | MC03-07～09 |
+| 重复同步、清空设置、保存重开与隔离 | 待用户验证 | MC03-10、副本复验记录 |
+| 输入检查与 hc_moose-opt 远程 Job succeeded | 待用户验证 | Job ID、身份与日志 |
+| CAE 导入、实际倍率下接触趋势正常 | 待用户验证 | MC03-11～14、结果目录 |
+
+原 **MC03-G1** 的最小代码入口已补齐；是否关闭真实产品闸门仍以本节用户人工复验为准。遇到模板缺失、1 维组不可选、压力未生成 action、Predictor/策略丢失、快照过期、输入检查失败、不收敛或结果缺量时记录原始证据，界面缺口为 BLOCKED，计算/结果异常为 FAIL，未执行不填 PASS。
 
 ## 7. MC04：三维 J2 各向同性塑性
 
@@ -670,8 +811,8 @@ QuasiStatic 负责生成有限应变计算对象；**不另行手工添加 Compu
 | 用例 | CAE 预处理 | `.i` 语义 | `--check-input` | 远程 Job | LIMS 下载 | CAE 后处理 | Job ID / 备注 |
 |---|---|---|---|---|---|---|---|
 | MC01 | PASS | PASS | PASS | PASS | PASS | PASS | 用户 2026-09-29 确认；job_20260929_081949_gxr4ra |
-| MC02 | PASS | PASS | PASS（用户确认） | PASS | PASS | PASS | 用户 2026-10-06 确认人工闭环；Job ID 与数值比较证据待归档，见 5.14.1 |
-| MC03 | BLOCKED | 待验证 | 待验证 | 待验证 | 待验证 | 待验证 | MC03-G1 |
+| MC02 | PASS | PASS | PASS（用户确认） | PASS | PASS | PASS | 已完成；用户 2026-10-09 确认计算与结果验证正常；详细附件待归档，见 5.14.2 |
+| MC03 | 待人工验证 | 待人工验证 | 待验证 | 待验证 | 待验证 | 待验证 | 2026-10-09 最小实现与第 6 节交付，用户自行测试 |
 | MC04 | BLOCKED | 待验证 | 待验证 | 待验证 | 待验证 | 待验证 | MC04-G1 |
 | MC05 | BLOCKED | 待验证 | 待验证 | 待验证 | 待验证 | 待验证 | MC05-G1 |
 

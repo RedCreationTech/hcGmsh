@@ -5444,6 +5444,8 @@ void MainWindow::build_menu() {
   create_mc01_mesh->setObjectName("createMc01ReferenceMeshAction");
   auto* create_mc02_mesh = mesh_menu->addAction("Create MC02 Reference Mesh");
   create_mc02_mesh->setObjectName("createMc02ReferenceMeshAction");
+  auto* create_mc03_mesh = mesh_menu->addAction("Create MC03 Reference Mesh");
+  create_mc03_mesh->setObjectName("createMc03ReferenceMeshAction");
   action_mesh_->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_M));
   action_preview_mesh_->setShortcut(QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_M));
 
@@ -5817,6 +5819,8 @@ void MainWindow::build_menu() {
           [this]() { create_mc01_reference_mesh(); });
   connect(create_mc02_mesh, &QAction::triggered, this,
           [this]() { create_thermal_reference_mesh(true); });
+  connect(create_mc03_mesh, &QAction::triggered, this,
+          [this]() { create_mc03_reference_mesh(); });
   connect(action_run_, &QAction::triggered, this, [this]() {
     if (moose_panel_) {
       moose_panel_->run_job();
@@ -6671,6 +6675,12 @@ void MainWindow::build_model_tree() {
                 open_label = "Open Result";
               }
               auto* edit_action = menu.addAction(open_label);
+              if (kind == "Mesh" && application_profile_.value("id").toString() ==
+                                        QStringLiteral("hc_moose-opt")) {
+                auto* properties = menu.addAction("Edit Mesh Properties...");
+                connect(properties, &QAction::triggered, this,
+                        [this, item]() { open_property_form(item); });
+              }
               menu.addSeparator();
               auto* duplicate_action = menu.addAction("Duplicate");
               auto* rename_action = menu.addAction("Rename");
@@ -8466,6 +8476,16 @@ QVariantList MainWindow::collect_workflow_issues() const {
     add_issue("error", "Mesh", QFileInfo(mesh_path).fileName(), "path",
               "The selected mesh file does not exist: " + mesh_path);
   }
+  if (hc_profile && property_editor_) {
+    for (const auto& mesh : meshes) {
+      if (QFileInfo(mesh.params.value("path").toString()).absoluteFilePath() ==
+          QFileInfo(mesh_path).absoluteFilePath()) {
+        for (const auto& error : property_editor_->validate_params("Mesh", mesh.params)) {
+          add_issue("error", "Mesh", mesh.name, "patch_update_strategy", error);
+        }
+      }
+    }
+  }
   if (mesh_snapshot_.groups.isEmpty()) {
     add_issue("error", "Mesh", QString(), "physical_groups",
               "The mesh has no persisted Physical Group manifest.");
@@ -8654,23 +8674,27 @@ QVariantList MainWindow::collect_workflow_issues() const {
                       .arg(variable));
       }
       const QString type = params.value("type").toString();
-      if (type == "Pressure" &&
+      const bool pressure = type == "Pressure" || type == "PressureAction";
+      if (pressure &&
           (!active_profile_supports_block("BCs") ||
-           !mapping_registry_.has_object_type("BCs", "Pressure"))) {
+           !mapping_registry_.has_object_type("BCs", type))) {
         add_issue("error", "Loads", entry.name, "type",
                   "Pressure is not supported by the active application profile/mapping.");
       }
-      if (type == "Pressure") {
+      if (pressure) {
         const QStringList boundaries =
             params.value("boundary")
                 .toString()
                 .split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
         for (const auto& group : boundaries) {
-          if (constrained_boundary_dofs.contains(
-                  group + "\n" + params.value("variable").toString())) {
-            add_issue(
-                "error", "Loads", entry.name, "boundary/variable",
-                "Pressure conflicts with a prescribed BC on the same boundary and variable.");
+          const QStringList variables = type == "PressureAction"
+              ? displacement_names : QStringList{params.value("variable").toString()};
+          for (const auto& variable : variables) {
+            if (constrained_boundary_dofs.contains(group + "\n" + variable)) {
+              add_issue(
+                  "error", "Loads", entry.name, "boundary/variable",
+                  "Pressure conflicts with a prescribed BC on the same boundary and variable.");
+            }
           }
         }
       }
@@ -9567,6 +9591,13 @@ void MainWindow::create_thermal_reference_mesh(bool with_pin) {
   }
   mesh_snapshot_ = manifest;
   upsert_mesh_item(manifest.mesh_path);
+  if (auto* item = find_child_by_param(find_root_item("Mesh"), "path", path)) {
+    QVariantMap params = item->data(0, PropertyEditor::kParamsRole).toMap();
+    if (params.remove("patch_update_strategy") > 0) {
+      commit_object_edit(item, item->text(0), params);
+      set_object_status(item, "Generated");
+    }
+  }
   property_editor_->set_boundary_groups({"bottom", "right", "top", "left"});
   property_editor_->set_volume_groups({"domain"});
   property_editor_->set_node_groups(manifest.group_names(0));
@@ -9580,6 +9611,140 @@ void MainWindow::create_thermal_reference_mesh(bool with_pin) {
                            5000);
   gmp::log_operation("mesh",
                      case_name + " reference mesh created: " + manifest.mesh_path);
+}
+
+void MainWindow::create_mc03_reference_mesh() {
+  if (application_profile_.value("id").toString() != "hc_moose-opt") {
+    const bool chinese = l10n::current_language() == l10n::Language::Chinese;
+    QMessageBox::information(
+        this, "Create MC03 Reference Mesh",
+        chinese ? QString::fromUtf8(
+                      "MC03 需要 HC MOOSE CAE [prototype]（hc_moose-opt）应用档案。\n"
+                      "请在顶部“应用”下拉中切换档案并保存项目，再创建参考网格。\n"
+                      "Isotropic Elasticity (MC03) 等模板仅在该档案下提供。")
+                : QString("MC03 requires the HC MOOSE CAE [prototype] (hc_moose-opt) profile.\n"
+                          "Select it in the top Application selector and save the project before creating the mesh.\n"
+                          "Isotropic Elasticity (MC03) and related templates are available under that profile."));
+    return;
+  }
+  if (project_path_.isEmpty()) {
+    QMessageBox::warning(this, "Create MC03 Reference Mesh",
+                         "Save the project before creating its reference mesh.");
+    return;
+  }
+  const QString dir = project_case_work_dir(project_path_);
+  if (dir.isEmpty() || !QDir().mkpath(dir)) {
+    statusBar()->showMessage("Failed to create the project mesh directory.", 4000);
+    return;
+  }
+  const QString path = QDir(dir).filePath("mc03_contact_step01.msh");
+  QSaveFile file(path);
+  if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
+    statusBar()->showMessage("Failed to create the MC03 mesh.", 4000);
+    return;
+  }
+  constexpr int nx = 5, ny = 15, nodes_per_pillar = (nx + 1) * (ny + 1);
+  auto node = [](int pillar, int i, int j) {
+    return pillar * nodes_per_pillar + j * (nx + 1) + i + 1;
+  };
+  PhysicalGroupManifest manifest;
+  manifest.mesh_path = QFileInfo(path).absoluteFilePath();
+  manifest.mesh_dim = 2;
+  manifest.node_count = 192;
+  manifest.element_count = 230;  // 150 QUAD4 domain + 80 LINE2 boundary records.
+  manifest.element_type = "QUAD4";
+  for (int pillar = 0; pillar < 2; ++pillar) {
+    const QString prefix = QString("pillar%1").arg(pillar + 1);
+    const QStringList sides{"bottom", "right", "top", "left"};
+    for (int side = 0; side < sides.size(); ++side) {
+      PhysicalGroupEntry group;
+      group.name = prefix + "_" + sides.at(side);
+      group.dim = 1;
+      group.tags = {pillar * 4 + side + 1};
+      group.entity_count = 1;
+      group.element_count = side % 2 == 0 ? nx : ny;
+      manifest.groups << group;
+    }
+    PhysicalGroupEntry domain;
+    domain.name = prefix;
+    domain.dim = 2;
+    domain.tags = {9 + pillar};
+    domain.entity_count = 1;
+    domain.element_count = nx * ny;
+    manifest.groups << domain;
+  }
+  QTextStream out(&file);
+  out << "$MeshFormat\n2.2 0 8\n$EndMeshFormat\n$PhysicalNames\n10\n";
+  for (const auto& group : manifest.groups) {
+    out << group.dim << ' ' << group.tags.first() << " \"" << group.name << "\"\n";
+  }
+  out << "$EndPhysicalNames\n$Nodes\n192\n";
+  for (int pillar = 0; pillar < 2; ++pillar) {
+    const double xmin = pillar == 0 ? -0.6 : 0.1;
+    for (int j = 0; j <= ny; ++j) {
+      // GeneratedMeshGenerator's biased vertex coordinates (bias_y = 0.9).
+      const double y = 5.0 * (1.0 - std::pow(0.9, j)) /
+                       (1.0 - std::pow(0.9, ny));
+      for (int i = 0; i <= nx; ++i) {
+        out << node(pillar, i, j) << ' '
+            << QString::number(xmin + 0.5 * i / nx, 'g', 17) << ' '
+            << QString::number(y, 'g', 17) << " 0\n";
+      }
+    }
+  }
+  out << "$EndNodes\n$Elements\n230\n";
+  int element = 1;
+  auto edge = [&](int tag, int first, int second) {
+    out << element++ << " 1 2 " << tag << ' ' << tag << ' '
+        << first << ' ' << second << '\n';
+  };
+  for (int pillar = 0; pillar < 2; ++pillar) {
+    const int offset = pillar * 4;
+    for (int i = 0; i < nx; ++i) {
+      edge(offset + 1, node(pillar, i, 0), node(pillar, i + 1, 0));
+      edge(offset + 3, node(pillar, i + 1, ny), node(pillar, i, ny));
+    }
+    for (int j = 0; j < ny; ++j) {
+      edge(offset + 2, node(pillar, nx, j), node(pillar, nx, j + 1));
+      edge(offset + 4, node(pillar, 0, j + 1), node(pillar, 0, j));
+    }
+    for (int j = 0; j < ny; ++j) {
+      for (int i = 0; i < nx; ++i) {
+        const int tag = 9 + pillar;
+        out << element++ << " 3 2 " << tag << ' ' << tag << ' '
+            << node(pillar, i, j) << ' ' << node(pillar, i + 1, j) << ' '
+            << node(pillar, i + 1, j + 1) << ' ' << node(pillar, i, j + 1) << '\n';
+      }
+    }
+  }
+  out << "$EndElements\n";
+  if (!file.commit()) {
+    statusBar()->showMessage("Failed to save the MC03 mesh.", 4000);
+    return;
+  }
+  bool hash_ok = false;
+  manifest.mesh_sha256 = sha256_file_hex(path, &hash_ok);
+  if (!hash_ok) {
+    statusBar()->showMessage("The MC03 mesh manifest is invalid.", 4000);
+    return;
+  }
+  mesh_snapshot_ = manifest;
+  upsert_mesh_item(manifest.mesh_path);
+  if (auto* item = find_child_by_param(find_root_item("Mesh"), "path", path)) {
+    QVariantMap params = item->data(0, PropertyEditor::kParamsRole).toMap();
+    params.insert("patch_update_strategy", "iteration");
+    commit_object_edit(item, item->text(0), params);
+    set_object_status(item, "Generated");
+  }
+  sync_property_editor_groups_from_snapshot();
+  gmsh_panel_->set_physical_group_manifest(manifest.to_variant_map());
+  moose_panel_->set_boundary_groups(manifest.group_names(1));
+  moose_panel_->set_mesh_path(manifest.mesh_path);
+  viewer_->set_mesh_file(manifest.mesh_path);
+  push_context_to_moose_panel();
+  refresh_module_pages();
+  statusBar()->showMessage("MC03 reference mesh created: 192 nodes, 150 QUAD4.", 5000);
+  gmp::log_operation("mesh", "MC03 reference mesh created: " + manifest.mesh_path);
 }
 
 void MainWindow::on_import_exodus_mesh() {
@@ -10827,6 +10992,10 @@ QStringList MainWindow::load_type_options() const {
       mapping_registry_.has_object_type("BCs", "Pressure")) {
     options << "Pressure";
   }
+  if (application_profile_.value("id").toString() == "hc_moose-opt" &&
+      mapping_registry_.has_object_type("BCs", "PressureAction")) {
+    options << "PressureAction";
+  }
   return options;
 }
 
@@ -10931,11 +11100,12 @@ bool MainWindow::sync_model_to_input(const QString& project_path_override) {
       const auto* child = loads->child(i);
       const QVariantMap params =
           child->data(0, PropertyEditor::kParamsRole).toMap();
-      if (params.value("type").toString() != "Pressure") {
+      const QString type = params.value("type").toString();
+      if (type != "Pressure" && type != "PressureAction") {
         continue;
       }
       if (!active_profile_supports_block("BCs") ||
-          !mapping_registry_.has_object_type("BCs", "Pressure")) {
+          !mapping_registry_.has_object_type("BCs", type)) {
         return block_sync(
             QString("unsupported pressure load '%1'").arg(child->text(0)));
       }
@@ -10993,6 +11163,14 @@ bool MainWindow::sync_model_to_input(const QString& project_path_override) {
   // builder 返回空串，upsert 为空操作（demo 流程不受影响）。
   {
     QString input = moose_panel_->input_text();
+    if (!generated.mesh.isEmpty()) {
+      // apply_model_blocks first canonicalizes the file mesh. Replace it with
+      // one wrapper containing both the file generator and mesh-level controls.
+      for (const auto& header : MooseInputGenerator::generated_headers_with_prefix(input, "Mesh/")) {
+        input = MooseInputGenerator::upsert_generated_block(input, header, QString());
+      }
+      input = MooseInputGenerator::upsert_generated_block(input, "Mesh", generated.mesh);
+    }
     if (!generated.physics_headers.isEmpty()) {
       input = MooseInputGenerator::upsert_generated_block(
           input, "GlobalParams", generated.global_params);
@@ -14813,6 +14991,70 @@ void MainWindow::run_screenshot_tour(const QString& dir) {
                   set_active_app_profile(
                       saved_profile.value("id").toString(),
                       /*mark_dirty=*/false);
+                  set_project_dirty(saved_dirty);
+                },
+                this});
+  steps.append({"mc03_profile_material_templates_contract",
+                [this]() {
+                  const QString saved_profile = application_profile_.value("id").toString();
+                  const bool saved_dirty = project_dirty_;
+                  auto check_templates = [this](const QString& profile_id) {
+                    set_active_app_profile(profile_id, /*mark_dirty=*/false);
+                    QTreeWidget tree;
+                    auto* root = new QTreeWidgetItem(&tree);
+                    root->setText(0, "Materials");
+                    root->setData(0, PropertyEditor::kKindRole, "Materials");
+                    auto* item = new QTreeWidgetItem(root);
+                    item->setText(0, "elasticity");
+                    item->setData(0, PropertyEditor::kKindRole, "Materials");
+                    item->setData(0, PropertyEditor::kParamsRole,
+                                  QVariantMap{{"type", "GenericConstantMaterial"},
+                                              {"prop_names", "prop"}, {"prop_values", "1.0"}});
+                    const bool hc = profile_id == "hc_moose-opt";
+                    FloatingPropertyForm form(item, {}, {"pillar1", "pillar2"},
+                        physics_action_options(), material_type_options(), load_type_options(),
+                        interaction_type_options(), hc, this);
+                    form.setAttribute(Qt::WA_DeleteOnClose, false);
+                    form.set_display_unit_factors(display_unit_factors());
+                    auto* templates = form.findChild<QComboBox*>("propertyTemplateSelector");
+                    const int index = templates ? templates->findData("Isotropic Elasticity (MC03)") : -1;
+                    if (!templates || (index >= 0) != hc ||
+                        (templates->findData("Finite Strain Elastic Stress (MC03)") >= 0) != hc) {
+                      throw std::runtime_error("MC03 material templates do not match the active profile");
+                    }
+                    if (!hc) return;
+                    templates->setCurrentIndex(index);
+                    auto* apply = form.findChild<QPushButton*>("propertyApplyTemplateButton");
+                    if (!apply) throw std::runtime_error("MC03 apply template button is missing");
+                    apply->click();
+                    auto* young = form.findChild<QLineEdit*>("cdpYoungsModulusMpa");
+                    auto* poisson = form.findChild<QLineEdit*>("cdpPoissonsRatio");
+                    auto* buffer = form.findChild<QTreeWidget*>();
+                    if (!buffer || !buffer->topLevelItem(0) ||
+                        !buffer->topLevelItem(0)->child(0)) {
+                      throw std::runtime_error("MC03 material form buffer is missing");
+                    }
+                    const QVariantMap params = buffer->topLevelItem(0)->child(0)
+                                                   ->data(0, PropertyEditor::kParamsRole).toMap();
+                    if (!young || young->text().toDouble() != 1000.0 ||
+                        !poisson || poisson->text().toDouble() != 0.3 ||
+                        params.value("youngs_modulus").toDouble() != 1e9 ||
+                        params.value("type").toString() != "ComputeIsotropicElasticityTensor" ||
+                        params.contains("prop_names") || params.contains("prop_values") ||
+                        params.contains("block")) {
+                      throw std::runtime_error("MC03 elasticity template units or cleanup are incorrect");
+                    }
+                  };
+                  try {
+                    check_templates("DamSafetyApp-opt");
+                    check_templates("hc_moose-opt");
+                    check_templates("DamSafetyApp-opt");
+                  } catch (...) {
+                    set_active_app_profile(saved_profile, /*mark_dirty=*/false);
+                    set_project_dirty(saved_dirty);
+                    throw;
+                  }
+                  set_active_app_profile(saved_profile, /*mark_dirty=*/false);
                   set_project_dirty(saved_dirty);
                 },
                 this});

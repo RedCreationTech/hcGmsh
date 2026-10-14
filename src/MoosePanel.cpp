@@ -1,6 +1,7 @@
 #include "gmp/MoosePanel.h"
 
 #include "gmp/IconFactory.h"
+#include "gmp/MooseInputGenerator.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -808,7 +809,13 @@ void MoosePanel::set_mesh_path(const QString& path) {
     mesh_path_->addItem(path);
   }
   mesh_path_->setCurrentText(path);
-  const QString updated = inject_mesh_block(input_editor_->toPlainText(), path);
+  const QString current_input = input_editor_->toPlainText();
+  // Changing/restoring a mesh path must retain generated mesh-level controls.
+  // Model sync separately regenerates these from the selected Mesh object.
+  const QRegularExpression patch_re(
+      QStringLiteral("(?:^|\\n)\\[Mesh\\]\\s*\\n\\s*patch_update_strategy\\s*=\\s*(\\w+)"));
+  const QString strategy = patch_re.match(current_input).captured(1);
+  const QString updated = inject_mesh_block(current_input, path, strategy);
   if (!updated.isEmpty()) {
     input_editor_->setPlainText(updated);
     append_log("Mesh path injected into [Mesh] block.");
@@ -2846,13 +2853,17 @@ QString MoosePanel::template_tm_file_mesh(const QString& mesh_path) const {
 }
 
 QString MoosePanel::inject_mesh_block(const QString& input,
-                                      const QString& mesh_path) const {
-  const QString block = QStringList({
+                                      const QString& mesh_path,
+                                      const QString& patch_update_strategy) const {
+  const QString block = patch_update_strategy.isEmpty() ? QStringList({
       "[Mesh/file]",
       "  type = FileMeshGenerator",
       QString("  file = %1").arg(mesh_path),
       "[]",
-  }).join('\n');
+  }).join('\n') : QString("[Mesh]\n  patch_update_strategy = %1\n  [file]\n"
+                         "    type = FileMeshGenerator\n    file = %2\n  []\n[]")
+                     .arg(patch_update_strategy,
+                          MooseInputGenerator::quote_moose_value_if_needed(mesh_path));
 
   // 旧式顶层 [Mesh] 块（含 FileMesh/GeneratedMesh 及其子块）整体升级替换，
   // 不并存两个网格定义。

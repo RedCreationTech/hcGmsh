@@ -159,7 +159,8 @@ class MoosePanel : public QWidget {
   QString template_tm_generated_mesh() const;
   QString template_tm_file_mesh(const QString& mesh_path) const;
   QString template_heat_generated_mesh() const;
-  QString inject_mesh_block(const QString& input, const QString& mesh_path) const;
+  QString inject_mesh_block(const QString& input, const QString& mesh_path,
+                            const QString& patch_update_strategy = QString()) const;
   QStringList read_boundary_groups_from_mesh(const QString& mesh_path) const;
   QStringList parse_msh_physical_groups(const QString& mesh_path) const;
   QString inject_bcs_block(const QString& input, const QStringList& names,

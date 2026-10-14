@@ -32,6 +32,7 @@ class MooseInputGenerator {
   };
 
   struct Output {
+    QString mesh;  // Optional [Mesh] wrapper with model-owned mesh controls.
     QString functions;
     QString variables;
     QString materials;

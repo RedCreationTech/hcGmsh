@@ -298,7 +298,7 @@ void test_profiles_and_mapping(TestContext& test) {
   gmp::MooseMappingRegistry hc_mapping(
       QDir::current().filePath("templates/moose/mapping-hcmoose-v1.json"));
   test.expect(
-      hc_mapping.is_loaded() && hc_mapping.version() == "1.2.0" &&
+      hc_mapping.is_loaded() && hc_mapping.version() == "1.3.0" &&
           hc_mapping.has_object_type("Kernels", "HeatConduction") &&
           hc_mapping.has_object_type("Kernels",
                                      "HeatConductionTimeDerivative") &&
@@ -310,6 +310,9 @@ void test_profiles_and_mapping(TestContext& test) {
                   hc_mapping.has_object_type("Materials", "ComputeThermalExpansionEigenstrain") &&
                   hc_mapping.has_object_type("Materials", "ComputeFiniteStrainElasticStress"),
               "HC mapping covers MC02 heat source and finite strain material chain");
+  test.expect(hc_mapping.has_object_type("BCs", "PressureAction") &&
+                  hc_mapping.has_object_type("Executioner", "SimplePredictor"),
+              "HC mapping covers MC03 pressure action and predictor");
   const QJsonObject contact =
       mapping.object_schema("Contact", "Contact");
   const QJsonArray required = contact.value("required_params").toArray();
@@ -1786,6 +1789,75 @@ void test_project_store_contract(TestContext& test) {
               "missing legacy out/ source redirects without copying");
 }
 
+// MC03's namespace controls must reach the official nested blocks, without
+// leaking CAE-only keys or generating pressure as a thermal/body-force Kernel.
+void test_mc03_input_generation_contract(TestContext& test) {
+  auto entry = [](const QString& kind, const QString& name,
+                  const QVariantMap& params) {
+    gmp::ProjectModelEntry e;
+    e.kind = kind;
+    e.name = name;
+    e.params = params;
+    return e;
+  };
+  gmp::MooseInputGenerator::Input input;
+  input.application_profile_id = "hc_moose-opt";
+  input.mesh_path = "/work/mc03_contact_step01.msh";
+  input.displacements = "disp_x disp_y";
+  input.entries = {
+      entry("Mesh", "old_mesh", {{"path", "/work/old.msh"},
+                                    {"patch_update_strategy", "wrong"}}),
+      entry("Mesh", "mc03", {{"path", input.mesh_path},
+                              {"patch_update_strategy", "iteration"}}),
+      entry("Physics", "all", {{"action", "QuasiStatic"}, {"strain", "FINITE"},
+                                {"block", "pillar1 pillar2"}, {"add_variables", "true"},
+                                {"generate_output", "vonmises_stress"}}),
+      entry("Loads", "sides", {{"type", "PressureAction"},
+                                {"boundary", "pillar1_left pillar2_right"},
+                                {"function", "pressure_curve"}, {"factor", "1"},
+                                {"variable", "stale_u"}, {"component", "2"}}),
+      entry("Interactions", "pillars", {{"type", "Contact"},
+                 {"primary", "pillar1_right"}, {"secondary", "pillar2_left"},
+                 {"model", "frictionless"}, {"formulation", "penalty"},
+                 {"penalty", "1e9"}, {"normalize_penalty", "true"}}),
+      entry("Steps", "contact", {{"type", "Transient"}, {"end_time", "5"},
+                                 {"dt", "0.5"}, {"solve_type", "NEWTON"},
+                                 {"line_search", "none"},
+                                 {"petsc_options_iname", "-pc_type"},
+                                 {"petsc_options_value", "lu"},
+                                 {"predictor_type", "SimplePredictor"},
+                                 {"predictor_scale", "1"}})};
+  const auto out = gmp::MooseInputGenerator::generate(input);
+  test.expect(out.mesh.contains("patch_update_strategy = iteration") &&
+                  out.mesh.contains("type = FileMeshGenerator") &&
+                  out.mesh.contains(input.mesh_path) && !out.mesh.contains("wrong"),
+              "MC03 mesh controls come only from the selected mesh entry");
+  test.expect(out.bcs.contains("  [Pressure]\n    [sides]") &&
+                  out.bcs.contains("boundary = 'pillar1_left pillar2_right'") &&
+                  !out.bcs.contains("type = PressureAction") &&
+                  !out.bcs.contains("variable =") && !out.bcs.contains("component =") &&
+                  out.loads.isEmpty(),
+              "MC03 pressure action uses all displacement components, never a Kernel");
+  test.expect(out.executioner.contains("  [Predictor]\n    type = SimplePredictor\n    scale = 1") &&
+                  out.executioner.contains("dt = 0.5") &&
+                  !out.executioner.contains("predictor_type =") &&
+                  !out.executioner.contains("predictor_scale =") &&
+                  !out.executioner.contains("[Preconditioning") &&
+                  out.global_params.contains("disp_x disp_y") &&
+                  !out.global_params.contains("disp_z"),
+              "MC03 predictor is nested and preserves the 2D fixed-step solve");
+  test.expect(out.interactions.contains("primary = pillar1_right") &&
+                  out.interactions.contains("secondary = pillar2_left") &&
+                  out.interactions.contains("penalty = 1e9"),
+              "MC03 named contact edges remain stable in generated input");
+  input.entries[1].params.remove("patch_update_strategy");
+  input.entries.last().params.remove("predictor_type");
+  const auto cleared = gmp::MooseInputGenerator::generate(input);
+  test.expect(cleared.mesh.isEmpty() && !cleared.executioner.contains("[Predictor]") &&
+                  !cleared.executioner.contains("predictor_scale"),
+              "Clearing optional MC03 controls does not leave solver parameters behind");
+}
+
 // TASK-V02-030：MooseInputGenerator 服务级合同。G1 形态条目集（取自
 // phase5-g1-assembly-contact.gmp.yaml model 段）→ 块文本/报告/确定性。
 void test_moose_input_generator_contract(TestContext& test) {
@@ -2691,6 +2763,7 @@ int main(int argc, char* argv[]) {
   test_unit_display_contract(test);
   test_project_store_contract(test);
   test_moose_input_generator_contract(test);
+  test_mc03_input_generation_contract(test);
   test_snapshot_service_contract(test);
   test_physical_group_service_contract(test);
   test_assembly_mesher_service_contract(test);

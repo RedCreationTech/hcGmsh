@@ -1,5 +1,5 @@
 {
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "MOOSE 输入 blocks 与对象类型的版本化映射注册表（Phase 0 基线）",
   "blocks": {
     "Mesh": {
@@ -13,7 +13,8 @@
             "construct_node_list_from_side_list",
             "uniform_refine",
             "displacements",
-            "parallel_type"
+            "parallel_type",
+            "patch_update_strategy"
           ],
           "param_schema": {
             "type": { "type": "enum", "value": "FileMesh", "readonly": true },
@@ -23,7 +24,8 @@
               "label": "网格文件",
               "description": "案例包根目录下的相对路径"
             },
-            "dim": { "type": "integer", "enum": [1, 2, 3], "label": "空间维度" }
+            "dim": { "type": "integer", "enum": [1, 2, 3], "label": "空间维度" },
+            "patch_update_strategy": { "type": "enum", "enum": ["iteration"], "label": "接触搜索更新策略", "scope": "Mesh" }
           }
         }
       }
@@ -310,6 +312,18 @@
             "value": { "type": "scalar", "label": "边界值" }
           }
         },
+        "PressureAction": {
+          "input_path": "BCs/Pressure",
+          "required_params": ["type", "boundary"],
+          "optional_params": ["function", "factor", "use_displaced_mesh"],
+          "param_schema": {
+            "type": { "type": "enum", "value": "PressureAction", "readonly": true },
+            "boundary": { "type": "physical_group_list", "dimensions": [1, 2], "label": "压力边界" },
+            "function": { "type": "function_ref", "label": "压力函数" },
+            "factor": { "type": "scalar", "label": "压力比例" },
+            "use_displaced_mesh": { "type": "bool", "label": "使用变形网格" }
+          }
+        },
         "FunctionDirichletBC": {
           "required_params": ["type", "variable", "boundary", "function"],
           "optional_params": ["preset"],
@@ -394,8 +408,8 @@
             "type": { "type": "enum", "value": "Contact", "readonly": true },
             "model": { "type": "enum", "enum": ["frictionless", "coulomb", "glued"], "label": "接触模型" },
             "formulation": { "type": "enum", "enum": ["kinematic", "penalty", "augmented_lagrange", "tangential_penalty", "mortar"], "label": "接触算法" },
-            "primary": { "type": "physical_group_list", "dim": 2, "label": "主面" },
-            "secondary": { "type": "physical_group_list", "dim": 2, "label": "从面" },
+            "primary": { "type": "physical_group_list", "dimensions": [1, 2], "label": "主面" },
+            "secondary": { "type": "physical_group_list", "dimensions": [1, 2], "label": "从面" },
             "friction_coefficient": { "type": "scalar", "label": "摩擦系数" },
             "normal_smoothing_distance": { "type": "scalar", "label": "法向平滑距离" },
             "tangential_tolerance": { "type": "scalar", "label": "切向容差" },
@@ -434,6 +448,15 @@
             "nl_abs_tol": { "type": "scalar", "label": "非线性绝对容差" },
             "petsc_options_iname": { "type": "string", "label": "PETSc 选项名" },
             "petsc_options_value": { "type": "string", "label": "PETSc 选项值" }
+          }
+        },
+        "SimplePredictor": {
+          "sub_block": "Predictor",
+          "required_params": ["type", "scale"],
+          "optional_params": [],
+          "param_schema": {
+            "type": { "type": "enum", "value": "SimplePredictor", "readonly": true },
+            "scale": { "type": "scalar", "label": "预测比例" }
           }
         },
         "IterationAdaptiveDT": {

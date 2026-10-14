@@ -29,6 +29,7 @@
 #include <QFont>
 #include <QSignalBlocker>
 #include <QTimer>
+#include <cmath>
 
 #include "gmp/ComboPopupFix.h"
 
@@ -818,7 +819,8 @@ void PropertyEditor::on_apply_groups() {
   if (kind == "BC") {
     params.insert("boundary", selected.join(" "));
   } else if (kind == "Loads" &&
-             params.value("type").toString() == "Pressure") {
+             (params.value("type").toString() == "Pressure" ||
+              params.value("type").toString() == "PressureAction")) {
     params.insert("boundary", selected.join(" "));
   } else if (kind == "Outputs") {
     // W-03d：历史输出套餐的面组（反力/平均位移共用）。
@@ -854,7 +856,8 @@ void PropertyEditor::update_group_widget_for_kind(const QString& kind) {
   const bool use_boundary =
       (kind == "BC" || kind == "Outputs" ||
        (kind == "Loads" &&
-        params.value("type").toString() == "Pressure"));
+        (params.value("type").toString() == "Pressure" ||
+         params.value("type").toString() == "PressureAction")));
   QStringList source = use_boundary ? boundary_groups_ : volume_groups_;
   // Point nodesets support prescribed nodal BCs, not pressure or contact.
   if (kind == "BC" &&
@@ -903,7 +906,8 @@ void PropertyEditor::update_group_widget_for_kind(const QString& kind) {
   }
   const QString key =
       (kind == "BC" ||
-       (kind == "Loads" && params.value("type").toString() == "Pressure"))
+       (kind == "Loads" && (params.value("type").toString() == "Pressure" ||
+                           params.value("type").toString() == "PressureAction")))
           ? "boundary"
           : (kind == "Outputs" ? "hist_boundary" : "block");
   const QString current = params.value(key).toString().trimmed();
@@ -1239,6 +1243,20 @@ QStringList PropertyEditor::validate_params(const QString& kind,
         missing << "end_time must be > 0";
       }
     }
+    const QString predictor = params.value("predictor_type").toString().trimmed();
+    if (!predictor.isEmpty()) {
+      if (type != "Transient" || predictor != "SimplePredictor") {
+        missing << "SimplePredictor requires a Transient Step";
+      }
+      bool ok = false;
+      const double scale = params.value("predictor_scale").toString().toDouble(&ok);
+      if (!ok || !std::isfinite(scale)) missing << "predictor_scale must be finite";
+    }
+  } else if (kind == "Mesh") {
+    const QString strategy = params.value("patch_update_strategy").toString().trimmed();
+    if (!strategy.isEmpty() && strategy != "iteration") {
+      missing << "patch_update_strategy must be iteration or unset";
+    }
   } else if (kind == "Functions") {
     // W-03c：ParsedFunction 需 expression；PiecewiseLinear 需 x/y 数据对
     // 且个数一致（复载曲线）。
@@ -1269,7 +1287,7 @@ QStringList PropertyEditor::validate_params(const QString& kind,
     }
   } else if (kind == "Loads") {
     const QString type = params.value("type").toString();
-    if (type != "TensorMechanics") {
+    if (type != "TensorMechanics" && type != "PressureAction") {
       require_key("variable");
     }
     if (type == "BodyForce" || type == "HeatSource") {
@@ -1281,9 +1299,9 @@ QStringList PropertyEditor::validate_params(const QString& kind,
       require_key("diffusivity");
     } else if (type == "TensorMechanics") {
       require_key("displacements");
-    } else if (type == "Pressure") {
+    } else if (type == "Pressure" || type == "PressureAction") {
       const QString variable = params.value("variable").toString().trimmed();
-      if (!variable.isEmpty() &&
+      if (type == "Pressure" && !variable.isEmpty() &&
           !pressure_variable_candidates().contains(variable)) {
         missing << "variable must reference a displacement variable";
       }
@@ -1294,7 +1312,9 @@ QStringList PropertyEditor::validate_params(const QString& kind,
               .split(QRegularExpression("\\s+"), Qt::SkipEmptyParts);
       for (const auto& boundary : boundaries) {
         if (!boundary_groups_.contains(boundary)) {
-          missing << "boundary must reference an existing 2D Physical Group";
+          missing << (minimal_transient_defaults_
+              ? "boundary must reference an existing mesh boundary group"
+              : "boundary must reference an existing 2D Physical Group");
           break;
         }
       }
@@ -1303,7 +1323,7 @@ QStringList PropertyEditor::validate_params(const QString& kind,
         missing << "factor or function";
       }
       const QString component = params.value("component").toString().trimmed();
-      if (!component.isEmpty()) {
+      if (type == "Pressure" && !component.isEmpty()) {
         bool ok = false;
         const int value = component.toInt(&ok);
         if (!ok || value < 0 || value > 2) {
@@ -1322,13 +1342,25 @@ QStringList PropertyEditor::validate_params(const QString& kind,
       const QString primary = params.value("primary").toString().trimmed();
       const QString secondary = params.value("secondary").toString().trimmed();
       if (!primary.isEmpty() && !boundary_groups_.contains(primary)) {
-        missing << "primary must reference an existing 2D Physical Group";
+        missing << (minimal_transient_defaults_
+            ? "primary must reference an existing mesh boundary group"
+            : "primary must reference an existing 2D Physical Group");
       }
       if (!secondary.isEmpty() && !boundary_groups_.contains(secondary)) {
-        missing << "secondary must reference an existing 2D Physical Group";
+        missing << (minimal_transient_defaults_
+            ? "secondary must reference an existing mesh boundary group"
+            : "secondary must reference an existing 2D Physical Group");
       }
       if (!primary.isEmpty() && primary == secondary) {
         missing << "primary and secondary must differ";
+      }
+      if (minimal_transient_defaults_ &&
+          params.value("formulation").toString() == "penalty") {
+        bool ok = false;
+        const double penalty = params.value("penalty").toString().toDouble(&ok);
+        if (!ok || !std::isfinite(penalty) || penalty <= 0.0) {
+          missing << "penalty must be finite and > 0";
+        }
       }
       const QString friction =
           params.value("friction_coefficient").toString().trimmed();
@@ -1551,7 +1583,7 @@ QVariantMap PropertyEditor::build_type_template(const QString& kind,
     if (type == "TensorMechanics") {
       t.insert("displacements", "disp_x disp_y");
       t.insert("block", block);
-    } else {
+    } else if (type != "PressureAction") {
       t.insert("variable", type == "Pressure" ? "disp_z" : var);
     }
     if (type == "BodyForce" || type == "HeatSource") {
@@ -1559,6 +1591,12 @@ QVariantMap PropertyEditor::build_type_template(const QString& kind,
       t.insert("function", QString());
     } else if (type == "MatDiffusion") {
       t.insert("diffusivity", "diff_u");
+    } else if (type == "PressureAction") {
+      t.insert("boundary", bnd);
+      t.insert("factor", "1");
+      t.insert("variable", QString());
+      t.insert("component", QString());
+      t.insert("use_displaced_mesh", QString());
     } else if (type == "Pressure") {
       t.insert("boundary", bnd);
       t.insert("factor", "1.0");
@@ -1706,7 +1744,7 @@ void PropertyEditor::apply_template_values(const QVariantMap& values,
     const QSet<QString> known_type_keys = {
         "value",  "function",  "diffusivity",        "boundary",
         "factor", "component", "use_displaced_mesh", "displacements",
-        "block"};
+        "block", "variable"};
     QSet<QString> allowed;
     if (type == "BodyForce" || type == "HeatSource") {
       allowed = {"value", "function"};
@@ -1715,9 +1753,12 @@ void PropertyEditor::apply_template_values(const QVariantMap& values,
     } else if (type == "Pressure") {
       allowed = {"boundary", "factor", "function", "component",
                  "use_displaced_mesh"};
+    } else if (type == "PressureAction") {
+      allowed = {"boundary", "factor", "function", "use_displaced_mesh"};
     } else if (type == "TensorMechanics") {
       allowed = {"displacements", "block"};
     }
+    if (type != "PressureAction") allowed.insert("variable");
     for (const auto& key : known_type_keys) {
       if (!allowed.contains(key) && params.remove(key) > 0) {
         changed = true;
@@ -1997,8 +2038,8 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
   const QSet<QString> supported = {"Materials", "Sections", "Assembly",
                                    "Steps", "BC", "Loads", "Functions",
                                    "Physics", "Outputs", "Interactions",
-                                   "VectorPostprocessors"};
-  if (!supported.contains(kind)) {
+                                   "VectorPostprocessors", "Mesh"};
+  if (!supported.contains(kind) || (kind == "Mesh" && !minimal_transient_defaults_)) {
     form_box_->setVisible(false);
     return;
   }
@@ -2015,9 +2056,10 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
   // 默认参数，因此不显示模板栏。Materials/BC/Loads 具有多个命名
   // 模板，使用下拉选择；Steps/Functions/Outputs 只有“类型默认值”，
   // 用直接按钮代替无选择意义的单项下拉，避免 macOS 弹层错位。
-  if (kind != "Sections" && kind != "Physics" && kind != "Assembly") {
+  if (kind != "Sections" && kind != "Physics" && kind != "Assembly" && kind != "Mesh") {
     const bool has_named_templates =
-        kind == "Materials" || kind == "BC" || kind == "Loads";
+        kind == "Materials" || kind == "BC" || kind == "Loads" ||
+        (minimal_transient_defaults_ && (kind == "Steps" || kind == "Interactions"));
     auto* template_row = new QWidget(form_box_);
     auto* template_layout = new QHBoxLayout(template_row);
     template_layout->setContentsMargins(0, 0, 0, 0);
@@ -2304,6 +2346,11 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
     add_combo("Visible", "visible", {"true", "false"},
               "assemblyVisible");
     add_line("Order", "order", "assemblyOrder");
+  } else if (kind == "Mesh") {
+    add_line("Mesh File", "path", "meshFilePath");
+    qobject_cast<QLineEdit*>(form_widgets_.value("path"))->setReadOnly(true);
+    add_combo("Patch Update Strategy", "patch_update_strategy",
+              {QString(), "iteration"}, "meshPatchUpdateStrategy");
   } else if (kind == "Steps") {
     // W-03e：Step→Executioner/TimeStepper/Preconditioning 表单
     // （*Static 四参数语义），分组：基本/求解控制/时间步进/预处理。
@@ -2350,6 +2397,12 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
               "stepPreconditioningType");
     add_combo("preconditioning_full", "preconditioning_full",
               optional_choices({"true", "false"}), "stepPreconditioningFull");
+    if (minimal_transient_defaults_) {
+      add_section("Predictor");
+      add_combo("Predictor Type", "predictor_type",
+                {QString(), "SimplePredictor"}, "stepPredictorType");
+      add_line("Predictor Scale", "predictor_scale", "stepPredictorScale");
+    }
   } else if (kind == "Functions") {
     // W-03c：ParsedFunction（expression）/ PiecewiseLinear（x/y 数据对，
     // 空格分隔，个数需一致）。
@@ -2580,6 +2633,14 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
           {{"type", "ComputeFiniteStrainElasticStress"}});
       template_descriptions_.insert("Finite Strain Elastic Stress (MC02)",
           "Elastic stress using finite strain generated by QuasiStatic.");
+      template_presets_.insert("Isotropic Elasticity (MC03)",
+          template_presets_.value("Isotropic Elasticity (MC02)"));
+      template_descriptions_.insert("Isotropic Elasticity (MC03)",
+          "MC03 elasticity: E = 1000 MPa (1e9 Pa), nu = 0.3.");
+      template_presets_.insert("Finite Strain Elastic Stress (MC03)",
+          template_presets_.value("Finite Strain Elastic Stress (MC02)"));
+      template_descriptions_.insert("Finite Strain Elastic Stress (MC03)",
+          "Elastic stress using finite strain generated by QuasiStatic.");
     }
     template_presets_.insert(
         "CDP Concrete (Abaqus)",
@@ -2697,6 +2758,38 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
           "Pressure BC using a named surface Physical Group and optional "
           "load function.");
     }
+    if (load_type_options_.contains("PressureAction")) {
+      template_presets_.insert("Pressure (MC03)",
+          {{"type", "PressureAction"}, {"function", "pressure_curve"},
+           {"factor", "1"}, {"variable", QString()},
+           {"component", QString()}, {"use_displaced_mesh", QString()}});
+      template_descriptions_.insert("Pressure (MC03)",
+          "Pressure on all displacement components. Assign pillar1_left and pillar2_right.");
+    }
+  } else if (kind == "Steps" && minimal_transient_defaults_) {
+    template_presets_.insert("Contact Transient (MC03)",
+        {{"type", "Transient"}, {"start_time", "0"}, {"end_time", "5"},
+         {"dt", "0.5"}, {"scheme", "implicit-euler"},
+         {"solve_type", "NEWTON"}, {"line_search", "none"},
+         {"petsc_options_iname", "-pc_type"}, {"petsc_options_value", "lu"},
+         {"predictor_type", "SimplePredictor"}, {"predictor_scale", "1"},
+         {"timestepper_type", QString()}, {"preconditioning_type", QString()},
+         {"preconditioning_full", QString()}, {"automatic_scaling", QString()},
+         {"nl_rel_tol", QString()}, {"nl_abs_tol", QString()},
+         {"nl_max_its", QString()}, {"l_max_its", QString()}, {"l_tol", QString()},
+         {"num_steps", QString()}, {"dtmin", QString()}, {"dtmax", QString()},
+         {"optimal_iterations", QString()}, {"iteration_window", QString()},
+         {"growth_factor", QString()}, {"cutback_factor", QString()}});
+    template_descriptions_.insert("Contact Transient (MC03)",
+        "MC03: 0-5 s, dt=0.5, NEWTON/none, LU, SimplePredictor scale=1.");
+  } else if (kind == "Interactions" && minimal_transient_defaults_) {
+    template_presets_.insert("Frictionless Contact (MC03)",
+        {{"type", "Contact"}, {"model", "frictionless"},
+         {"formulation", "penalty"}, {"penalty", "1e9"},
+         {"normalize_penalty", "true"}, {"friction_coefficient", QString()},
+         {"normal_smoothing_distance", QString()}, {"tangential_tolerance", QString()}});
+    template_descriptions_.insert("Frictionless Contact (MC03)",
+        "Assign primary=pillar1_right, secondary=pillar2_left; penalty=1e9.");
   }
 
   if (template_combo_) {
@@ -2867,7 +2960,7 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
           "start_time",     "end_time",      "num_steps",
           "timestepper_type", "dt",          "optimal_iterations",
           "iteration_window", "growth_factor", "cutback_factor",
-          "dtmin",          "dtmax"};
+          "dtmin",          "dtmax", "predictor_type", "predictor_scale"};
       for (const auto& key : transient_keys) {
         set_row_visible(key, is_transient);
       }
@@ -2882,10 +2975,11 @@ void PropertyEditor::build_form_for_kind(const QString& kind) {
       set_row_visible("function", use_function);
       set_row_visible("value", !use_function);
     } else if (kind == "Loads") {
-      const bool pressure = (type == "Pressure");
+      const bool pressure = (type == "Pressure" || type == "PressureAction");
+      set_row_visible("variable", type != "PressureAction");
       set_row_visible("boundary", pressure);
       set_row_visible("factor", pressure);
-      set_row_visible("component", pressure);
+      set_row_visible("component", type == "Pressure");
       set_row_visible("use_displaced_mesh", pressure);
       set_row_visible("diffusivity", type == "MatDiffusion");
       set_row_visible("displacements", type == "TensorMechanics");

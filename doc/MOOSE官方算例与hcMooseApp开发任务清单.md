@@ -1,7 +1,7 @@
 # MOOSE 官方算例与 hcMooseApp 开发任务清单
 
 > 编制日期：2026-09-28
-> 当前状态（2026-10-06）：Round A 已验收；Round B 基础路由、MC01 与 MC02 人工闭环已完成；MC02 详细 Job/数值比较证据待归档
+> 当前状态（2026-10-09）：MC02 人工闭环完成；MC03 最小实现与人工验证手册已交付，待用户执行验证；详细附件继续归档
 > 本地仓库基线：`main@2dda489fbacd4621dbe817cbf8c1a9b47d065615`
 > 计算节点：`kevin@192.168.0.138`（2026-09-28 由 `192.168.0.121` 切换，同一物理节点）
 > 任务轨道：`TASK-MOOSECASE-*`
@@ -293,8 +293,8 @@ modules:
 | M2 | MC01～MC05 Baseline v1 资格验证 | ✅ 完成 |
 | M3 | 远端接入与身份握手 | ✅ 完成并已提交推送 |
 | M4 | MC01 达 D | ✅ 用户 2026-09-29 人工验收通过 |
-| M5 | MC02 达 D | 用户 2026-10-06 确认人工闭环通过；详细 Job/数值比较证据待归档 |
-| M6 | MC03 达 D | 未开始 |
+| M5 | MC02 达 D | ✅ 完成；用户 2026-10-09 确认计算完成、结果验证正常 |
+| M6 | MC03 达 D | 最小实现与人工验证步骤已交付；待用户完成真实 Job 和结果验收 |
 | M7 | MC04 达 D | 未开始 |
 | M8 | MC05 达 D，Profile 可评估 production | 未开始 |
 
@@ -531,10 +531,10 @@ TASK-MOOSECASE-006 的远端准出条件已满足：HcMooseApp 与旧 DamSafetyA
 | 任务 | 本轮产出 | 状态 |
 |---|---|---|
 | TASK-MOOSECASE-MC02-010 | 手册 5.2 官方块 → CAE 对象 → 生成语义 → 人工验证对照表 | 完成代码/文档审计 |
-| TASK-MOOSECASE-MC02-020 | MC02 参考网格含 pin 点组；HeatSource；热膨胀与有限应变弹性应力；二维位移；QuasiStatic 自动本征应变；复用 SMP/LU；Exodus-only 工作流 | 已实现；用户 2026-10-06 确认验证通过 |
-| TASK-MOOSECASE-MC02-030 | 按本轮用户指示，以手册 5.10 的定向人工检查交付；同步更新既有 mapping 合同断言，但不执行测试 | 用户确认人工验证通过；AI 未运行自动测试 |
-| TASK-MOOSECASE-MC02-040 | Round B 人工手册第 5 节：从空项目建模、输入检查、快照、择时远程提交、结果导入和数值核对 | 已交付 |
-| TASK-MOOSECASE-MC02-050 | 用户完成真实 Job 与 CAE 后处理、记录验收 | 用户确认远程执行与结果导入 OK；闭环通过，详细证据待归档 |
+| TASK-MOOSECASE-MC02-020 | MC02 参考网格含 pin 点组；HeatSource；热膨胀与有限应变弹性应力；二维位移；QuasiStatic 自动本征应变；复用 SMP/LU；Exodus-only 工作流 | 完成；用户人工验收通过 |
+| TASK-MOOSECASE-MC02-030 | 按本轮用户指示，以手册 5.10 的定向人工检查交付；同步更新既有 mapping 合同断言，但不执行测试 | 完成；用户确认人工验证通过，AI 未运行自动测试 |
+| TASK-MOOSECASE-MC02-040 | Round B 人工手册第 5 节：从空项目建模、输入检查、快照、择时远程提交、结果导入和数值核对 | 完成 |
+| TASK-MOOSECASE-MC02-050 | 用户完成真实 Job 与 CAE 后处理、记录验收 | ✅ 完成；用户 2026-10-09 确认计算与结果验证正常，MC02 达人工闭环 D |
 
 主要改动位于 MainWindow、PropertyEditor、FloatingPropertyForm、MooseInputGenerator、HC 独立 mapping/profile；没有改动 hcMooseApp、DamSafetyApp 或 structlab-lims。
 
@@ -561,3 +561,43 @@ TASK-MOOSECASE-006 的远端准出条件已满足：HcMooseApp 与旧 DamSafetyA
 用户通过界面修正 bottom_y 为 disp_y，导出 `case-20261005-234323`。只读核对保存项目、当前输入与快照一致，输入与网格哈希均匹配清单。用户随后确认验证通过、远程任务执行后结果导入均 OK，MC02 人工闭环记录为通过。Job ID、结果目录、执行日志和数值比较数据尚未单独提供，保留待归档状态。
 
 人工手册已补充 MC01 `therm_step03.html` 与 MC02 `thermomech_step01.html` 官方教程链接（2026-10-06 核验可访问）；官网用于语义查验，数值基准继续使用本仓库 Round A 冻结输入和产物。
+
+### 14.3 MC02 任务完成与 MC03 开发准入（2026-10-09）
+
+用户确认 MC02 已完成计算且结果验证正常。MC02 开发、人工测试交付、真实 Job 与 CAE 后处理验收记录为完成，M5 达人工闭环 D。详细 Job、截图和数值比较附件继续作为归档事项，不阻止下一例开工；未收到全场比较报告，不声明 Exodiff PASS。
+
+MC03 已有官方冻结输入及 Round A 通过基线，MC02 不再构成其前置阻碍。首轮范围固定为二维双立柱、frictionless + penalty；实际远程节点和提交时机由用户确认，沿用用户自行测试的安排。用户随后授权开始 MC03，实施结果见第 15 节及人工手册 6.1～6.12。
+
+## 15. MC03 最小实现与人工验证交付（2026-10-09）
+
+本轮依据官方 Contact introduction `step01.i` 与本仓库 Round A 冻结输入实现二维双立柱接触。MC03 尚未取得用户人工验收，不提前登记 M6 达 D。
+
+| 任务 | 本轮产出 | 状态 |
+|---|---|---|
+| TASK-MOOSECASE-MC03-010 | 手册 6.2：官方网格、材料、压力 action、Contact 与求解控制的 CAE 对照和等价边界 | 开发审计完成 |
+| TASK-MOOSECASE-MC03-020 | 双立柱参考网格；二维接触分组；Pressure action；Mesh patch 更新；SimplePredictor；MC03 模板 | 最小实现完成，待人工验证 |
+| TASK-MOOSECASE-MC03-030 | 新增输入生成合同，覆盖嵌套压力/Predictor、选中网格控制和清空可选参数；手册 6.10 定向检查 | 已编译；按用户安排不执行自动测试 |
+| TASK-MOOSECASE-MC03-040 | 手册 6.3～6.12：空项目建模、保存重开、快照、远程提交、导入结果及验收记录 | 文档交付完成 |
+| TASK-MOOSECASE-MC03-050 | 用户自行完成真实 Job 与 CAE 后处理闭环 | 待用户执行 |
+
+- HC mapping 更新为 `1.3.0`、profile 为 `0.4.0`，保持 prototype；其他应用档案保持原有压力和网格行为。
+- Mesh 菜单新增 MC03 参考网格：192 节点、150 个 QUAD4 域单元，两个独立立柱；纵向相邻单元高度比为 0.9。十个物理组覆盖两个域及八条边，分别命名以保持 Contact primary/secondary 引用稳定。
+- 官方 GeneratedMeshGenerator + MeshCollectionGenerator 用静态 MSH 等价表达；网格节点坐标、单元拓扑和边界方向对应冻结输入。两个域使用不同物理编号并应用相同材料。此项仍需用户查看网格和求解结果确认，不声明数值比较通过。
+- Loads 的 Pressure (MC03) 模板生成 `[BCs/Pressure/sides]` action，由 GlobalParams 的二维位移驱动所有分量；不生成单一分量压力或 Kernel。
+- Contact 支持二维边组；MC03 模板设置 frictionless、penalty=`1e9`、normalize_penalty=true。主面为 pillar1_right，副面为 pillar2_left。
+- Mesh 属性支持 `patch_update_strategy=iteration`；同步输入、更新网格路径时保留该根级设置，清空时移除。重新创建 MC01/MC02 参考网格时清除接触专用设置。
+- Steps 的 Contact Transient (MC03) 模板生成 0～5 s、dt=0.5、NEWTON、line_search=none、LU 和嵌套 SimplePredictor scale=1，清除残留 SMP、自适应步长和其他模板参数。
+- 本轮只编译 GMP-ISE 和合同测试目标；不运行 GUI Tour、CTest、远程输入检查或求解，不修改 LIMS、C06、节点配置或求解器注册表。
+
+本地构建通过，应用及 `gmp_ise_phase0_test` 均完成编译链接；仅保留已有 Qt `linkActivated` 弃用警告。JSON 版本文件解析和差异格式检查通过。合同测试未执行，不能将编译成功登记为测试 PASS。
+
+人工验收入口：[Round B 人工手册第 6 节](MOOSE官方算例RoundB-CAE人工验证手册.md#6-mc03无摩擦接触)。用户完成本地配置检查后，再择时执行远程输入检查、快照提交与结果导入；详细验收状态填入手册 6.12。
+
+### 15.1 MC03 材料模板缺失走查修复（2026-10-14）
+
+用户在 6.4 无法选择 Isotropic Elasticity (MC03)。截图与保存项目均显示实际应用为 DamSafetyApp-opt（mapping 1.0.0、solver_id=dam-safety-app）；模板按活动档案正确隔离，项目名和 MC03 网格不会改变求解器档案。此前网格入口缺少档案约束是本次流程缺口。
+
+- Create MC03 Reference Mesh 新增 HC 档案检查；错误档案下明确提示从顶部切换 hc_moose-opt 后保存，停止生成网格，避免错误配置继续到材料步骤。
+- 不向 DamSafetyApp 暴露 HC 模板，不自动修改用户项目或求解器选择。当前项目通过界面切换 HC、保存并重新打开材料窗即可恢复，原网格无需重建。
+- 新增 `mc03_profile_material_templates_contract`，覆盖两个档案之间的浮动窗模板隔离、1000 MPa→1e9 Pa、nu=0.3 与通用常量字段清除；本轮只编译，不执行 GUI/CTest 或远程作业。
+- 人工恢复与入口复验详见手册 6.4.1；MC03 总体仍待用户完成真实计算与结果验收。

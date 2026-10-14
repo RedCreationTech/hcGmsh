@@ -142,12 +142,30 @@ QString build_variables_block(const EntryView& items) {
   return out;
 }
 
+QString build_mesh_block(const MooseInputGenerator::Input& input) {
+  // Match the active mesh by path: projects can retain older mesh entries.
+  for (const auto* mesh : entries_of(input.entries, "Mesh")) {
+    if (QFileInfo(mesh->params.value("path").toString()).absoluteFilePath() !=
+        QFileInfo(input.mesh_path).absoluteFilePath()) {
+      continue;
+    }
+    const QString strategy =
+        mesh->params.value("patch_update_strategy").toString().trimmed();
+    if (strategy.isEmpty() || input.mesh_path.isEmpty()) return QString();
+    return QString("[Mesh]\n  patch_update_strategy = %1\n  [file]\n"
+                   "    type = FileMeshGenerator\n    file = %2\n  []\n[]\n")
+        .arg(strategy, MooseInputGenerator::quote_moose_value_if_needed(input.mesh_path));
+  }
+  return QString();
+}
+
 QString build_bcs_block(const EntryView& items,
                         const EntryView& load_items) {
   bool has_pressure = false;
   for (const auto* child : load_items) {
     has_pressure = has_pressure ||
-                   child->params.value("type").toString() == "Pressure";
+                   child->params.value("type").toString() == "Pressure" ||
+                   child->params.value("type").toString() == "PressureAction";
   }
   if (items.isEmpty() && !has_pressure) {
     return QString();
@@ -198,6 +216,26 @@ QString build_bcs_block(const EntryView& items,
       append_bc(child, true);
     }
   }
+  // Official Pressure action creates a BC for every displacement component,
+  // including follower-pressure coupling on the deformed surface.
+  bool opened_pressure_action = false;
+  for (const auto* child : load_items) {
+    if (child->params.value("type").toString() != "PressureAction") continue;
+    if (!opened_pressure_action) {
+      out += "  [Pressure]\n";
+      opened_pressure_action = true;
+    }
+    out += QString("    [%1]\n").arg(child->name);
+    for (const auto& key : {"boundary", "function", "factor", "use_displaced_mesh"}) {
+      const QString value = child->params.value(key).toString().trimmed();
+      if (!value.isEmpty()) {
+        out += QString("      %1 = %2\n").arg(
+            QLatin1String(key), MooseInputGenerator::quote_moose_value_if_needed(value));
+      }
+    }
+    out += "    []\n";
+  }
+  if (opened_pressure_action) out += "  []\n";
   out += "[]\n";
   return out;
 }
@@ -205,7 +243,8 @@ QString build_bcs_block(const EntryView& items,
 QString build_loads_block(const EntryView& items) {
   QString out;
   for (const auto* child : items) {
-    if (child->params.value("type").toString() == "Pressure") {
+    if (child->params.value("type").toString() == "Pressure" ||
+        child->params.value("type").toString() == "PressureAction") {
       continue;
     }
     if (out.isEmpty()) {
@@ -475,6 +514,7 @@ QString build_executioner_block(const EntryView& items, bool chinese_ui,
   QStringList consumed = QStringList{"type", "status", "state"} +
                          timestepper_keys + preconditioning_keys + ordered_keys;
   consumed << "scheme";
+  consumed << "predictor_type" << "predictor_scale";
   if (has_timestepper) {
     // dt 在 v01 中位于 [TimeStepper] 子块；无 timestepper_type 时（demo
     // 旧数据）dt 保持 Executioner 级平铺。
@@ -520,6 +560,14 @@ QString build_executioner_block(const EntryView& items, bool chinese_ui,
         out += QString("    %1 = %2\n").arg(key).arg(value);
       }
     }
+    out += "  []\n";
+  }
+  const QString predictor = params.value("predictor_type").toString().trimmed();
+  if (type == "Transient" && !predictor.isEmpty()) {
+    out += "  [Predictor]\n";
+    out += QString("    type = %1\n").arg(predictor);
+    const QString scale = params.value("predictor_scale").toString().trimmed();
+    if (!scale.isEmpty()) out += QString("    scale = %1\n").arg(scale);
     out += "  []\n";
   }
   out += "[]\n";
@@ -1121,6 +1169,13 @@ QString build_generation_report(const MooseInputGenerator::Input& input) {
 
   if (!input.mesh_path.isEmpty()) {
     lines << QString("[Mesh/file] <- Mesh path %1").arg(input.mesh_path);
+    for (const auto* mesh : entries_of(input.entries, "Mesh")) {
+      if (QFileInfo(mesh->params.value("path").toString()).absoluteFilePath() ==
+              QFileInfo(input.mesh_path).absoluteFilePath() &&
+          !mesh->params.value("patch_update_strategy").toString().isEmpty()) {
+        lines << QString("[Mesh] patch_update_strategy <- Model Tree Mesh/%1").arg(mesh->name);
+      }
+    }
   }
   for (const auto* child : entries_of(input.entries, "Materials")) {
     if (child->params.value("type").toString() == "AbaqusCDP") {
@@ -1153,7 +1208,9 @@ QString build_generation_report(const MooseInputGenerator::Input& input) {
   append_children(input.entries, "BC", "BCs");
   for (const auto* child : entries_of(input.entries, "Loads")) {
     lines << QString("[%1/%2] <- Model Tree Loads/%2 (Physical Group=%3)")
-                 .arg(child->params.value("type").toString() == "Pressure"
+                 .arg(child->params.value("type").toString() == "PressureAction"
+                          ? "BCs/Pressure"
+                      : child->params.value("type").toString() == "Pressure"
                           ? "BCs"
                           : "Kernels",
                       child->name,
@@ -1169,10 +1226,21 @@ QString build_generation_report(const MooseInputGenerator::Input& input) {
   if (!steps.isEmpty()) {
     lines << QString("[Executioner] <- Model Tree Steps/%1")
                  .arg(steps.first()->name);
-    lines << QString("[TimeStepper] <- Model Tree Steps/%1")
-                 .arg(steps.first()->name);
-    lines << QString("[Preconditioning/smp] <- Model Tree Steps/%1")
-                 .arg(steps.first()->name);
+    const QVariantMap& params = steps.first()->params;
+    if (params.value("type").toString() == "Transient" &&
+        !params.value("timestepper_type").toString().isEmpty()) {
+      lines << QString("[Executioner/TimeStepper] <- Model Tree Steps/%1")
+                   .arg(steps.first()->name);
+    }
+    if (!params.value("preconditioning_type").toString().isEmpty()) {
+      lines << QString("[Preconditioning/smp] <- Model Tree Steps/%1")
+                   .arg(steps.first()->name);
+    }
+    if (params.value("type").toString() == "Transient" &&
+        !params.value("predictor_type").toString().isEmpty()) {
+      lines << QString("[Executioner/Predictor] <- Model Tree Steps/%1")
+                   .arg(steps.first()->name);
+    }
     if (steps.size() > 1) {
       lines << QString("WARNING: %1 Steps saved; only the first is generated in this phase.")
                    .arg(steps.size());
@@ -1279,6 +1347,7 @@ QStringList MooseInputGenerator::generated_headers_with_prefix(
 
 MooseInputGenerator::Output MooseInputGenerator::generate(const Input& input) {
   Output out;
+  out.mesh = build_mesh_block(input);
   const EntryView functions = entries_of(input.entries, "Functions");
   const EntryView variables = entries_of(input.entries, "Variables");
   const EntryView materials = entries_of(input.entries, "Materials");
