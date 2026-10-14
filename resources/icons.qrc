@@ -4,5 +4,66 @@
     <file>icons/dot.png</file>
     <file>icons/down-arrow.png</file>
     <file>icons/down-arrow-open.png</file>
+    <file>icons/abaqus/icoR_add.png</file>
+    <file>icons/abaqus/icoR_addAll.png</file>
+    <file>icons/abaqus/icoR_analyticalField.png</file>
+    <file>icons/abaqus/icoR_animScaleFactor.png</file>
+    <file>icons/abaqus/icoR_boundaryCondition.png</file>
+    <file>icons/abaqus/icoR_closeX.png</file>
+    <file>icons/abaqus/icoR_constraint.png</file>
+    <file>icons/abaqus/icoR_contactPairFind.png</file>
+    <file>icons/abaqus/icoR_createCsys.png</file>
+    <file>icons/abaqus/icoR_delete.png</file>
+    <file>icons/abaqus/icoR_dragRectangle.png</file>
+    <file>icons/abaqus/icoR_dtmAxisThreePointCircle.png</file>
+    <file>icons/abaqus/icoR_edit.png</file>
+    <file>icons/abaqus/icoR_error.png</file>
+    <file>icons/abaqus/icoR_featureSmall.png</file>
+    <file>icons/abaqus/icoR_fieldOutput.png</file>
+    <file>icons/abaqus/icoR_fileNew.png</file>
+    <file>icons/abaqus/icoR_fileOpen.png</file>
+    <file>icons/abaqus/icoR_fileOpenBlue.png</file>
+    <file>icons/abaqus/icoR_fileReload.png</file>
+    <file>icons/abaqus/icoR_fileSave.png</file>
+    <file>icons/abaqus/icoR_frameNext.png</file>
+    <file>icons/abaqus/icoR_framePause.png</file>
+    <file>icons/abaqus/icoR_framePlay.png</file>
+    <file>icons/abaqus/icoR_framePrevious.png</file>
+    <file>icons/abaqus/icoR_instanceMergeCut.png</file>
+    <file>icons/abaqus/icoR_instanceTranslate.png</file>
+    <file>icons/abaqus/icoR_interaction.png</file>
+    <file>icons/abaqus/icoR_job.png</file>
+    <file>icons/abaqus/icoR_jobSmall.png</file>
+    <file>icons/abaqus/icoR_load.png</file>
+    <file>icons/abaqus/icoR_material.png</file>
+    <file>icons/abaqus/icoR_materialAdd.png</file>
+    <file>icons/abaqus/icoR_meshControls.png</file>
+    <file>icons/abaqus/icoR_meshSmall.png</file>
+    <file>icons/abaqus/icoR_modelSmall.png</file>
+    <file>icons/abaqus/icoR_part.png</file>
+    <file>icons/abaqus/icoR_partInstance.png</file>
+    <file>icons/abaqus/icoR_partSmall.png</file>
+    <file>icons/abaqus/icoR_partSolidExtrude.png</file>
+    <file>icons/abaqus/icoR_partSolidLoft.png</file>
+    <file>icons/abaqus/icoR_partSolidRevolve.png</file>
+    <file>icons/abaqus/icoR_partSolidSweep.png</file>
+    <file>icons/abaqus/icoR_partWirePoint.png</file>
+    <file>icons/abaqus/icoR_predefinedField.png</file>
+    <file>icons/abaqus/icoR_redo.png</file>
+    <file>icons/abaqus/icoR_section.png</file>
+    <file>icons/abaqus/icoR_select.png</file>
+    <file>icons/abaqus/icoR_selectInsideCrossing.png</file>
+    <file>icons/abaqus/icoR_step.png</file>
+    <file>icons/abaqus/icoR_stop.png</file>
+    <file>icons/abaqus/icoR_swap.png</file>
+    <file>icons/abaqus/icoR_undo.png</file>
+    <file>icons/abaqus/icoR_viewFit.png</file>
+    <file>icons/abaqus/icoR_viewFront.png</file>
+    <file>icons/abaqus/icoR_viewIso.png</file>
+    <file>icons/abaqus/icoR_viewPan.png</file>
+    <file>icons/abaqus/icoR_viewRight.png</file>
+    <file>icons/abaqus/icoR_viewTop.png</file>
+    <file>icons/abaqus/icoR_viewZoom.png</file>
+    <file>icons/abaqus/icoR_warning.png</file>
   </qresource>
 </RCC>

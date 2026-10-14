@@ -322,6 +322,118 @@ const QHash<QString, QString>& mapping() {
   return kMap;
 }
 
+// Abaqus/CAE 2021 原始 PNG 覆盖层（替换记录见 doc/Abaqus图标替换记录.md）：
+// 功能键 → ":/icons/abaqus/<file>"。get() 命中覆盖层时优先返回位图图标，
+// 未命中的键回退到下方 Font Awesome 字形映射（保留原字形作对照/回退）。
+const QHash<QString, QString>& pngOverrides() {
+  static const QHash<QString, QString> kPng = {
+      // ---- 项目 / 文件 ----
+      {"new_project", "icoR_fileNew.png"},
+      {"open_project", "icoR_fileOpen.png"},
+      {"save", "icoR_fileSave.png"},
+      {"rename", "icoR_edit.png"},
+      {"remove", "icoR_delete.png"},
+      {"trash", "icoR_delete.png"},
+      {"refresh", "icoR_fileReload.png"},
+      {"reload", "icoR_fileReload.png"},
+      {"rescan", "icoR_fileReload.png"},
+      {"open_root", "icoR_modelSmall.png"},
+      // ---- 草图 ----
+      {"sketch_select", "icoR_select.png"},
+      {"sketch_move", "icoR_viewPan.png"},
+      {"sketch_line", "icoR_partWirePoint.png"},
+      {"sketch_circle", "icoR_dtmAxisThreePointCircle.png"},
+      {"sketch_rectangle", "icoR_dragRectangle.png"},
+      {"sketch_delete", "icoR_delete.png"},
+      // ---- 通用编辑 ----
+      {"undo", "icoR_undo.png"},
+      {"redo", "icoR_redo.png"},
+      {"retry", "icoR_redo.png"},
+      {"select_all", "icoR_addAll.png"},
+      {"cancel", "icoR_closeX.png"},
+      {"clear_x", "icoR_closeX.png"},
+      // ---- 部件 / 特征 / 装配 ----
+      {"new_part", "icoR_part.png"},
+      {"feat_extrude", "icoR_partSolidExtrude.png"},
+      {"feat_revolve", "icoR_partSolidRevolve.png"},
+      {"feat_sweep", "icoR_partSolidSweep.png"},
+      {"feat_loft", "icoR_partSolidLoft.png"},
+      {"create_instance", "icoR_partInstance.png"},
+      {"build_assembly", "icoR_partInstance.png"},
+      {"bool_fuse", "icoR_instanceMergeCut.png"},
+      {"translate", "icoR_instanceTranslate.png"},
+      {"scale", "icoR_animScaleFactor.png"},
+      // ---- 网格 ----
+      {"generate_mesh", "icoR_meshControls.png"},
+      {"open_gmsh_panel", "icoR_meshControls.png"},
+      {"insert_mesh_block", "icoR_meshControls.png"},
+      {"generate_2d", "icoR_meshControls.png"},
+      // ---- 材料 / 属性 / 截面 ----
+      {"new_material", "icoR_material.png"},
+      {"new_cdp_material", "icoR_materialAdd.png"},
+      {"new_section", "icoR_section.png"},
+      // ---- 分析步 / 相互作用 / 载荷 / BC ----
+      {"add_static_step", "icoR_step.png"},
+      {"add_transient_step", "icoR_step.png"},
+      {"add_interaction", "icoR_interaction.png"},
+      {"add_surface_contact", "icoR_contactPairFind.png"},
+      {"add_generic_load", "icoR_load.png"},
+      {"open_bc_root", "icoR_boundaryCondition.png"},
+      {"insert_bcs_from_groups", "icoR_boundaryCondition.png"},
+      {"add_thermal_source", "icoR_predefinedField.png"},
+      // ---- 结果 / 作业 / 回放 ----
+      {"run", "icoR_framePlay.png"},
+      {"play", "icoR_framePlay.png"},
+      {"run_job", "icoR_job.png"},
+      {"submit_job", "icoR_job.png"},
+      {"stop", "icoR_stop.png"},
+      {"pause", "icoR_framePause.png"},
+      {"step_prev", "icoR_framePrevious.png"},
+      {"step_next", "icoR_frameNext.png"},
+      {"latest", "icoR_frameNext.png"},
+      {"import_result_file", "icoR_fileOpenBlue.png"},
+      {"import_exodus", "icoR_fileOpenBlue.png"},
+      {"preview_merge", "icoR_swap.png"},
+      // ---- 舞台左侧工具条（视图） ----
+      {"zoom", "icoR_viewZoom.png"},
+      {"fit", "icoR_viewFit.png"},
+      {"front", "icoR_viewFront.png"},
+      {"right", "icoR_viewRight.png"},
+      {"top", "icoR_viewTop.png"},
+      {"iso", "icoR_viewIso.png"},
+      // ---- 模型树根节点 ----
+      {"tree_parts", "icoR_partSmall.png"},
+      {"tree_features", "icoR_featureSmall.png"},
+      {"tree_datums", "icoR_createCsys.png"},
+      {"tree_materials", "icoR_material.png"},
+      {"tree_sections", "icoR_section.png"},
+      {"tree_assembly", "icoR_partInstance.png"},
+      {"tree_physics", "icoR_analyticalField.png"},
+      {"tree_steps", "icoR_step.png"},
+      {"tree_bc", "icoR_boundaryCondition.png"},
+      {"tree_loads", "icoR_load.png"},
+      {"tree_outputs", "icoR_fieldOutput.png"},
+      {"tree_mesh", "icoR_meshSmall.png"},
+      {"tree_jobs", "icoR_jobSmall.png"},
+      {"tree_interactions", "icoR_interaction.png"},
+      {"tree_constraints", "icoR_constraint.png"},
+      {"tree_selections", "icoR_selectInsideCrossing.png"},
+      {"tree_input_cases", "icoR_fieldOutput.png"},
+      // ---- 模型树状态列 ----
+      {"status_failed", "icoR_error.png"},
+      {"status_running", "icoR_framePlay.png"},
+      {"status_invalid", "icoR_warning.png"},
+      // ---- 树操作行按钮 ----
+      {"tree_add", "icoR_add.png"},
+      {"tree_rename", "icoR_edit.png"},
+      {"tree_remove", "icoR_delete.png"},
+      // ---- 物理组 ----
+      {"pg_update", "icoR_edit.png"},
+      {"pg_delete", "icoR_delete.png"},
+  };
+  return kPng;
+}
+
 } // namespace
 
 void init(QWidget* paletteAnchor) {
@@ -392,6 +504,10 @@ QIcon get(const QString& key, Size size) {
   Q_UNUSED(size); // 字体图标可缩放，目标尺寸由渲染方按 int(size) 取值
   if (!g_awesome) {
     init();
+  }
+  const auto png = pngOverrides().constFind(key);
+  if (png != pngOverrides().constEnd()) {
+    return QIcon(":/icons/abaqus/" + png.value());
   }
   const auto it = mapping().constFind(key);
   if (it == mapping().constEnd()) {
