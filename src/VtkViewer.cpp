@@ -1328,6 +1328,10 @@ void VtkViewer::init_vtk() {
     axes_marker_->SetOrientationMarker(axes_actor_);
     axes_marker_->SetInteractor(interactor);
     axes_marker_->SetViewport(0.0, 0.0, 0.15, 0.15);
+    // VTK 要求 SetInteractive 之前 widget 已 Enabled，否则输出
+    // "Set interactor and Enabled before changing interaction" 警告
+    // （Windows 无控制台时会弹 vtkOutputWindow 对话框）。
+    axes_marker_->SetEnabled(1);
     axes_marker_->InteractiveOff();
     axes_marker_->SetEnabled(show_axes_ && show_axes_->isChecked() ? 1 : 0);
   }
