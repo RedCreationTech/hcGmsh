@@ -16,6 +16,7 @@
 #include "gmp/Env.h"
 #include "gmp/ComboPopupFix.h"
 #include "gmp/OperationLog.h"
+#include "gmp/VtkOutputLog.h"
 #include "gmp/AppStyle.h"
 #include "gmp/IconFactory.h"
 #include "gmp/MacWindowZoomFix.h"
@@ -43,6 +44,10 @@ int main(int argc, char** argv) {
   gmp::init_operation_log();
   gmp::log_operation(
       "app", QString("GMP-ISE starting (pid %1)").arg(app.applicationPid()));
+
+  // VTK 消息同时写 <exe_dir>/logs/vtk-output.log 并保留原生输出窗口
+  // （Windows 上警告仍弹窗，便于现场发现；日志供事后排查）。
+  gmp::init_vtk_output_log();
 
   const QString env_path = gmp::load_dotenv();
   if (!env_path.isEmpty()) {

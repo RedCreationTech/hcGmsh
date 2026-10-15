@@ -200,6 +200,8 @@ add_executable(gmp_ise
   src/ProcessRunner.h
   src/IconFactory.cpp
   include/gmp/IconFactory.h
+  src/VtkOutputLog.cpp
+  include/gmp/VtkOutputLog.h
   include/gmp/Runner.h
   include/gmp/L10n.h
   include/gmp/MainWindow.h
