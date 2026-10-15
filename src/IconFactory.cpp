@@ -17,9 +17,6 @@ namespace {
 fa::QtAwesome* g_awesome = nullptr;
 QSet<QString> g_warned_keys;
 
-// 方向视图图标：等轴立方体单面高亮（CAD 惯例，Font Awesome 无此字形，
-// 经 QtAwesome::give 注册自定义绘制器实现）。与下方实心立方体（等轴测）
-// 图标视觉区分。
 // "另存为"图标：软盘 + 右下角加号角标（区别于树节点草图的 pen-to-square）。
 class SaveAsPainter : public fa::QtAwesomeIconPainter {
  public:
@@ -51,66 +48,6 @@ class SaveAsPainter : public fa::QtAwesomeIconPainter {
                       QTextOption(Qt::AlignCenter));
     painter->restore();
   }
-};
-
-class CubeFacePainter : public fa::QtAwesomeIconPainter {
- public:
-  enum Face { Front, Right, Top };
-
-  explicit CubeFacePainter(Face face) : face_(face) {}
-
-  void paint(fa::QtAwesome* /*awesome*/, QPainter* painter,
-             const QRect& rect, QIcon::Mode /*mode*/, QIcon::State /*state*/,
-             const QVariantMap& options) override {
-    const QColor base =
-        options.value("color").value<QColor>().isValid()
-            ? options.value("color").value<QColor>()
-            : painter->pen().color();
-    QColor faint = base;
-    faint.setAlpha(48);
-    QColor edge = base;
-    edge.setAlpha(210);
-
-    const double size = qMin(rect.width(), rect.height()) * 0.92;
-    const QPointF o = rect.center() + QPointF(0, size * 0.10);
-    const QPointF x(size * 0.433, size * 0.25);
-    const QPointF y(-size * 0.433, size * 0.25);
-    const QPointF z(0, -size * 0.5);
-
-    const QPointF oz = o + z, ox = o + x, oy = o + y;
-    const QPointF oxz = ox + z, oyz = oy + z, oxyz = o + x + y + z, oxy = o + x + y;
-
-    const QPolygonF top_face{oz, oxz, oxyz, oyz};
-    const QPolygonF front_face{o, ox, oxz, oz};
-    const QPolygonF right_face{ox, oxy, oxyz, oxz};
-
-    painter->save();
-    painter->setRenderHint(QPainter::Antialiasing);
-    // 非目标面：淡填充，突出目标面。
-    painter->setPen(Qt::NoPen);
-    painter->setBrush(faint);
-    painter->drawPolygon(top_face);
-    painter->drawPolygon(front_face);
-    painter->drawPolygon(right_face);
-    // 目标面：实色高亮。
-    painter->setBrush(base);
-    switch (face_) {
-      case Front: painter->drawPolygon(front_face); break;
-      case Right: painter->drawPolygon(right_face); break;
-      case Top: painter->drawPolygon(top_face); break;
-    }
-    // 外轮廓线。
-    painter->setBrush(Qt::NoBrush);
-    QPen pen(edge, qMax<qreal>(1.0, size * 0.055));
-    painter->setPen(pen);
-    painter->drawPolygon(top_face);
-    painter->drawPolygon(front_face);
-    painter->drawPolygon(right_face);
-    painter->restore();
-  }
-
- private:
-  Face face_;
 };
 
 // 键名（snake_case 英文动作名）→ Font Awesome 7 Free 字形名。
@@ -280,9 +217,11 @@ const QHash<QString, QString>& mapping() {
       {"expand", "angles-right"},
       {"zoom", "magnifying-glass-plus"},
       {"fit", "expand"},
-      {"front", "view_front"},
-      {"right", "view_right"},
-      {"top", "view_top"},
+      // 方向视图实际由 pngOverrides() 的 Z-up 变体 PNG 提供；此处字形仅为
+      // 删除覆盖条目后的回退占位。
+      {"front", "cube"},
+      {"right", "cube"},
+      {"top", "cube"},
       {"iso", "cube"},
       // ---- 模型树根节点（build_model_tree） ----
       {"tree_parts", "cube"},
@@ -397,10 +336,13 @@ const QHash<QString, QString>& pngOverrides() {
       // ---- 舞台左侧工具条（视图） ----
       {"zoom", "icoR_viewZoom.png"},
       {"fit", "icoR_viewFit.png"},
-      {"front", "icoR_viewFront.png"},
-      {"right", "icoR_viewRight.png"},
-      {"top", "icoR_viewTop.png"},
-      {"iso", "icoR_viewIso.png"},
+      // 方向视图 Z-up 变体：由 Abaqus 原版 PNG 替换轴字母生成
+      //（front←viewLeft 互换、right←viewBack 换竖臂、top=viewFront 原样、
+      //  iso 三轴循环改字），布局/位置/字号与原版完全一致。
+      {"front", "icoR_viewFront_zup.png"},
+      {"right", "icoR_viewRight_zup.png"},
+      {"top", "icoR_viewTop_zup.png"},
+      {"iso", "icoR_viewIso_zup.png"},
       // ---- 模型树根节点 ----
       {"tree_parts", "icoR_partSmall.png"},
       {"tree_features", "icoR_featureSmall.png"},
@@ -442,11 +384,11 @@ void init(QWidget* paletteAnchor) {
   }
   g_awesome = new fa::QtAwesome(qApp);
   g_awesome->initFontAwesome();
-  // CAD 惯例的方向视图图标：等轴立方体单面高亮（自定义绘制器）。
-  g_awesome->give("view_front", new CubeFacePainter(CubeFacePainter::Front));
-  g_awesome->give("view_right", new CubeFacePainter(CubeFacePainter::Right));
-  g_awesome->give("view_top", new CubeFacePainter(CubeFacePainter::Top));
   g_awesome->give("save_as_icon", new SaveAsPainter());
+
+  // 方向视图 front/right/top/iso 为 Z-up 变体 PNG（由 Abaqus 原版
+  // 图标替换字母生成，见 doc/Abaqus图标替换记录.md 2.9 节），经
+  // pngOverrides() 命中，无需在此注册字形。
 
   const QPalette palette =
       paletteAnchor ? paletteAnchor->palette() : QApplication::palette();

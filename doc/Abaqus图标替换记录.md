@@ -1,6 +1,11 @@
 # Abaqus 图标替换记录
 
-> 记录日期：2026-10-14
+> 记录日期：2026-10-14（2026-10-15 修订）
+> 修订：front/right/top/iso 四个方向视图图标由 Abaqus 原版 PNG **替换轴
+> 字母**生成 Z-up 变体（`*_zup.png`）——Abaqus 原版为 Y 轴朝上约定，与
+> 本应用视口轴向不符，且图库无 Z-up 变体（详见 2.9 节）。期间尝试过
+> 代码自绘绘制器，因小尺寸下字母/箭头重叠、iso 字母被位图边界裁掉而
+> 放弃。资源库：移除 4 个原版视图 PNG，新增 4 个 Z-up 变体（数量不变）。
 > 目的：将项目中与 Abaqus/CAE 功能对应的 Font Awesome 图标替换为 Abaqus 原版图标，形成"本项目功能 → Abaqus 图标"的对照档案，方便后续查阅、增补或回退。
 
 ## 1. 来源与机制
@@ -114,16 +119,33 @@
 
 ### 2.9 舞台左侧工具条（视图）
 
-| 项目键 | 原 FA 字形 | 新 Abaqus 文件 | CAE 含义 |
+| 项目键 | 原 FA 字形 | 新图标 | CAE 含义 |
 |---|---|---|---|
 | `zoom` | magnifying-glass-plus | `icoR_viewZoom.png` | 缩放视图 |
 | `fit` | expand | `icoR_viewFit.png` | 适应窗口 |
-| `front` | view_front（自定义绘制器） | `icoR_viewFront.png` | 前视图 |
-| `right` | view_right（自定义绘制器） | `icoR_viewRight.png` | 右视图 |
-| `top` | view_top（自定义绘制器） | `icoR_viewTop.png` | 俯视图 |
-| `iso` | cube | `icoR_viewIso.png` | 等轴测视图 |
+| `front` | view_front（自定义绘制器） | `icoR_viewFront_zup.png` | 前视图（+X 视角，Z 朝上） |
+| `right` | view_right（自定义绘制器） | `icoR_viewRight_zup.png` | 右视图（+Y 视角，Z 朝上） |
+| `top` | view_top（自定义绘制器） | `icoR_viewTop_zup.png` | 顶视图（+Z 视角） |
+| `iso` | cube | `icoR_viewIso_zup.png` | 轴测图（三轴） |
 
-> 注：`front`/`right`/`top` 原来用 `CubeFacePainter` 自定义绘制器（`init()` 中 `g_awesome->give(...)` 仍保留，删除覆盖条目后自动恢复该绘制器）。
+> **为什么这 4 个不用 Abaqus PNG**：Abaqus/CAE 是 **Y 轴朝上**约定，其
+> `icoR_viewFront/Right/Top/Iso` 四个图标全部按 Y↑ 绘制（如 viewIso 三轴
+> 为 Y↑/Z↙/X↘），而本应用视口是 **Z 轴朝上**（`ViewportCamera.cpp` 预设：
+> Front=+X 视角 Z↑ Y→、Right=+Y 视角 Z↑ X←、Top=+Z 视角 Y↑ X→、Iso 三轴
+> Z↑ X↙ Y↘，与视口三轴架一致）。Abaqus 图库中没有 Z-up 变体，解法是
+> **直接修改 Abaqus 原版 PNG 的轴字母**（红色字母连通域擦除后按原位框
+> 重绘，布局/位置/字号/颜色与原图完全一致）：
+>
+> | Z-up 变体 | 来源（Abaqus 原版） | 字母改动 |
+>|---|---|---|
+> | `icoR_viewFront_zup.png` | `icoR_viewLeft.png`（Y↑ Z→） | Y↔Z 互换 → Z↑ Y→ |
+> | `icoR_viewRight_zup.png` | `icoR_viewBack.png`（Y↑ X←） | 竖臂 Y→Z → Z↑ X← |
+> | `icoR_viewTop_zup.png` | `icoR_viewFront.png`（Y↑ X→） | 原样（本就匹配） |
+> | `icoR_viewIso_zup.png` | `icoR_viewIso.png`（Y↑ Z↙ X↘） | 循环 Y→Z、Z→X、X→Y |
+>
+> 曾尝试 `CornerViewPainter`/`TriadViewPainter` 纯代码自绘（小尺寸下字母
+> 与箭头三角重叠、iso 字母画出 QtAwesome 位图边界被裁切），已放弃并删除；
+> 原 `CubeFacePainter`（等轴立方体单面高亮）亦已删除。
 
 ### 2.10 模型树根节点
 
@@ -188,21 +210,25 @@
 | 树状态 | `status_success`、`status_generated`、`status_unconfigured` |
 | 树操作 | `tree_duplicate` |
 
-## 4. 资源文件清单（59 个）
+## 4. 资源文件清单（55 个）
 
-入库 `resources/icons/abaqus/` 的文件（来源 `abaqus_resources/icons_png/`）：
+入库 `resources/icons/abaqus/` 的文件（来源 `abaqus_resources/icons_png/`，共 55 个）：
 
-`icoR_add.png`、`icoR_addAll.png`、`icoR_analyticalField.png`、`icoR_animScaleFactor.png`、`icoR_boundaryCondition.png`、`icoR_closeX.png`、`icoR_constraint.png`、`icoR_contactPairFind.png`、`icoR_createCsys.png`、`icoR_delete.png`、`icoR_dragRectangle.png`、`icoR_dtmAxisThreePointCircle.png`、`icoR_edit.png`、`icoR_error.png`、`icoR_featureSmall.png`、`icoR_fieldOutput.png`、`icoR_fileNew.png`、`icoR_fileOpen.png`、`icoR_fileOpenBlue.png`、`icoR_fileReload.png`、`icoR_fileSave.png`、`icoR_frameNext.png`、`icoR_framePause.png`、`icoR_framePlay.png`、`icoR_framePrevious.png`、`icoR_instanceMergeCut.png`、`icoR_instanceTranslate.png`、`icoR_interaction.png`、`icoR_job.png`、`icoR_jobSmall.png`、`icoR_load.png`、`icoR_material.png`、`icoR_materialAdd.png`、`icoR_meshControls.png`、`icoR_meshSmall.png`、`icoR_modelSmall.png`、`icoR_part.png`、`icoR_partInstance.png`、`icoR_partSmall.png`、`icoR_partSolidExtrude.png`、`icoR_partSolidLoft.png`、`icoR_partSolidRevolve.png`、`icoR_partSolidSweep.png`、`icoR_partWirePoint.png`、`icoR_predefinedField.png`、`icoR_redo.png`、`icoR_section.png`、`icoR_select.png`、`icoR_selectInsideCrossing.png`、`icoR_step.png`、`icoR_stop.png`、`icoR_swap.png`、`icoR_undo.png`、`icoR_viewFit.png`、`icoR_viewFront.png`、`icoR_viewIso.png`、`icoR_viewPan.png`、`icoR_viewRight.png`、`icoR_viewTop.png`、`icoR_viewZoom.png`、`icoR_warning.png`
+`icoR_add.png`、`icoR_addAll.png`、`icoR_analyticalField.png`、`icoR_animScaleFactor.png`、`icoR_boundaryCondition.png`、`icoR_closeX.png`、`icoR_constraint.png`、`icoR_contactPairFind.png`、`icoR_createCsys.png`、`icoR_delete.png`、`icoR_dragRectangle.png`、`icoR_dtmAxisThreePointCircle.png`、`icoR_edit.png`、`icoR_error.png`、`icoR_featureSmall.png`、`icoR_fieldOutput.png`、`icoR_fileNew.png`、`icoR_fileOpen.png`、`icoR_fileOpenBlue.png`、`icoR_fileReload.png`、`icoR_fileSave.png`、`icoR_frameNext.png`、`icoR_framePause.png`、`icoR_framePlay.png`、`icoR_framePrevious.png`、`icoR_instanceMergeCut.png`、`icoR_instanceTranslate.png`、`icoR_interaction.png`、`icoR_job.png`、`icoR_jobSmall.png`、`icoR_load.png`、`icoR_material.png`、`icoR_materialAdd.png`、`icoR_meshControls.png`、`icoR_meshSmall.png`、`icoR_modelSmall.png`、`icoR_part.png`、`icoR_partInstance.png`、`icoR_partSmall.png`、`icoR_partSolidExtrude.png`、`icoR_partSolidLoft.png`、`icoR_partSolidRevolve.png`、`icoR_partSolidSweep.png`、`icoR_partWirePoint.png`、`icoR_predefinedField.png`、`icoR_redo.png`、`icoR_section.png`、`icoR_select.png`、`icoR_selectInsideCrossing.png`、`icoR_step.png`、`icoR_stop.png`、`icoR_swap.png`、`icoR_undo.png`、`icoR_viewFit.png`、`icoR_viewFront_zup.png`、`icoR_viewIso_zup.png`、`icoR_viewPan.png`、`icoR_viewRight_zup.png`、`icoR_viewTop_zup.png`、`icoR_viewZoom.png`、`icoR_warning.png`
 
 > 尺寸说明：绝大多数为 128px 母版（Qt 按目标尺寸平滑缩放，工具栏/树节点渲染 16–20px）；树节点专用 `*Small.png` 为 16px；`icoR_stop.png` 24px；`icoR_closeX.png` 12px。
 
 ## 5. 变更文件与验证
 
 **变更文件**：
-- 新增 `resources/icons/abaqus/`（59 个 PNG）
-- 修改 `resources/icons.qrc`（注册 59 个资源）
-- 修改 `src/IconFactory.cpp`（新增 `pngOverrides()` + `get()` 优先命中逻辑）
+- 新增 `resources/icons/abaqus/`（55 个 PNG，含 4 个 Z-up 变体）
+- 修改 `resources/icons.qrc`（注册 55 个资源）
+- 修改 `src/IconFactory.cpp`（新增 `pngOverrides()` + `get()` 优先命中逻辑、
+  方向视图 Z-up 变体 PNG；`CubeFacePainter` 已删除）
 
 **验证**：
 - `cmake --build build -j4` 通过（AUTORCC 重新生成 `qrc_icons.cpp`，RCC 编译无缺失文件）。
 - 定向巡览 `GMP_TOUR_STEP_FILTER=s1`（真实点击工具栏场景，覆盖新工具栏图标渲染路径）通过。
+- 2026-10-15 修订后复检：s1 截图确认四个方向视图图标轴向与视口三轴架一致
+  （front=Z↑Y→、right=Z↑X←、top=Y↑X→、iso=Z↑X↙Y↘）；Z-up 变体 PNG 布局
+  与 Abaqus 原版逐像素一致，仅轴字母不同。

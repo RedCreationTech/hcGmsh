@@ -58,11 +58,11 @@
     <file>icons/abaqus/icoR_swap.png</file>
     <file>icons/abaqus/icoR_undo.png</file>
     <file>icons/abaqus/icoR_viewFit.png</file>
-    <file>icons/abaqus/icoR_viewFront.png</file>
-    <file>icons/abaqus/icoR_viewIso.png</file>
+    <file>icons/abaqus/icoR_viewFront_zup.png</file>
+    <file>icons/abaqus/icoR_viewIso_zup.png</file>
     <file>icons/abaqus/icoR_viewPan.png</file>
-    <file>icons/abaqus/icoR_viewRight.png</file>
-    <file>icons/abaqus/icoR_viewTop.png</file>
+    <file>icons/abaqus/icoR_viewRight_zup.png</file>
+    <file>icons/abaqus/icoR_viewTop_zup.png</file>
     <file>icons/abaqus/icoR_viewZoom.png</file>
     <file>icons/abaqus/icoR_warning.png</file>
   </qresource>
